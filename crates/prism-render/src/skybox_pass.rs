@@ -4,14 +4,20 @@
 //! [`crate::forward_pass::ForwardPass`] 持有：在 ForwardPass 的渲染
 //! pass 内最先绘制（共享同一 render pass 与帧缓冲）。
 
-use anyhow::Context as _;
-use anyhow::Result;
 use ash::vk;
 
+#[cfg(feature = "skybox")]
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
+#[cfg(feature = "skybox")]
 use crate::shader;
+#[cfg(feature = "skybox")]
+use anyhow::Context as _;
+use anyhow::Result;
 
 /// Per-frame skybox parameters extracted from the ECS `Skybox` component.
+///
+/// 这个类型始终编译：它是 `FrameInput` / `GraphFrame` 的公共数据形状，
+/// 关掉 `skybox` 只是不画天空盒（`SkyboxPass` 退化成空实现）。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SkyboxSettings {
     /// Background yaw rotation in radians.
@@ -36,6 +42,7 @@ pub struct SkyboxSettings {
 ///
 /// 描述符 集合 布局 (mirrors `skybox.slang`):
 /// 集合 2, 绑定 0 - IBL environment cubemap (SamplerCube, combined)
+#[cfg(feature = "skybox")]
 pub struct SkyboxPass {
     /// IBL env cubemap 描述符 集合 集合 0 绑定 0). Borrowed from
     /// `IblResources`; not owned by `SkyboxPass`.
@@ -54,6 +61,7 @@ pub struct SkyboxPass {
     device: Option<ash::Device>,
 }
 
+#[cfg(feature = "skybox")]
 impl SkyboxPass {
     pub fn new(ibl_descriptor_set: vk::DescriptorSet, ibl_layout: vk::DescriptorSetLayout) -> Self {
         Self {
@@ -243,6 +251,7 @@ impl SkyboxPass {
     }
 }
 
+#[cfg(feature = "skybox")]
 impl Drop for SkyboxPass {
     fn drop(&mut self) {
         // `GraphicsPipeline::drop` handles destroy_pipeline + destroy_layout,
@@ -253,4 +262,40 @@ impl Drop for SkyboxPass {
             self.pipeline = None;
         }
     }
+}
+
+/// `skybox` feature 关闭时的空实现。
+///
+/// `ForwardPass` 的调用点保持原样（`new` / `set_descriptor_set` / `draw` /
+/// `destroy`），所以场景 pass 里**没有**运行期分支；天空盒的管线、SPIR-V
+/// （`skybox.vert/frag.spv`）与深度状态全部不参与编译。IBL 的 set 2 布局不变。
+#[cfg(not(feature = "skybox"))]
+pub struct SkyboxPass;
+
+#[cfg(not(feature = "skybox"))]
+impl SkyboxPass {
+    pub fn new(
+        _ibl_descriptor_set: vk::DescriptorSet,
+        _ibl_layout: vk::DescriptorSetLayout,
+    ) -> Self {
+        Self
+    }
+
+    /// 场景切换重建 IBL 时的钩子；空实现下没有可更新的描述符。
+    pub fn set_descriptor_set(&mut self, _set: vk::DescriptorSet) {}
+
+    /// 不画天空盒：直接返回成功（清屏色继续显示）。
+    pub fn draw(
+        &mut self,
+        _device: &ash::Device,
+        _cmd: vk::CommandBuffer,
+        _render_pass: vk::RenderPass,
+        _extent: vk::Extent2D,
+        _inv_view_rot: &[[f32; 4]; 4],
+        _params: SkyboxSettings,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn destroy(&mut self, _device: &ash::Device) {}
 }

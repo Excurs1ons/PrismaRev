@@ -1033,15 +1033,16 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 组件组 2D | `prism-scene/group-2d` | on | 精灵/线段/精灵动画不注册 |
 | 组件组 UI | `prism-scene/group-ui` | on | Node/Style/Text/布局类型不注册 |
 | IBL | `prism-render/ibl`（透传） | on | 环境 cubemap 卷积/irradiance/prefilter/BRDF LUT/HDR 解码不编译；退化为 1x1 中性灰，descriptor 布局不变。3D 档 −64 KB |
-| 阴影贴图 | `prism-render/shadows` | on | `shadow_map_pass` 不编译 |
-| GTAO | `prism-render/gtao` | on | 半分辨率 AO pass 不编译 |
+| 天空盒 | `prism-render/skybox`（依赖 `ibl`） | on | `skybox.vert/frag.spv` + 管线；`SkyboxPass` 退化成空实现，调用点不变 |
+| 阴影贴图 | `prism-render/shadows` | on | `shadow_map_pass` 不编译；forward 的 set 3 退化为 1x1 远深度 dummy |
+| GTAO | `prism-render/gtao` | on | 半分辨率 AO pass 不编译；forward 的 set 4 退化为 1x1 白色 dummy |
 
 **待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
 
 - `2d` / `3d`：`SpritePass` 目前寄生在 `ForwardPass` 的 render pass 里，拆成独立 pass
   之后，2D 项目可以完全不编译 3D（forward/shadow/skybox/mesh/primitives）。
-- `ibl`（2.3k 行 + HDR 环境资源）、`gtao`（1k 行）、`gi`（probe 烘焙）、`shadow`。
-- `ui`（fontdue/tiny-skia + `ui_overlay`）、`screenshot`。
+- `gi`（probe 烘焙）、`screenshot`。
+- `ui`（fontdue/tiny-skia + `ui_overlay`）。
 
 ### 12.3 硬规则
 
@@ -1231,16 +1232,37 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 组件分组的收益之所以远小于「一个组件 20 KB」的直觉：serde 的反序列化代码在多个类型间
 共享（同一个 `serde_json::from_value` 泛型实例化被 ICF 合并），关掉一组只回收该组独有的部分。
 
-#### 3D pass 级裁剪不值得做（已实测否决）
+#### 3D pass 级裁剪：代码 −24 KB，但 strip 后文件不变
 
-曾考虑给 `shadow_map` / `gtao` / `skybox` 单独加 feature。符号实测（`dist` 未 strip）：
-shadow_map 4.6 KB、gtao 7.0 KB、skybox 1.9 KB，合计不到 15 KB；`ibl` 65 KB 但 2D 场景
-也可能要环境光。**收益撑不起「引擎里再多三条 cfg 边界」的复杂度**，不做。
+`ibl`（#543，−64 KB）之后，`shadow_map` / `gtao` / `skybox` 也做成了 feature
+（`skybox` 依赖 `ibl`）。测法：临时把 `projects/prisma` 的 `prism-app` 改成
+`default-features = false, features = ["x11", "group-3d", ...]`，同一 worktree、
+同一 target、`--profile dist`（fat LTO + cu=1 + panic=abort + strip）。
 
-剩余的体积大头只有两块，都不是纯工程问题：
+| 组合 | 文件字节 | Δ 文件 | `.text`+`.rodata`+… 合计 | Δ 代码 |
+|---|---|---|---|---|
+| 全开（ibl+skybox+shadows+gtao） | 3,022,664 | — | 2,993,578 | — |
+| 关 `shadows` | 3,022,664 | **0** | 2,988,274 | −5,304 |
+| 关 `gtao` | 3,022,664 | **0** | 2,979,746 | −13,832 |
+| 关 `skybox` | 3,022,664 | **0** | 2,988,426 | −5,152 |
+| 全关（无 ibl/skybox/shadows/gtao） | **2,957,128** | −65,536 | 2,931,602 | −61,976 |
 
-- Rust 基线 ~678 KB（core/std/alloc/hashbrown）——要 nightly `build-std`，会抬高贡献门槛；
-- `toml` + `serde_json` ~85 KB——要动 `settings.toml` / 场景清单格式，向后兼容有成本。
+两个必须记住的点：
+
+1. **代码真的少了**，但**文件一个字节都没少**：aarch64 的 LOAD 段按 64 KB 对齐
+   （`readelf -l` 的 `Align 0x10000`），RW 段偏移跟着 RO 段末尾向上取整，≤33 KB 的
+   收缩全部落进段间 padding。只有 `ibl`（−64 KB）跨过了 64 KB 的台阶。
+   所以这三项**不能当体积预设的卖点**（写进预设等于承诺一个不存在的收益），
+   只当能力开关：2D / 不需要阴影、AO、天空盒的项目少编译 24 KB 代码 + 3 个 SPIR-V，
+   在 4 KB 对齐的平台（x86_64 / Windows）与 debug 构建上差额才可见。
+2. 这也是为什么 **3D/2D 拆分的价值是依赖面、编译时间和 API 清晰度，不是二进制大小**——
+   §12.4 的结论在这里再次成立。
+
+数字用的是 stable `--profile dist`（与 §12.5 左列同口径）；`scripts/build-dist.sh` 的
+build-std 档绝对值更小，但 64 KB 段对齐的结论不变。
+
+剩下能动的只有 `toml` + `serde_json` ~85 KB（要改 `settings.toml` / 场景清单格式，
+向后兼容有成本），不是纯工程问题。
 
 #### 发布档：nightly `-Z build-std`（`scripts/build-dist.sh`）
 

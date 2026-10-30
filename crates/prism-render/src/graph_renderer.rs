@@ -53,9 +53,11 @@ use crate::mesh::Vertex;
 use crate::offscreen::OffscreenTarget;
 #[cfg(feature = "pathtrace")]
 use crate::pt_pass::PathTracePass;
+/// `ShadowMapPass::setup` 是 trait 方法，只有注册阴影 pass 时才需要导入。
+#[cfg(feature = "shadows")]
+use crate::render_graph::RenderPassNode;
 use crate::render_graph::{
-    DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderMode, RenderPassNode,
-    RenderSettings, ShadowMode,
+    DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderMode, RenderSettings, ShadowMode,
 };
 use crate::scene_scope::SceneScope;
 use crate::swapchain::Swapchain;
@@ -240,6 +242,12 @@ pub struct GraphRenderer {
     // 描述符 集合 in `forward_pass`.
     #[allow(dead_code)]
     shadow_view: vk::ImageView,
+    /// `shadows` feature 关闭时的 1×1 远深度图（填充 forward 的 set 3）。
+    #[cfg(not(feature = "shadows"))]
+    dummy_shadow: crate::dummy::SolidImage,
+    /// `gtao` feature 关闭时的 1×1 白色 AO 图（填充 forward 的 set 4）。
+    #[cfg(not(feature = "gtao"))]
+    dummy_ao: crate::dummy::SolidImage,
     #[allow(dead_code)]
     color_format: vk::Format,
     /// Optional 外部叠加层（宿主 UI 等）rendered on 顶部 of the ECS UI
@@ -368,20 +376,45 @@ impl GraphRenderer {
         // adding it so it registers its shadow-map 资源 then allocate the
         // graph's Vulkan resources (the shadow 映射表 深度 图像 and fetch its
         // 图像 视图 for the ForwardPass to 样本
-        let mut shadow_pass = crate::shadow_map_pass::ShadowMapPass::new();
-        let mut builder = RenderGraphBuilder::new().settings(&settings);
-        shadow_pass.setup(&mut builder, &settings);
-        let shadow_handle = shadow_pass.shadow_map_handle();
-        builder.add_pass(Box::new(shadow_pass));
-        let mut graph = builder.build();
+        //
+        // `shadows` feature 关闭时整块不编译：图直接从空开始，ForwardPass 的
+        // set 3 改绑一张 1×1 远深度 dummy（descriptor 布局不变，仍能过验证层）。
+        #[cfg(feature = "shadows")]
+        let (mut graph, shadow_view) = {
+            let mut shadow_pass = crate::shadow_map_pass::ShadowMapPass::new();
+            let mut builder = RenderGraphBuilder::new().settings(&settings);
+            shadow_pass.setup(&mut builder, &settings);
+            let shadow_handle = shadow_pass.shadow_map_handle();
+            builder.add_pass(Box::new(shadow_pass));
+            let mut graph = builder.build();
+            graph
+                .allocate_resources(&context.device, &context.physical_device_memory_properties)
+                .context("allocate graph resources")?;
+            let shadow_view = graph
+                .image_view(shadow_handle)
+                .context("shadow map view not found")?;
+            (graph, shadow_view)
+        };
 
-        graph
-            .allocate_resources(&context.device, &context.physical_device_memory_properties)
-            .context("allocate graph resources")?;
-
-        let shadow_view = graph
-            .image_view(shadow_handle)
-            .context("shadow map view not found")?;
+        #[cfg(not(feature = "shadows"))]
+        let (mut graph, shadow_view, dummy_shadow) = {
+            let mut graph = RenderGraphBuilder::new().settings(&settings).build();
+            graph
+                .allocate_resources(&context.device, &context.physical_device_memory_properties)
+                .context("allocate graph resources (shadows off)")?;
+            let dummy = crate::dummy::shadow_map_dummy(
+                &context,
+                runtime.command_pool,
+                context.graphics_queue,
+            )
+            .context("create 1x1 dummy shadow map")?;
+            log::warn!(
+                "`shadows` feature 关闭：实时阴影不可用（set 3 绑定 1x1 远深度图）；\
+                 需要阴影请在项目里启用 prism-render/shadows"
+            );
+            let view = dummy.view();
+            (graph, view, dummy)
+        };
 
         // 创建 forward_pass and wire its resources: IBL 集合 shadow 映射表 视图 +
         // 比较 采样器 bindless 纹理 表 材质 SSBO, and the
@@ -426,10 +459,23 @@ impl GraphRenderer {
         // GTAO pass half-resolution screen-space 环境光遮蔽 Runs after ForwardPass
         // every 帧 and produces a double-buffered R8 环境光遮蔽 纹理 the scene
         // samples (1-frame 延迟 to attenuate IBL diffuse + specular.
+        //
+        // `gtao` feature 关闭时整块不编译：set 4 改绑 1×1 白色（无遮蔽）dummy。
+        #[cfg(feature = "gtao")]
         let swapchain_extent = swapchain.extent;
+        #[cfg(feature = "gtao")]
         let gtao_pass =
             crate::gtao::GtaoPass::new(&context, runtime.command_pool, swapchain_extent)
                 .context("GtaoPass::new")?;
+        #[cfg(not(feature = "gtao"))]
+        let dummy_ao =
+            crate::dummy::ao_texture_dummy(&context, runtime.command_pool, context.graphics_queue)
+                .context("create 1x1 dummy AO texture")?;
+        #[cfg(not(feature = "gtao"))]
+        log::warn!(
+            "`gtao` feature 关闭：屏幕空间环境光遮蔽不可用（set 4 绑定 1x1 白色图）；\
+             需要 AO 请在项目里启用 prism-render/gtao"
+        );
 
         // PostPass parameters: 2 in-flight frames = 2 描述符 sets.
         let frame_count = 2u32;
@@ -474,6 +520,7 @@ impl GraphRenderer {
         if let Some(forward_pass) = graph.pass_mut::<ForwardPass>() {
             forward_pass.set_image_count(swapchain.views.len());
         }
+        #[cfg(feature = "gtao")]
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
         #[cfg(feature = "pathtrace")]
@@ -496,6 +543,10 @@ impl GraphRenderer {
             settings,
             shadow_sampler,
             shadow_view,
+            #[cfg(not(feature = "shadows"))]
+            dummy_shadow,
+            #[cfg(not(feature = "gtao"))]
+            dummy_ao,
             color_format,
             external_overlay: None,
             #[cfg(feature = "ui")]
@@ -527,6 +578,23 @@ impl GraphRenderer {
     /// Whether this 渲染器 was created in headless 众数 (no 窗口 表面
     pub fn is_headless(&self) -> bool {
         self.is_headless
+    }
+
+    /// 场景 pass 要采样的「上一帧环境光遮蔽」视图。
+    ///
+    /// `gtao` 开启时取 GTAO pass 的双缓冲 `(frame+1)%2`；关闭时返回 1×1 白色
+    /// dummy（可见性 1 = 无遮蔽），descriptor 布局与绑定次数完全一致。
+    #[cfg(feature = "gtao")]
+    fn ao_view(&mut self, frame: u32) -> vk::ImageView {
+        self.graph
+            .pass_mut::<crate::gtao::GtaoPass>()
+            .map(|g| g.ao_view((frame + 1) % 2))
+            .unwrap_or_else(vk::ImageView::null)
+    }
+
+    #[cfg(not(feature = "gtao"))]
+    fn ao_view(&mut self, _frame: u32) -> vk::ImageView {
+        self.dummy_ao.view()
     }
 
     /// 离屏渲染目标的尺寸（无窗口宿主模式）；有交换链时返回 `None`。
@@ -656,18 +724,42 @@ impl GraphRenderer {
         .context("create shadow comparison sampler (headless)")?;
 
         // 图 Shadow -> Scene -> GTAO -> PathTrace -> Post.
-        let mut shadow_pass = crate::shadow_map_pass::ShadowMapPass::new();
-        let mut builder = RenderGraphBuilder::new().settings(&settings);
-        shadow_pass.setup(&mut builder, &settings);
-        let shadow_handle = shadow_pass.shadow_map_handle();
-        builder.add_pass(Box::new(shadow_pass));
-        let mut graph = builder.build();
-        graph
-            .allocate_resources(&context.device, &context.physical_device_memory_properties)
-            .context("allocate graph resources (headless)")?;
-        let shadow_view = graph
-            .image_view(shadow_handle)
-            .context("shadow map view not found (headless)")?;
+        #[cfg(feature = "shadows")]
+        let (mut graph, shadow_view) = {
+            let mut shadow_pass = crate::shadow_map_pass::ShadowMapPass::new();
+            let mut builder = RenderGraphBuilder::new().settings(&settings);
+            shadow_pass.setup(&mut builder, &settings);
+            let shadow_handle = shadow_pass.shadow_map_handle();
+            builder.add_pass(Box::new(shadow_pass));
+            let mut graph = builder.build();
+            graph
+                .allocate_resources(&context.device, &context.physical_device_memory_properties)
+                .context("allocate graph resources (headless)")?;
+            let shadow_view = graph
+                .image_view(shadow_handle)
+                .context("shadow map view not found (headless)")?;
+            (graph, shadow_view)
+        };
+
+        #[cfg(not(feature = "shadows"))]
+        let (mut graph, shadow_view, dummy_shadow) = {
+            let mut graph = RenderGraphBuilder::new().settings(&settings).build();
+            graph
+                .allocate_resources(&context.device, &context.physical_device_memory_properties)
+                .context("allocate graph resources (headless, shadows off)")?;
+            let dummy = crate::dummy::shadow_map_dummy(
+                &context,
+                runtime.command_pool,
+                context.graphics_queue,
+            )
+            .context("create 1x1 dummy shadow map (headless)")?;
+            log::warn!(
+                "`shadows` feature 关闭：实时阴影不可用（set 3 绑定 1x1 远深度图）；\
+                 需要阴影请在项目里启用 prism-render/shadows"
+            );
+            let view = dummy.view();
+            (graph, view, dummy)
+        };
 
         let frame_ubo_buffers: Vec<vk::Buffer> =
             runtime.frame_ubos.iter().map(|u| u.buffer).collect();
@@ -697,13 +789,24 @@ impl GraphRenderer {
             )
             .context("ForwardPass::set_resources (headless)")?;
 
-        let gtao_pass =
-            crate::gtao::GtaoPass::new(&context, runtime.command_pool, offscreen.extent())
-                .context("GtaoPass::new (headless)")?;
-
         let frame_count = 2u32;
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new (headless)")?;
+
+        // `gtao` feature 关闭时 set 4 退化为 1×1 白色（无遮蔽）。
+        #[cfg(feature = "gtao")]
+        let gtao_pass =
+            crate::gtao::GtaoPass::new(&context, runtime.command_pool, offscreen.extent())
+                .context("GtaoPass::new (headless)")?;
+        #[cfg(not(feature = "gtao"))]
+        let dummy_ao =
+            crate::dummy::ao_texture_dummy(&context, runtime.command_pool, context.graphics_queue)
+                .context("create 1x1 dummy AO texture (headless)")?;
+        #[cfg(not(feature = "gtao"))]
+        log::warn!(
+            "`gtao` feature 关闭：屏幕空间环境光遮蔽不可用（set 4 绑定 1x1 白色图）；\
+             需要 AO 请在项目里启用 prism-render/gtao"
+        );
 
         // CRT 调度器（headless 下同样接入图，支持无窗口离屏 RT 调度）。
         let rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
@@ -733,6 +836,7 @@ impl GraphRenderer {
             forward_pass.set_image_count(1);
             forward_pass.set_target(&context.device, &context, 1, 0, offscreen.extent())?;
         }
+        #[cfg(feature = "gtao")]
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
         #[cfg(feature = "pathtrace")]
@@ -763,6 +867,10 @@ impl GraphRenderer {
             settings,
             shadow_sampler,
             shadow_view,
+            #[cfg(not(feature = "shadows"))]
+            dummy_shadow,
+            #[cfg(not(feature = "gtao"))]
+            dummy_ao,
             color_format,
             external_overlay: None,
             #[cfg(feature = "ui")]
@@ -1356,6 +1464,7 @@ impl GraphRenderer {
                 forward_pass.set_image_count(image_count);
             }
             // GTAO 拥有自己的 AO 图像（不来自交换链），但尺寸是交换链的一半。
+            #[cfg(feature = "gtao")]
             if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
                 if let Err(e) =
                     gtao.recreate_target(&self.runtime.context, self.runtime.command_pool, extent)
@@ -1436,6 +1545,7 @@ impl GraphRenderer {
         if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
             post.set_target(&context.device, std::slice::from_ref(&view), 0, extent)?;
         }
+        #[cfg(feature = "gtao")]
         if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
             if let Err(e) = gtao.recreate_target(&context, self.runtime.command_pool, extent) {
                 log::warn!("GtaoPass recreate_target failed (offscreen resize): {e:#}");
@@ -1639,11 +1749,7 @@ impl GraphRenderer {
 
         // --- 执行 渲染 图 (Shadow -> Scene -> GTAO -> Post) ---
         if record.is_ok() {
-            let ao_view = self
-                .graph
-                .pass_mut::<crate::gtao::GtaoPass>()
-                .map(|g| g.ao_view((frame as u32 + 1) % 2))
-                .unwrap_or_else(vk::ImageView::null);
+            let ao_view = self.ao_view(frame as u32);
             let offscreen_views = self.offscreen.as_ref().map(|o| [o.image_view()]);
             let swapchain_views: &[vk::ImageView] = match (&self.swapchain, &offscreen_views) {
                 (Some(sw), _) => sw.views.as_slice(),
@@ -2109,9 +2215,12 @@ impl GraphRenderer {
 
         // 销毁 GTAO pass 环境光遮蔽 images, 渲染 pass 管线 描述符
         // sets, 采样器
+        #[cfg(feature = "gtao")]
         if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
             gtao.destroy(device);
         }
+        #[cfg(not(feature = "gtao"))]
+        self.dummy_ao.destroy(device);
 
         // 销毁 PostPass (framebuffers, 渲染 pass 管线 描述符
         // 集合 采样器
@@ -2132,12 +2241,16 @@ impl GraphRenderer {
         // context-holders (runtime/ibl/scene_scope) *before* the 图 — if
         // ShadowMapPass relied on its 放置 alone, the 设备 handle would be
         // stale by the 时间 it ran, causing leaked resources + 访问 violation.
+        #[cfg(feature = "shadows")]
         if let Some(shadow) = self
             .graph
             .pass_mut::<crate::shadow_map_pass::ShadowMapPass>()
         {
             shadow.destroy(device);
         }
+        // `shadows` 关闭时没有 ShadowMapPass，销毁 1×1 dummy 深度图。
+        #[cfg(not(feature = "shadows"))]
+        self.dummy_shadow.destroy(device);
 
         // 销毁外部叠加层（render pass/framebuffers/渲染器）。
         if let Some(overlay) = self.external_overlay.as_mut() {

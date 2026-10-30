@@ -43,14 +43,21 @@ pub mod capabilities;
 pub mod compute;
 pub mod context;
 pub mod descriptor;
+/// pass 级 feature（`shadows` / `gtao`）关闭时的 1×1 占位资源。
+#[cfg(any(not(feature = "shadows"), not(feature = "gtao")))]
+pub(crate) mod dummy;
 pub mod external_overlay;
 pub mod forward_pass;
 pub mod gi;
 pub mod gizmo;
 pub mod graph_renderer;
 pub mod ground_grid;
+/// 半分辨率环境光遮蔽 pass（Lego 砖块 `gtao`）。
+#[cfg(feature = "gtao")]
 pub mod gtao;
 pub mod hdr;
+/// 图像光照（Lego 砖块 `ibl`）的内部实现；模块本身始终存在，
+/// 关闭时只保留描述符布局与 1×1 中性灰回退（见 `make_ibl`）。
 pub mod ibl;
 pub mod managers;
 pub mod mesh;
@@ -75,6 +82,8 @@ pub mod shader;
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
+/// 方向光阴影贴图 pass（Lego 砖块 `shadows`）。
+#[cfg(feature = "shadows")]
 pub mod shadow_map_pass;
 pub mod skybox_pass;
 pub mod sprite_pass;
@@ -102,6 +111,7 @@ pub use gi::{
 pub use gizmo::{Gizmo, GizmoInstance};
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use ground_grid::GroundGrid;
+#[cfg(feature = "gtao")]
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
 pub use pipeline::GraphicsPipeline;
@@ -116,6 +126,7 @@ pub use render_graph::{
 };
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;
+#[cfg(feature = "shadows")]
 pub use shadow_map_pass::ShadowMapPass;
 pub use skybox_pass::SkyboxSettings;
 pub use sprite_pass::SpritePass;

@@ -30,9 +30,12 @@ MATRIX: list[tuple[str, list[str]]] = [
         "prism-app x11 + pathtrace",
         ["check", "-p", "prism-app", "--no-default-features", "--features", "x11,pathtrace"],
     ),
+    ("prism-app 2D 档（无 3D 组件组）",
+     ["check", "-p", "prism-app", "--no-default-features", "--features", "x11,group-2d,group-ui"],
+    ),
     (
-        "prism-app 2D 档（无 3D 组件组）",
-        ["check", "-p", "prism-app", "--no-default-features", "--features", "x11,group-2d,group-ui"],
+        "prism-app 3D 极简（无 skybox/shadows/gtao）",
+        ["check", "-p", "prism-app", "--no-default-features", "--features", "x11,group-3d,ibl"],
     ),
     ("prism-app 默认（全量）", ["check", "-p", "prism-app"]),
 ]

@@ -19,10 +19,12 @@ use crate::gizmo::Gizmo;
 use crate::ground_grid::GroundGrid;
 use crate::mesh::Vertex;
 use crate::pipeline::{blend_factor, blend_operation, cull_flags, GraphicsPipeline, PipelineDesc};
+#[cfg(feature = "shadows")]
+use crate::render_graph::SHADOW_MAP_H;
 use crate::render_graph::{
     DrawState, GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder,
     RenderPassNode, RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H,
-    FORWARD_DEPTH_H, FORWARD_NORMAL_H, SHADOW_MAP_H,
+    FORWARD_DEPTH_H, FORWARD_NORMAL_H,
 };
 use crate::shader;
 use crate::skybox_pass::SkyboxPass;
@@ -1330,6 +1332,9 @@ impl RenderPassNode for ForwardPass {
         self.out_color_h = FORWARD_COLOR_H;
 
         // Declare read edge for directional shadow map sampled in fragment shader (set 3).
+        // `shadows` 关闭时图里没有 ShadowMapPass，这个 handle 无人写入，
+        // 也就不该声明读边（forward 采样的是一张不在图里的 1×1 dummy）。
+        #[cfg(feature = "shadows")]
         graph.read_usage(ResourceUsage {
             handle: SHADOW_MAP_H,
             access: vk::AccessFlags::SHADER_READ,
@@ -1724,7 +1729,10 @@ impl RenderPassNode for ForwardPass {
             // Shadow 视图 is declared as an input (SHADOW_MAP_H); IBL and
             // previous-frame AO are bound via `set_resources` / `set_ao` and
             // bypass `GraphResources`, so they aren't listed as graph edges.
+            #[cfg(feature = "shadows")]
             inputs: vec![SHADOW_MAP_H],
+            #[cfg(not(feature = "shadows"))]
+            inputs: Vec::new(),
             outputs: vec![self.out_depth_h, self.out_normal_h, self.out_color_h],
         }
     }
