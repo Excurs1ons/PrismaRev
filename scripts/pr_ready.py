@@ -320,6 +320,15 @@ def shader_bindings_check(changed: list[str]) -> Check:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def dependency_budget_check() -> Check:
+    """玩家依赖树预算（`scripts/check_deps.py`）。
+
+    `prism-app` 是玩家二进制唯一的顶层依赖：它多带一个 crate，每个用户项目、
+    每次 Android 打包都会多带一个。这条检查把它变成 CI 红灯，而不是靠人记。
+    """
+    return Check("依赖预算 (player)", [sys.executable, str(ROOT / "scripts" / "check_deps.py")])
+
+
 def artifact_guard(changed: list[str]) -> Check:
     check = Check("artifact / secret guard", ["git", "diff --name-only"])
     check.done = True
@@ -636,6 +645,7 @@ def main() -> int:
         )
 
     checks.append(shader_bindings_check(changed))
+    checks.append(dependency_budget_check())
 
     checks.extend(editor_gpui_checks(changed, args.quick))
     checks.extend(editor_egui_checks(changed, args.quick))
@@ -681,6 +691,10 @@ def main() -> int:
             check.detail = "x86_64-pc-windows-gnu"
         elif check.name == "editor-egui tests" and check.status == "ok":
             check.detail = test_summary(check.output)
+
+        elif check.name.startswith("依赖预算") and check.status == "ok":
+            match = re.search(r"player (\d+)/(\d+) crates", check.output)
+            check.detail = f"{match.group(1)}/{match.group(2)} crates" if match else ""
 
         elif check.name.startswith("clippy (") and check.status == "ok":
             check.detail = "-D warnings"

@@ -18,6 +18,7 @@ anyhow = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 clap = { workspace = true }
-image = { workspace = true }
+# 地形高度图导出 PNG，以及 EXR（`Rgba32F` 高度场）。
+image = { workspace = true, features = ["png", "exr"] }
 rayon = { workspace = true }
 rand = { workspace = true }

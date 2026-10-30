@@ -382,6 +382,7 @@ impl ResourceManager {
     }
 
     /// 加载 and register all assets from a `.pak` file 异步
+    #[cfg(feature = "async-io")]
     pub async fn load_package_async(
         &mut self,
         path: impl AsRef<Path> + Send,

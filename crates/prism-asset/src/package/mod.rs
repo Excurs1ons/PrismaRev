@@ -498,6 +498,7 @@ impl PackageBuilder {
     }
 
     /// 异步 构建 and 写入 to a file via tokio.
+    #[cfg(feature = "async-io")]
     pub async fn build_to_file_async(
         &mut self,
         path: impl AsRef<Path> + Send,
@@ -535,6 +536,7 @@ impl PackageReader {
     }
 
     /// 异步 打开 via tokio.
+    #[cfg(feature = "async-io")]
     pub async fn open_async(path: impl AsRef<Path> + Send) -> Result<Self, PackageError> {
         Self::from_owned_bytes(tokio::fs::read(path.as_ref()).await?)
     }

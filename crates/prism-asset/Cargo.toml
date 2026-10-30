@@ -23,7 +23,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3"], optional = true }
 default = ["runtime", "types", "streaming"]
 asset-data = ["dep:typetag"]
 core = []
-runtime = ["dep:tokio", "dep:tracing", "core", "package"]
+# tokio 只为 `*_async` 变体存在（运行时默认走同步 IO），默认不进玩家二进制。
+async-io = ["dep:tokio"]
+runtime = ["dep:tracing", "core", "package"]
 package = ["core", "dep:zstd", "dep:xxhash-rust"]
 hot-reload = ["runtime"]
 streaming = ["runtime"]
