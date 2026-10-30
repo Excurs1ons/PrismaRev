@@ -291,6 +291,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 The user project's dependency chain must stay **UI-framework-free and editor-free**:
 `prisma → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`.
 `prism-cooker` / `prism-build-pipeline` are build-host only and must never appear in this chain.
+可选能力**默认关**、按 feature 打开：`prism-app/physics`、`prism-app/audio`（连带
+`prism-engine/audio` 的 `AudioSource`）、`prism-asset/async-io`。玩家树由
+`scripts/check_deps.py` 守预算（黑名单 + crate 上限），本地和 CI 都跑，别调高常量。
 - The only editor is the Tauri web editor (`editor/`). **Since 2026-10-27 its Rust backend
   links `prism-app` / `prism-engine` on purpose** (built-in Scene / Game view): the editor
   owns engine instances and renders them offscreen inside its own process.

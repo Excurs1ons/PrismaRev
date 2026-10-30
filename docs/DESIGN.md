@@ -961,9 +961,9 @@ id 的语义和编辑器的下标重映射**不能分开落地**：只要 `paren
 | 规则 | 落地 |
 |------|------|
 | 构建期依赖（`gltf` / `clap` / `rayon` / 图片编解码器）不得进入玩家树 | `scripts/check_deps.py` 黑名单 |
-| 可选能力必须是 feature，默认关闭 | `prism-app/physics`、`prism-asset/async-io` |
+| 可选能力必须是 feature，默认关闭 | `prism-app/physics`、`prism-app/audio`、`prism-asset/async-io` |
 | `image` 的 workspace 依赖零默认 codec，各 crate 只声明自己用到的格式 | 根 `Cargo.toml` |
-| 玩家树 crate 总数 ≤ `MAX_PLAYER_CRATES`（当前 200） | 同上 |
+| 玩家树 crate 总数 ≤ `MAX_PLAYER_CRATES`（当前 155） | 同上 |
 
 检查在 `cargo check` 之外单独跑，只做依赖解析（不需要 `.spv`、不编译）：
 `python3 scripts/check_deps.py`，已接入 `scripts/pr_ready.py` 与 CI 的 `deps` job。
@@ -982,15 +982,21 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 
 | 版本 | 玩家树 crate | 未 strip | strip 后 |
 |------|-------------|---------|---------|
-| #532 之前（255 crates，含 rapier/tokio/exr/jpeg） | 255 | 15.49 MB | 10.37 MB |
-| #532 之后（196 crates） | 196 | 14.72 MB | 9.78 MB |
-| 差值 | −59 | −0.77 MB（−5.0%） | −0.60 MB（−5.7%） |
+| 初始（rapier3d + tokio + exr/jpeg + 整条 audio 默认带） | 255 | 15.49 MB | 10.37 MB |
+| #532 依赖瘦身（rapier/tokio/exr 移除） | 196 | 14.72 MB | 9.78 MB |
+| #532 之后 + audio feature 化（默认关） | **144** | **10.38 MB** | **6.70 MB** |
 
-结论：**依赖树减掉 23% 只换来体积减 5.7%**——体积的大头是 winit / Vulkan 栈 / audio
-（cpal + firewheel + symphonia）这类运行时真需要的东西，不是构建期依赖。所以：
+总计：crate −44%，strip 后体积 −35%（10.37 MB → 6.70 MB）。
 
-- 别再为了「让二进制小」去砍零散 crate，那点收益不成立；
-- 下一个真正能改变体积量级的是 **audio 链路**（约 30 个 crate，含 symphonia 编码器和
-  重采样器），以及 `image` 之外的字体/文本栈；砍它们要有 feature 化的整体方案；
-- **编译时间**与**依赖数量**才是这轮减重的主要收益（255 → 196 个 crate，CI 冷构建更快，
-  也没有了「用户项目顺手多背一个物理引擎」的隐性成本）。
+两次减重的收益结构完全不同，这决定了下一步该做什么：
+
+- **构建期依赖（rapier / tokio / exr / jpeg）几乎不改变体积**：−59 个 crate 只换来
+  −0.60 MB。别再为了体积去砍零散 crate。
+- **audio 栈是体积大头**：一个 feature 开关就 −3.09 MB（strip 后 −32%），因为
+  cpal + firewheel + symphonia（mp3/flac/vorbis/ogg/isomp4 全套编解码 + FFT 重采样）
+  是真正的运行时大件。体积敏感的项目（小游戏、demo）关掉它即可。
+- 剩下的 6.7 MB 主要是 winit / x11 / wayland 的窗口栈、ash + Vulkan 加载层、
+  字体与 2D（fontdue / tiny-skia）——都是渲染与窗口真正需要的，除非做 headless 构建。
+
+**结论**：依赖数量与编译时间是"默认清爽"的指标；**二进制体积靠 feature 关掉大件能力**，
+不靠删零散依赖。

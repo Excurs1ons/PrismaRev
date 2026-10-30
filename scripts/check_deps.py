@@ -29,7 +29,7 @@ PLAYER_CRATE = "prism-app"
 
 # 允许的玩家树上限。留一点余量，但**不要**为了过 CI 无脑调高：
 # 要么把新依赖做成 feature，要么在 PR 里说明为什么它必须随玩家发布。
-MAX_PLAYER_CRATES = 200
+MAX_PLAYER_CRATES = 155
 
 # 构建期 / 编辑器 / 可选能力：出现即失败。
 BANNED: dict[str, str] = {
@@ -43,6 +43,10 @@ BANNED: dict[str, str] = {
     "tokio": "异步 IO 是 prism-asset 的 `async-io` feature，默认关闭",
     "rapier3d": "物理是 prism-app 的 `physics` feature，默认关闭",
     "parry3d": "物理是 prism-app 的 `physics` feature，默认关闭",
+    "cpal": "音频后端是 prism-app 的 `audio` feature，默认关闭",
+    "firewheel": "音频后端是 prism-app 的 `audio` feature，默认关闭",
+    "symphonia": "音频解码是 prism-app 的 `audio` feature，默认关闭",
+    "symphonium": "音频解码是 prism-app 的 `audio` feature，默认关闭",
 }
 
 

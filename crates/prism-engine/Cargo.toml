@@ -8,6 +8,9 @@ description = "Application layer and main loop for PrismaRev"
 [features]
 default = []
 legacy-disk-scenes = []
+# ECS 音频集成（`AudioSource` + `sync_audio_sources`）。默认关：整条 cpal /
+# firewheel / symphonia 链路（约 30 个 crate）只在需要声音的项目里开。
+audio = ["dep:prism-audio"]
 
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
@@ -16,7 +19,7 @@ prism-scene = { path = "../prism-scene" }
 prism-render = { path = "../prism-render" }
 prism-asset = { path = "../prism-asset", default-features = false, features = ["runtime"] }
 
-prism-audio = { path = "../prism-audio" }
+prism-audio = { path = "../prism-audio", optional = true }
 glam.workspace = true
 log = { workspace = true }
 anyhow = { workspace = true }

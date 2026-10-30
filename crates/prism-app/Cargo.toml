@@ -16,12 +16,16 @@ crate-type = ["lib"]
 # 需要物理时在用户项目里开：`prism-app = { path = "...", features = ["physics"] }`。
 default = []
 physics = ["dep:rapier3d"]
+# 音频后端（cpal + firewheel + symphonia，约 60 个 crate）。默认关：仓库里没有
+# 任何地方真的在放声音（`Subsystem::Audio` 只是建引擎 + 解码线程）。需要声音的项目
+# 打开这一个开关即可，它会连带启用 `prism-engine/audio`（ECS 侧的 `AudioSource`）。
+audio = ["dep:prism-audio", "prism-engine/audio"]
 
 [dependencies]
 prism-engine = { path = "../prism-engine" }
 prism-render = { path = "../prism-render" }
 prism-platform = { path = "../prism-platform" }
-prism-audio = { path = "../prism-audio" }
+prism-audio = { path = "../prism-audio", optional = true }
 prism-asset = { path = "../prism-asset", default-features = false, features = ["core", "runtime"] }
 glam.workspace = true
 rapier3d = { workspace = true, optional = true }
