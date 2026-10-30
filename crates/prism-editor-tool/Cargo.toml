@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
+env_logger = { workspace = true, features = ["auto-color", "humantime", "regex"] }
 clap = { workspace = true }
 # 地形高度图导出 PNG，以及 EXR（`Rgba32F` 高度场）。
 image = { workspace = true, features = ["png", "exr"] }

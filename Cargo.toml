@@ -38,7 +38,10 @@ ash-window = "0.13"
 raw-window-handle = "0.6"
 
 # Window / events
-winit = { version = "0.30", features = ["android-game-activity"] }
+# 平台后端由使用方显式选择（见 prism-platform 的 x11 / wayland feature）：
+# Linux 上 winit 默认会把 X11 + Wayland 两套栈全编进来（~1 MB），
+# Windows/Android 本来就只有系统库/NDK，不受影响。
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "android-game-activity"] }
 
 # Maths
 glam = { version = "0.33.2", features = ["serde"] }
@@ -51,7 +54,9 @@ flume = "0.12.0"
 
 # Logging
 log = "0.4"
-env_logger = "0.11"
+# 默认特性（含 `regex` 日志过滤，~0.47 MB）必须由使用方显式打开：
+# 玩家运行时用不到正则，构建工具需要。见 docs/DESIGN.md §12.4。
+env_logger = { version = "0.11", default-features = false }
 
 # Error handling
 anyhow = "1"
@@ -91,3 +96,13 @@ opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug 
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# 玩家 / Android 打包专用配置：体积优先，**不要用于编辑器**。
+# `panic = "abort"` 会让进程内跑引擎的 editor-egui 整体崩溃而不是让某个视口失败，
+# 所以它不在 `release` 里，只在这个 profile 里。用法：`cargo build --profile dist`。
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

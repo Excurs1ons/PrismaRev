@@ -6,8 +6,10 @@ license.workspace = true
 description = "Application layer and main loop for PrismaRev"
 
 [features]
-default = []
+default = ["pathtrace"]
 legacy-disk-scenes = []
+# Lego 开关：透传到 prism-render（见 docs/DESIGN.md §12）。
+pathtrace = ["prism-render/pathtrace"]
 # ECS 音频集成（`AudioSource` + `sync_audio_sources`）。默认关：整条 cpal /
 # firewheel / symphonia 链路（约 30 个 crate）只在需要声音的项目里开。
 audio = ["dep:prism-audio"]
@@ -16,7 +18,7 @@ audio = ["dep:prism-audio"]
 prism-ecs = { path = "../prism-ecs" }
 prism-reflect = { path = "../prism-reflect" }
 prism-scene = { path = "../prism-scene" }
-prism-render = { path = "../prism-render" }
+prism-render = { path = "../prism-render", default-features = false }
 prism-asset = { path = "../prism-asset", default-features = false, features = ["runtime"] }
 
 prism-audio = { path = "../prism-audio", optional = true }

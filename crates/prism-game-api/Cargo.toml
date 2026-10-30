@@ -21,7 +21,9 @@ prism-project-api = { path = "../prism-project-api" }
 # `Component` blanket impl，永远不会把宿主的 `World` 指针传出去。
 prism-ecs = { path = "../prism-ecs" }
 # 仅 `host` 后端用于松散资产定位（插件构建不会拉进引擎）。
-prism-engine = { path = "../prism-engine", optional = true }
+# **必须 default-features = false**：否则会把 prism-engine 的默认能力（如 `pathtrace`）
+# 强加给每一个玩家，项目模板的 Lego 开关就失效了（#535 实测）。
+prism-engine = { path = "../prism-engine", optional = true, default-features = false }
 log.workspace = true
 
 [dev-dependencies]

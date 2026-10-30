@@ -1000,3 +1000,174 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 
 **结论**：依赖数量与编译时间是"默认清爽"的指标；**二进制体积靠 feature 关掉大件能力**，
 不靠删零散依赖。
+
+---
+
+## 12. Lego：项目模板决定编译哪些子系统
+
+引擎不替项目做取舍。**能力 = 砖块，`Cargo.toml` = 图纸**：项目模板挑哪些 feature，
+就只编译、只链接哪些子系统。引擎自身的 `default` 保持「全量」，这样库和示例不会被
+某个项目的口味绑架；精简来自**模板**，不是来自删默认值。
+
+### 12.1 两层机制（不要混用）
+
+| 层 | 机制 | 例子 |
+|---|---|---|
+| **子系统** | cargo feature（编译期，真的不生成代码/不链接依赖） | `pathtrace`、`audio`、`physics`、`async-io` |
+| **组件** | `ComponentRegistry` 分组（运行期注册） | 场景里用不到的组件组不注册，加载时按「未知组件」处理 |
+
+组件**不要**做成 cargo feature：N 个组件就是 2^N 个组合，CI 编不完、模板也写不出来。
+组件级的取舍交给注册表分组 + 场景 cook（未注册组 = 不被提取，代码不链接）。
+
+### 12.2 当前砖块
+
+| 砖块 | feature | 默认 | 关掉后省什么 |
+|---|---|---|---|
+| 路径追踪 | `prism-render/pathtrace` | on | `pt_pass.rs`（~1.6k 行）+ 累积/BLAS-TLAS 资源 |
+| 音频 | `prism-app/audio` + `prism-engine/audio` | off | cpal + firewheel + symphonia（~60 crate，−3.1 MB） |
+| 物理 | `prism-app/physics` | off | rapier3d + parry3d（~40 crate） |
+| 异步资产 IO | `prism-asset/async-io` | off | tokio |
+| 窗口后端 | `prism-app/x11`、`prism-app/wayland`（透传 `prism-platform`） | 两个都 on | Linux 上只留一个：−0.46 MB（wayland 独留）～ −1.05 MB（x11 独留） |
+
+**待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
+
+- `2d` / `3d`：`SpritePass` 目前寄生在 `ForwardPass` 的 render pass 里，拆成独立 pass
+  之后，2D 项目可以完全不编译 3D（forward/shadow/skybox/mesh/primitives）。
+- `ibl`（2.3k 行 + HDR 环境资源）、`gtao`（1k 行）、`gi`（probe 烘焙）、`shadow`。
+- `ui`（fontdue/tiny-skia + `ui_overlay`）、`screenshot`。
+
+### 12.3 硬规则
+
+1. **每个 feature 必须能被单独关掉并编译通过**——`scripts/check_features.py` 的矩阵 +
+   CI 的 `features` job 就是这条规则的执行者；新增 feature 必须加一条最小组合。
+2. **默认值只增不减**：新能力默认进 `default`，模板要精简就显式 `default-features = false`；
+   不要为了某个项目的体积去改引擎默认值（会让其它项目静默失去功能）。
+3. **关掉要可诊断**：feature 关闭导致某能力不可用时，启动/使用时 `log::warn!` 说明
+   「需要开哪个 feature」，不要静默降级（`Subsystem::Audio` 已按此实现）。
+4. **模板 = `Cargo.toml` 的 feature 列表 + `build_app()` 的子系统列表**；两者必须一致
+   （开了 feature 却不装子系统等于白编译，装了子系统却没开 feature 会告警）。
+
+### 12.4 体积账本（每块砖值多少字节）
+
+方法：`scripts/size_report.py` 临时改写 `projects/prisma` 的 feature 列表、按同一
+`release` profile 构建、记录未 strip 二进制大小。差值只来自 feature。
+
+| 砖块 | Δ 二进制（未 strip） | 说明 |
+|---|---|---|
+| `audio`（cpal+firewheel+symphonia） | **+4.14 MB** | 体积大头，50 个 crate 的运行时栈 |
+| `pathtrace` | +135 KB | 1.6k 行 + SPIR-V + BLAS/TLAS |
+| `physics` | +3 KB | 代码是死代码（`physics_runner` 未接线），只多编译时间 |
+| base（全关） | 10.24 MB | 见下方构成 |
+
+按 crate 归因（`nm -S`，base 构建）：自研代码合计 **~731 KB**（`prism-render` 205 KB、
+`prism-scene` 192 KB、`prism-ecs` 107 KB、`prism-engine` 98 KB、其余 ~130 KB），
+其余 ~4.7 MB 是 Rust 基线 + 窗口栈 + 第三方。
+
+两个必须记住的结论：
+
+1. **代码行数 ≈ 体积是错的**。1.6k 行的路径追踪只值 135 KB；一个「没接线」的物理模块
+   几乎为 0（链接器会删掉），但它仍然消耗 40 个 crate 的编译时间和依赖面。
+2. **3D/2D 拆分对体积几乎无收益**（3D pass 合计 ~200 KB 量级），它的收益是
+   **依赖面、编译时间、API 清晰度**。真正能改变二进制量级的是：
+   第三方大件（audio 4.1 MB、UI/字体栈、窗口栈）、release profile（`panic = "abort"`、
+   `lto = "fat"`、`codegen-units = 1`、strip）。
+3. **组件不是体积单位**。组件是 POD 数据 + 反射元数据，`prism-scene` 整个 crate
+   才 192 KB；关掉一个组件不改变二进制（代码共享、链接器本来就只保留被调用路径），
+   只影响场景数据与注册表。组件级的取舍是**运行期复杂度**问题，不是体积问题。
+
+### 12.5 发布配置分层（debug / release / dist）
+
+构建配置也属于「图纸」的一部分：不同消费者用不同 profile，不要用一个 release 硬扛。
+
+| profile | 用途 | 关键设置 |
+|---|---|---|
+| `dev` | 开发、编辑器 | `opt-level = 1`、完整调试信息、`panic = unwind` |
+| `release` | 编辑器 / 工具 / CI | `opt-level = 3`、`lto = "thin"`、`panic = unwind` |
+| `dist` | 玩家 / Android 打包 | `lto = "fat"`、`codegen-units = 1`、`panic = "abort"`、`strip = "symbols"` |
+
+`panic = "abort"` **不能**进 `release`：editor-egui 在进程内跑引擎，abort 会让整个编辑器
+崩溃而不是让某个视口失败。用法：`cargo build --profile dist`（Android 打包脚本已切到它）。
+
+实测（`projects/prisma`，默认 feature，Termux aarch64）：
+
+| 配置 | 未 strip | strip 后 |
+|---|---|---|
+| `release`（thin LTO, cu=16, unwind） | 10.38 MB | 6.70 MB |
+| `release` + fat LTO + cu=1（仍 unwind） | 7.41 MB（−28.6%） | 5.64 MB（−15.7%） |
+| `dist`（再加 panic=abort, strip） | **6.61 MB（−36.3%）** | **5.12 MB（−23.5%）** |
+
+结论：**收益主要来自 fat LTO + 单 codegen unit（−28.6%），不是 panic=abort**（后者再省
+0.81 MB）。因此编辑器完全可以留在 `release`（保留 unwind 与回溯），只让玩家/Android 走 `dist`。
+本机实测 fat LTO 的构建时间几乎没变（1m31s vs 1m35s），不必为它担心 CI。
+
+#### 5 MB 是怎么构成的（`dist`，5.12 MB strip 后）
+
+按 section（`size -A`）：`.text` 3.86 MB（75%）、`.rodata` 0.49 MB（10%）、
+`.eh_frame` 0.35 MB（7%）、`.rela.dyn` 0.20 MB（4%）、`.data` 0.15 MB。
+
+按代码来源（`nm -S` 归因，fat LTO 后符号会记在调用方，故为近似值）：
+
+| 类别 | 大小 | 占比 | 可否再减 |
+|---|---|---|---|
+| Rust 基线（core/std/alloc/hashbrown/gimli） | 0.88 MB | 22% | 只能靠 `build-std` + panic_abort（nightly） |
+| 引擎自研（prism_*） | 0.85 MB | 22% | 拆 feature |
+| 窗口栈（winit/wayland/x11/smithay） | 0.84 MB | 21% | Linux 税；Windows 上换成系统 DLL，Android 换 android-activity |
+| 其它第三方 | 0.49 MB | 12% | 个案处理 |
+| **日志正则（env_logger → regex）** | **0.47 MB** | **12%** | **最容易的一刀：换掉 env_filter/regex 即可** |
+| 字体/2D（tiny_skia/ttf_parser/fontdue） | 0.23 MB | 6% | `ui` feature |
+| 序列化（toml/serde_json） | 0.14 MB | 3.5% | 配置 feature |
+| 压缩（zstd/flate2） | 0.04 MB | 1% | 几乎不值得 |
+
+**窗口栈按平台裁剪**（实测，`dist` strip 后）：
+
+| 组合 | 二进制 | 说明 |
+|---|---|---|
+| X11 + Wayland（默认） | 5.12 MB | 两种会话都能启动 |
+| 仅 Wayland | 4.66 MB（−0.46 MB） | 纯 X11 环境无法启动 |
+| 仅 X11 | **4.07 MB（−1.05 MB）** | 纯 Wayland 环境需要 XWayland 兜底 |
+
+- **Windows / Android 本来就不付这笔钱**：winit 的平台依赖按 target 裁剪，
+  `cargo tree --target aarch64-linux-android` 里 wayland/x11 计数为 0，Windows 用系统 DLL。
+- 只有 Linux 需要选，而且**必须选一个**（winit 无后端会编译失败），所以模板的最小组合是
+  `--no-default-features --features x11`，而不是"全关"。
+
+结论：**5 MB 里真正属于「引擎」的只有 0.85 MB**，其余是语言基线、窗口栈和两个
+可以替换的第三方件（regex 日志、字体栈）。下一步优先级：去掉 env_logger 的 regex
+（−0.47 MB）> `ui` 砖块（−0.23 MB）> 序列化（−0.14 MB）。
+
+#### 跨平台二进制体积（`dist` profile，strip 后）
+
+| 目标 | 产物 | 大小 | text |
+|---|---|---|---|
+| Linux x86_64 / aarch64（x11 + wayland） | `prisma` | 5.12 MB | 4.97 MB |
+| Linux（仅 x11） | `prisma` | 4.07 MB | — |
+| Windows `x86_64-pc-windows-gnu` | `prisma.exe` | 4.11 MB | 4.09 MB |
+| Android `aarch64-linux-android` | `libprisma.so` | **3.26 MB** | 3.15 MB |
+
+- Windows 与「Linux x11-only」几乎一样（4.11 vs 4.07 MB），差值就是 wayland 栈——**印证了
+  0.84 MB 的窗口栈只在 Linux 双后端时存在**。
+- Android 最小（没 winit 平台栈，只有 NDK 胶水）；APK 体积另算（`.pak` 资产 + Java 壳）。
+- 交叉编译在本机可复现：Windows 用 mingw 链接器；Android 用
+  `scripts/make-ndk-host-native.sh` 处理过的 NDK（aarch64 主机 + x86_64 prebuilt shim），
+  需要同时设 `CC_/CXX_/AR_aarch64_linux_android`（`android-activity` 的 build.rs 会找 `clang++`）。
+
+#### 回收日志正则（env_logger → env_filter → regex）
+
+`env_logger` 的默认特性 `regex` 只为 `RUST_LOG` 的正则过滤服务，却会拉进整套正则引擎
+（regex-automata + regex-syntax + aho-corasick）。我们只用 `module=level` 这种指令，
+`env_filter` 在关闭 `regex` 后会用**子串匹配**，语义足够。
+
+- 根 workspace 的 `env_logger` 改为 `default-features = false`，构建工具显式打开
+  `["auto-color", "humantime", "regex"]`，**玩家运行时只开 `["auto-color", "humantime"]`**。
+- Android 还有第二条路径：`android_logger` 的默认特性同样带 `env_filter/regex`，
+  一并关掉。
+- 代价：`RUST_LOG` 里不能再写正则（如 `prism_(render|engine)=debug`），
+  需要时给对应 crate 打开 `regex` 特性。
+
+实测（`dist`，strip 后）：
+
+| 平台 | 改前 | 改后 | Δ |
+|---|---|---|---|
+| Linux（x11+wayland） | 5.12 MB | **4.47 MB** | −0.66 MB（−12.8%） |
+| Windows | 4.11 MB | **3.26 MB** | −0.85 MB（−20.7%） |
+| Android | 3.26 MB | 3.26 MB | 0（regex 代码在 fat LTO 下本来就被回收，但仍占编译时间与依赖面） |

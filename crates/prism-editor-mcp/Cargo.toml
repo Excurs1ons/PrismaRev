@@ -13,4 +13,4 @@ prism-editor-api = { path = "../prism-editor-api" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
+env_logger = { workspace = true, features = ["auto-color", "humantime", "regex"] }

@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 description = "Platform abstraction — window system, Vulkan surface, input routing"
 
+[features]
+# Linux 窗口后端二选一或全开（默认全开，保证两种会话都能启动）。
+# 体积敏感的分发可以只留一个：`--no-default-features --features x11`。
+default = ["x11", "wayland"]
+x11 = ["winit/x11"]
+wayland = ["winit/wayland", "winit/wayland-dlopen", "winit/wayland-csd-adwaita"]
+
 [dependencies]
 winit = { workspace = true }
 ash-window = { workspace = true }
