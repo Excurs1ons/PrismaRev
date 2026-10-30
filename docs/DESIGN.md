@@ -968,3 +968,29 @@ id 的语义和编辑器的下标重映射**不能分开落地**：只要 `paren
 检查在 `cargo check` 之外单独跑，只做依赖解析（不需要 `.spv`、不编译）：
 `python3 scripts/check_deps.py`，已接入 `scripts/pr_ready.py` 与 CI 的 `deps` job。
 超预算时**不要**调高常量：要么把依赖做成 feature，要么在 PR 里说明它为什么必须随玩家发布。
+
+### 实测基线
+
+桌面玩家二进制（`projects/prisma` 的 `prisma`，Termux aarch64，`cargo build --release`，
+`lto = "thin"` + `opt-level = 3`）。复现：
+
+```bash
+cd projects/prisma && cargo build --release
+ls -l target/release/prisma        # 未 strip
+cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（发布形态）
+```
+
+| 版本 | 玩家树 crate | 未 strip | strip 后 |
+|------|-------------|---------|---------|
+| #532 之前（255 crates，含 rapier/tokio/exr/jpeg） | 255 | 15.49 MB | 10.37 MB |
+| #532 之后（196 crates） | 196 | 14.72 MB | 9.78 MB |
+| 差值 | −59 | −0.77 MB（−5.0%） | −0.60 MB（−5.7%） |
+
+结论：**依赖树减掉 23% 只换来体积减 5.7%**——体积的大头是 winit / Vulkan 栈 / audio
+（cpal + firewheel + symphonia）这类运行时真需要的东西，不是构建期依赖。所以：
+
+- 别再为了「让二进制小」去砍零散 crate，那点收益不成立；
+- 下一个真正能改变体积量级的是 **audio 链路**（约 30 个 crate，含 symphonia 编码器和
+  重采样器），以及 `image` 之外的字体/文本栈；砍它们要有 feature 化的整体方案；
+- **编译时间**与**依赖数量**才是这轮减重的主要收益（255 → 196 个 crate，CI 冷构建更快，
+  也没有了「用户项目顺手多背一个物理引擎」的隐性成本）。
