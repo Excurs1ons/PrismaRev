@@ -447,7 +447,7 @@ impl SceneDoc {
                 source.parent.and_then(|parent| remap.get(&parent).copied())
             };
             if old_id == root_id {
-                copy.name = Some(format!("{} (1)", source.display_name()));
+                copy.name = Some(self.unique_name(&source.display_name(), source.parent));
             }
             self.entities.push(copy);
         }
@@ -461,7 +461,7 @@ impl SceneDoc {
         let source = self.entities.get(index)?.clone();
         let mut copy = source.clone();
         copy.id = Some(self.next_id());
-        copy.name = Some(format!("{} (1)", source.display_name()));
+        copy.name = Some(self.unique_name(&source.display_name(), source.parent));
         let inserted = self.entities.len();
         self.entities.push(copy);
         Some(inserted)
@@ -578,7 +578,6 @@ impl SceneDoc {
         let base = self.next_id();
         let parent_id = parent.and_then(|index| self.id_of_index(index));
         let root_old_id = prefab.id_of_index(0);
-        let name_roots = self.name_set();
 
         let start = self.entities.len();
         for (position, source) in prefab.entities.iter().enumerate() {
@@ -591,13 +590,7 @@ impl SceneDoc {
                 entity.parent.map(|parent| base + parent)
             };
             if Some(old_id) == root_old_id {
-                let mut name = entity.display_name();
-                let mut index = 1;
-                while name_roots.contains(&name) {
-                    name = format!("{} ({index})", entity.display_name());
-                    index += 1;
-                }
-                entity.name = Some(name);
+                entity.name = Some(self.unique_name(&entity.display_name(), parent_id));
                 if !prefab_path.is_empty() {
                     entity.components.insert(
                         PREFAB_LINK_COMPONENT.to_string(),
@@ -612,11 +605,27 @@ impl SceneDoc {
         result
     }
 
-    fn name_set(&self) -> HashSet<String> {
-        self.entities
+    /// Unity 的 `GetUniqueNameForSibling`：剥掉末尾的 ` (数字)` 得到基名，
+    /// 再在同级里找最小的未占用序号（第一个同名实体不加后缀）。
+    pub fn unique_name(&self, base: &str, parent: Option<u32>) -> String {
+        let base = strip_name_suffix(base);
+        let taken: HashSet<String> = self
+            .entities
             .iter()
+            .filter(|entity| entity.parent == parent)
             .map(|entity| entity.display_name())
-            .collect()
+            .collect();
+        if !taken.contains(base) {
+            return base.to_string();
+        }
+        let mut index = 1;
+        loop {
+            let candidate = format!("{base} ({index})");
+            if !taken.contains(&candidate) {
+                return candidate;
+            }
+            index += 1;
+        }
     }
 
     /// 把组件里精确等于 `from` 的路径字符串替换成 `to`（资产重命名 / 移动用）。
@@ -713,6 +722,23 @@ fn select_subtree(doc: &SceneDoc, index: usize, out: &mut Vec<usize>) {
     out.push(index);
     for child in doc.children(index) {
         select_subtree(doc, child, out);
+    }
+}
+
+/// 剥掉 Unity 风格的 ` (数字)` 后缀：`Cube (3)` → `Cube`。
+fn strip_name_suffix(name: &str) -> &str {
+    let trimmed = name.trim_end();
+    if !trimmed.ends_with(')') {
+        return trimmed;
+    }
+    let Some(open) = trimmed.rfind(" (") else {
+        return trimmed;
+    };
+    let inner = &trimmed[open + 2..trimmed.len() - 1];
+    if !inner.is_empty() && inner.bytes().all(|byte| byte.is_ascii_digit()) {
+        &trimmed[..open]
+    } else {
+        trimmed
     }
 }
 
@@ -889,6 +915,33 @@ mod tests {
         // 新的 id 不与旧的重叠。
         let ids: HashSet<u32> = scene.entities.iter().filter_map(|e| e.id).collect();
         assert_eq!(ids.len(), scene.entities.len());
+    }
+
+    #[test]
+    fn unique_name_strips_suffix_and_uses_smallest_free_slot() {
+        let mut doc = SceneDoc::default();
+        let root = doc.add_named_child(None, "Cube");
+        assert_eq!(doc.unique_name("Cube", None), "Cube (1)");
+        doc.add_named_child(None, "Cube (1)");
+        assert_eq!(doc.unique_name("Cube (1)", None), "Cube (2)");
+        // 同级范围：子级可以复用根级的名字。
+        assert_eq!(doc.unique_name("Cube", doc.id_of_index(root)), "Cube");
+        // 剥后缀后再找空位。
+        assert_eq!(doc.unique_name("Cube (9)", None), "Cube (2)");
+        // 非数字后缀属于名字本身。
+        assert_eq!(doc.unique_name("Cube (left)", None), "Cube (left)");
+    }
+
+    #[test]
+    fn repeated_duplicates_get_increasing_names() {
+        let mut doc = SceneDoc::default();
+        let first = doc.add_named_child(None, "Cube");
+        let a = doc.duplicate_subtree(first).expect("duplicate subtree");
+        assert_eq!(doc.entities[a].display_name(), "Cube (1)");
+        let b = doc.duplicate_subtree(a).expect("duplicate copy");
+        assert_eq!(doc.entities[b].display_name(), "Cube (2)");
+        let c = doc.duplicate(first).expect("duplicate root");
+        assert_eq!(doc.entities[c].display_name(), "Cube (3)");
     }
 
     #[test]

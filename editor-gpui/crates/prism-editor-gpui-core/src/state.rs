@@ -25,7 +25,6 @@ pub struct Preferences {
     pub confirm_delete: bool,
     pub compact: bool,
     pub max_log_lines: f32,
-    pub default_scene: String,
     pub locale_auto: bool,
 }
 
@@ -36,8 +35,36 @@ impl Default for Preferences {
             confirm_delete: true,
             compact: false,
             max_log_lines: 5000.0,
-            default_scene: "assets/scenes/default.scene.json".into(),
             locale_auto: true,
+        }
+    }
+}
+
+/// Scene 视图与渲染设置（#432）：重启后保持上次的开关与工具。
+///
+/// 引擎的 `RenderSettings` 不归 `core` 管，所以这里只存一段不透明 JSON，
+/// 由编辑器自己负责序列化/反序列化。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SceneSettings {
+    pub show_grid: bool,
+    pub show_skybox: bool,
+    /// `World` / `Local`（ASCII，避免本地化文案进存档）。
+    pub gizmo_space: String,
+    /// `Translate` / `Rotate` / `Scale`。
+    pub gizmo_tool: String,
+    /// 引擎 `RenderSettings` 的 JSON 镜像；`None` = 旧存档，用默认值。
+    pub render: Option<Value>,
+}
+
+impl Default for SceneSettings {
+    fn default() -> Self {
+        Self {
+            show_grid: true,
+            show_skybox: true,
+            gizmo_space: "World".to_string(),
+            gizmo_tool: "Translate".to_string(),
+            render: None,
         }
     }
 }
@@ -57,6 +84,9 @@ pub struct EditorState {
     pub locale: String,
     #[serde(default)]
     pub preferences: Preferences,
+    /// Scene 视图 / 渲染设置（`#[serde(default)]` 保证旧 `state.json` 仍能读）。
+    #[serde(default)]
+    pub scene: SceneSettings,
 }
 
 fn default_locale() -> String {
@@ -83,6 +113,16 @@ impl EditorState {
             theme_overrides,
             locale: workspace.i18n.locale().code().to_string(),
             preferences: preferences.clone(),
+            scene: SceneSettings {
+                show_grid: workspace.show_grid,
+                show_skybox: workspace.show_skybox,
+                gizmo_space: match workspace.gizmo_space {
+                    crate::viewport_math::GizmoSpace::Local => "Local".to_string(),
+                    crate::viewport_math::GizmoSpace::World => "World".to_string(),
+                },
+                gizmo_tool: "Translate".to_string(),
+                render: None,
+            },
         }
     }
 
@@ -141,6 +181,12 @@ impl EditorState {
         }
 
         workspace.i18n.set_locale(Locale::parse(&self.locale));
+        workspace.show_grid = self.scene.show_grid;
+        workspace.show_skybox = self.scene.show_skybox;
+        workspace.gizmo_space = match self.scene.gizmo_space.as_str() {
+            "Local" | "local" => crate::viewport_math::GizmoSpace::Local,
+            _ => crate::viewport_math::GizmoSpace::World,
+        };
         *preferences = self.preferences.clone();
         preferences.max_log_lines = preferences.max_log_lines.clamp(500.0, 20_000.0);
     }
@@ -165,6 +211,15 @@ impl EditorState {
         });
         if self.locale.is_empty() {
             self.locale = default_locale();
+        }
+        if !matches!(self.scene.gizmo_space.as_str(), "World" | "Local") {
+            self.scene.gizmo_space = "World".to_string();
+        }
+        if !matches!(
+            self.scene.gizmo_tool.as_str(),
+            "Translate" | "Rotate" | "Scale"
+        ) {
+            self.scene.gizmo_tool = "Translate".to_string();
         }
         self.preferences.max_log_lines = self.preferences.max_log_lines.clamp(500.0, 20_000.0);
     }
@@ -220,6 +275,37 @@ mod tests {
         assert!(target_prefs.compact);
         assert_eq!(target_prefs.max_log_lines, 1234.0);
         prefs.compact = true;
+    }
+
+    #[test]
+    fn scene_settings_survive_roundtrip_and_old_state_uses_defaults() {
+        let mut source = workspace();
+        source.show_grid = false;
+        source.show_skybox = false;
+        source.gizmo_space = crate::viewport_math::GizmoSpace::Local;
+        let mut state = EditorState::capture(&source, &Preferences::default());
+        state.scene.gizmo_tool = "Scale".to_string();
+        state.scene.render = Some(json!({ "tonemapMode": 1, "pathTrace": true }));
+
+        let restored = EditorState::from_json_str(&state.to_json_string());
+        assert!(!restored.scene.show_grid);
+        assert!(!restored.scene.show_skybox);
+        assert_eq!(restored.scene.gizmo_space, "Local");
+        assert_eq!(restored.scene.gizmo_tool, "Scale");
+        assert!(restored.scene.render.is_some());
+
+        let mut target = workspace();
+        let mut prefs = Preferences::default();
+        restored.apply(&mut target, &mut prefs);
+        assert!(!target.show_grid);
+        assert!(!target.show_skybox);
+        assert_eq!(target.gizmo_space, crate::viewport_math::GizmoSpace::Local);
+
+        // 旧存档没有 `scene` 段：走默认值，不能读失败。
+        let old = json!({ "version": 1, "dock": {}, "themePreset": "unity" });
+        let old_state = EditorState::from_json(&old);
+        assert!(old_state.scene.show_grid);
+        assert_eq!(old_state.scene.gizmo_tool, "Translate");
     }
 
     #[test]

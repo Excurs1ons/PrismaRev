@@ -88,6 +88,9 @@ pub struct UndoStack {
     redo: Vec<Entry>,
     limit: usize,
     coalesce_ms: u64,
+    /// 交互进行中（拖动 gizmo / 拖拽输入框）：忽略合并时间窗口，
+    /// 整段交互始终压成一步。
+    sticky: bool,
 }
 
 impl UndoStack {
@@ -97,7 +100,26 @@ impl UndoStack {
             redo: Vec::new(),
             limit: DEFAULT_LIMIT,
             coalesce_ms: DEFAULT_COALESCE_MS,
+            sticky: false,
         }
+    }
+
+    /// 开始一次交互：此后的改动不再受 `coalesce_ms` 时间窗口限制。
+    pub fn begin_interaction(&mut self) {
+        self.sticky = true;
+    }
+
+    /// 结束一次交互：清掉最后一步的合并标记，让下一次修改必然开新步。
+    pub fn commit(&mut self) {
+        self.sticky = false;
+        if let Some(last) = self.undo.last_mut() {
+            last.coalesce = None;
+        }
+    }
+
+    /// 当前是否处于交互中（供测试 / 调试）。
+    pub fn interaction_active(&self) -> bool {
+        self.sticky
     }
 
     pub fn set_limit(&mut self, limit: usize) {
@@ -133,6 +155,32 @@ impl UndoStack {
             .collect()
     }
 
+    /// 完整历史（最早 → 最新），已撤销的步骤附在末尾并标记 `undone`。
+    ///
+    /// 和 `history()` 不同，这里包含 redo 栈：Unity 的撤销历史窗口会把撤销过的
+    /// 步骤继续列出来，点回去就是 redo，而不是让它们凭空消失。
+    pub fn history_entries(&self) -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = self
+            .undo
+            .iter()
+            .map(|entry| (entry.label.clone(), false))
+            .collect();
+        // redo 栈的最后一个元素是下一次 redo 要执行的步骤，所以整体反转后
+        // 才是「按时间顺序」接在 undo 之后的步骤。
+        out.extend(
+            self.redo
+                .iter()
+                .rev()
+                .map(|entry| (entry.label.clone(), true)),
+        );
+        out
+    }
+
+    /// 当前状态在 `history_entries()` 中的位置（= 已执行步骤数）。
+    pub fn history_cursor(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -157,7 +205,7 @@ impl UndoStack {
         let coalesce = format!("{entity_id}/{component}/{path}");
         if let Some(last) = self.undo.last_mut() {
             if last.coalesce.as_deref() == Some(coalesce.as_str())
-                && now_ms.saturating_sub(last.at_ms) <= self.coalesce_ms
+                && (self.sticky || now_ms.saturating_sub(last.at_ms) <= self.coalesce_ms)
             {
                 if let Command::SetField {
                     after: last_after, ..
@@ -205,7 +253,7 @@ impl UndoStack {
         let coalesce = format!("transform/{entity_id}");
         if let Some(last) = self.undo.last_mut() {
             if last.coalesce.as_deref() == Some(coalesce.as_str())
-                && now_ms.saturating_sub(last.at_ms) <= self.coalesce_ms
+                && (self.sticky || now_ms.saturating_sub(last.at_ms) <= self.coalesce_ms)
             {
                 if let Command::Transform {
                     after: last_after, ..
@@ -252,7 +300,7 @@ impl UndoStack {
         }
         if let Some(last) = self.undo.last_mut() {
             if last.coalesce.as_deref() == Some(coalesce.as_str())
-                && now_ms.saturating_sub(last.at_ms) <= self.coalesce_ms
+                && (self.sticky || now_ms.saturating_sub(last.at_ms) <= self.coalesce_ms)
             {
                 if let Command::TransformBatch {
                     changes: last_changes,
@@ -573,6 +621,37 @@ mod tests {
         assert_eq!(doc.entities[0].transform.position[0], 0.0);
         stack.redo(&mut doc);
         assert_eq!(doc.entities[0].transform.position[0], 7.0);
+    }
+
+    #[test]
+    fn interaction_boundary_holds_and_closes_undo_steps() {
+        let (mut doc, id) = doc_with_camera();
+        let before = doc.entities[0].transform;
+        let mut stack = UndoStack::new();
+
+        // 交互中：超过 800ms 的停顿仍然并成一步。
+        stack.begin_interaction();
+        let mut step = before;
+        step.position[0] = 1.0;
+        stack.push_transform(&mut doc, id, before, step, 0);
+        let mut step2 = step;
+        step2.position[0] = 2.0;
+        stack.push_transform(&mut doc, id, step, step2, 5_000);
+        assert_eq!(stack.history().len(), 1, "一次拖动 = 一步");
+        assert!(stack.interaction_active());
+
+        // 松手后立刻再拖：必须开新步，即使间隔远小于 800ms。
+        stack.commit();
+        assert!(!stack.interaction_active());
+        let mut step3 = step2;
+        step3.position[0] = 3.0;
+        stack.push_transform(&mut doc, id, step2, step3, 5_010);
+        assert_eq!(stack.history().len(), 2, "两次拖动 = 两步");
+
+        stack.undo(&mut doc);
+        assert_eq!(doc.entities[0].transform.position[0], 2.0);
+        stack.undo(&mut doc);
+        assert_eq!(doc.entities[0].transform.position[0], 0.0);
     }
 
     #[test]
