@@ -177,6 +177,40 @@ jobs:
         run: cargo check -p prism-reflect --no-default-features
 
   # ---------------------------------------------------------------------------
+  # 3c. 发布档体积：nightly `-Z build-std` + immediate-abort（见 scripts/build-dist.sh）。
+  #     只在 master / tag 上跑：nightly 是不稳定功能，不该阻塞每个 PR。
+  # ---------------------------------------------------------------------------
+  dist-size:
+    name: dist build (nightly build-std)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly + rust-src
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add rust-src --toolchain nightly
+
+      - name: Setup slang + compile shaders
+        uses: ./.github/actions/setup-slang
+
+      - name: Build release player (build-std)
+        run: bash scripts/build-dist.sh projects/prisma
+
+      - name: Record size
+        run: |
+          bin="projects/prisma/target/$(rustc -vV | sed -n 's/^host: //p')/dist/prisma"
+          printf 'dist player: %s bytes\n' "$(stat -c%s "$bin")"
+
+      - name: Upload player
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-dist-${{ github.sha }}
+          path: projects/prisma/target/*/dist/prisma
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
   # 2. Desktop build + test. The core correctness gate we can fully run in CI.
   # ---------------------------------------------------------------------------
   desktop:

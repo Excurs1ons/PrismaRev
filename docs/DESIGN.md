@@ -1241,3 +1241,20 @@ shadow_map 4.6 KB、gtao 7.0 KB、skybox 1.9 KB，合计不到 15 KB；`ibl` 65 
 
 - Rust 基线 ~678 KB（core/std/alloc/hashbrown）——要 nightly `build-std`，会抬高贡献门槛；
 - `toml` + `serde_json` ~85 KB——要动 `settings.toml` / 场景清单格式，向后兼容有成本。
+
+#### 发布档：nightly `-Z build-std`（`scripts/build-dist.sh`）
+
+发布包里再拿回 9~10%：`-Z build-std=std,panic_abort` 让 std 和工程一起走 fat LTO，
+`-Cpanic=immediate-abort` 删掉 panic 格式化（`core::fmt`）那一大片。
+
+| 配置 | stable `dist` | build-std + immediate-abort | 变化 |
+|------|--------------|------------------------------|------|
+| 3D 全量 | 4,465,304 | 4,006,440 | −459 KB（−10.3%） |
+| 2D 极简 + 仅 X11 | 2,891,032 | 2,628,768 | −262 KB（−9.1%） |
+
+关键设计：**参数只走命令行，不写进任何 `Cargo.toml`**。
+`panic = "immediate-abort"` 写进 profile 会让 stable cargo 直接拒绝解析整个清单，
+而 `RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort"` 只影响这一次构建——
+所以开发仍是 stable（`cargo run` 一行不变），只有 `scripts/build-dist.sh` 需要 nightly + `rust-src`。
+
+体积账本（`§12.4`）里的 dist 数字默认指 stable 档；发布包按本节再乘 ~0.9。
