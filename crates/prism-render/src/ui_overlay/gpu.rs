@@ -3,6 +3,9 @@
 //! `ui` feature 打开时才编译：关闭后 `ui_overlay` 模块只保留输入数据结构
 //! （[`crate::ui_overlay::UiOverlayInput`] 等），引擎照常填充、
 //! 渲染侧直接忽略，**fontdue / ttf-parser 不再进二进制**。
+//!
+//! 字形位图由 `text` 里的光栅后端提供（`ui-fontdue` / `ui-directwrite`），
+//! 这里只负责图集打包、四边形展开与 Vulkan 绘制——与后端无关。
 #[repr(C)]
 struct UiVertex {
     pos: [f32; 2],
@@ -16,8 +19,8 @@ use std::mem::size_of;
 
 use anyhow::{Context as _, Result};
 use ash::vk;
-use fontdue::Font;
 
+use super::text::{self, baseline_offset, TextRasterizer};
 use super::{UiOverlayInput, UiTextAlign, UiTextInput};
 use crate::buffer::{create_buffer, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
@@ -44,76 +47,20 @@ struct CachedGlyph {
     ymin: i32,
 }
 
-/// 字体文件候选（按序尝试；ttc 用 collection_index 指定第一个字体）。
-///
-/// 优先挑带 CJK 的字体——intro 标题是中文。全部失败则文本命令被跳过
-/// （quad 背景仍正常绘制），并 log::warn。
-const FONT_CANDIDATES: &[(&str, u32)] = &[
-    // Windows
-    ("C:/Windows/Fonts/msyh.ttc", 0),   // 微软雅黑（含中文）
-    ("C:/Windows/Fonts/simhei.ttf", 0), // 黑体（含中文）
-    ("C:/Windows/Fonts/arial.ttf", 0),
-    // Android
-    ("/system/fonts/NotoSansCJK-Regular.ttc", 0),
-    ("/system/fonts/NotoSansCJKsc-Regular.otf", 0),
-    ("/system/fonts/DroidSansFallback.ttf", 0),
-    ("/system/fonts/Roboto-Regular.ttf", 0),
-    // Linux
-    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
-    (
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        0,
-    ),
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
-    // macOS
-    ("/System/Library/Fonts/PingFang.ttc", 0),
-    ("/System/Library/Fonts/Helvetica.ttc", 0),
-];
-
-/// Return the first candidate for which `load` produces a value.
-///
-/// Missing/unreadable candidates must not abort the search: only the first
-/// *available* font is used, and every other candidate is a fallback.
-fn first_available<T>(
-    candidates: &[(&str, u32)],
-    mut load: impl FnMut(&str, u32) -> Option<T>,
-) -> Option<(String, T)> {
-    for &(path, collection_index) in candidates {
-        if let Some(value) = load(path, collection_index) {
-            return Some((path.to_string(), value));
-        }
-    }
-    None
-}
-
-/// 加载第一个可用的系统字体（fontdue 只接受单字体；ttc 走 collection_index）。
-fn load_system_font() -> Option<Font> {
-    let (path, font) = first_available(FONT_CANDIDATES, |path, collection_index| {
-        let data = std::fs::read(path).ok()?;
-        Font::from_bytes(
-            data,
-            fontdue::FontSettings {
-                collection_index,
-                ..Default::default()
-            },
-        )
-        .ok()
-    })?;
-    log::info!("ui overlay: loaded font {path}");
-    Some(font)
-}
-
-/// fontdue 光栅化 + 行打包的 R8 字形图集（host-visible，LINEAR tiling）。
+/// 字形光栅 + 行打包的 R8 字形图集（host-visible，LINEAR tiling）。
 ///
 /// 图集像素 (0,0) 保留为白色——plain quad 的 uv=(0,0) 采样到 alpha 1。
 /// 布局保持 GENERAL：host 直接写入新字形；record 在 dirty 帧插入
 /// HOST_WRITE → FRAGMENT_SHADER 屏障。
+///
+/// `rasterizer` 是**编译期选定**的文本后端（见 [`super::text`]）；
+/// `None` = 这个构建没有文本后端或系统里找不到字体，文字命令被跳过。
 struct GlyphAtlas {
     image: vk::Image,
     memory: vk::DeviceMemory,
     view: vk::ImageView,
     sampler: vk::Sampler,
-    font: Option<Font>,
+    rasterizer: Option<Box<dyn TextRasterizer>>,
     /// (char, font_size 量化到 0.5px) → 字形
     glyphs: HashMap<(char, u32), CachedGlyph>,
     /// 行打包游标
@@ -180,12 +127,24 @@ impl GlyphAtlas {
             device.unmap_memory(memory);
         }
 
+        let rasterizer = text::create();
+        if let Some(backend) = rasterizer.as_deref() {
+            if let Some(m) = backend.line_metrics(16.0) {
+                log::debug!(
+                    "ui overlay: 文本度量 @16px —— ascent {:.1} / descent {:.1} / line height {:.1}",
+                    m.ascent,
+                    m.descent,
+                    m.line_height
+                );
+            }
+        }
+
         Ok(Self {
             image,
             memory,
             view,
             sampler,
-            font: load_system_font(),
+            rasterizer,
             glyphs: HashMap::new(),
             x: 1,
             y: 0,
@@ -193,6 +152,15 @@ impl GlyphAtlas {
             dirty: false,
             device,
         })
+    }
+
+    /// 单行文本的基线相对矩形顶边的偏移（来自后端的行度量）。
+    fn baseline_offset(&self, font_size: f32) -> f32 {
+        let metrics = self
+            .rasterizer
+            .as_deref()
+            .and_then(|backend| backend.line_metrics(font_size));
+        baseline_offset(metrics, font_size)
     }
 
     fn create_image(context: &VulkanContext) -> Result<(vk::Image, vk::DeviceMemory)> {
@@ -264,10 +232,9 @@ impl GlyphAtlas {
     fn glyph(&mut self, ch: char, font_size: f32) -> Option<&CachedGlyph> {
         let key = (ch, (font_size * 2.0).round() as u32);
         if !self.glyphs.contains_key(&key) {
-            let font = self.font.as_ref()?;
-            let (metrics, bitmap) = font.rasterize(ch, font_size);
-            let rect = if metrics.width > 0 && metrics.height > 0 {
-                self.pack(&bitmap, metrics.width, metrics.height)
+            let glyph = self.rasterizer.as_mut()?.rasterize(ch, font_size)?;
+            let rect = if glyph.width > 0 && glyph.height > 0 {
+                self.pack(&glyph.pixels, glyph.width, glyph.height)
             } else {
                 None
             };
@@ -275,9 +242,9 @@ impl GlyphAtlas {
                 key,
                 CachedGlyph {
                     rect,
-                    advance: metrics.advance_width,
-                    xmin: metrics.xmin,
-                    ymin: metrics.ymin,
+                    advance: glyph.advance,
+                    xmin: glyph.xmin,
+                    ymin: glyph.ymin,
                 },
             );
         }
@@ -913,7 +880,7 @@ impl UiOverlay {
         if t.font_size <= 0.0 || rect_w <= 0.0 || rect_h <= 0.0 {
             return;
         }
-        if self.atlas.font.is_none() {
+        if self.atlas.rasterizer.is_none() {
             return;
         }
 
@@ -935,8 +902,8 @@ impl UiOverlay {
             UiTextAlign::Right => left + rect_w - total,
         };
 
-        // 3. 逐字形发射四边形。baseline 近似在矩形高度的 80% 处。
-        let baseline = top + t.font_size * 0.8;
+        // 3. 逐字形发射四边形。基线来自后端行度量（ascent），拿不到时退回 0.8×字号。
+        let baseline = top + self.atlas.baseline_offset(t.font_size);
         let [r, g, b, a] = t.color;
         let mut cursor_x = start_x;
         for ch in t.content.chars() {
@@ -1086,25 +1053,4 @@ fn find_memory_type(
         }
     }
     panic!("no suitable memory type found");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn font_lookup_skips_missing_candidates() {
-        let candidates = [("missing", 0), ("broken", 0), ("ok", 2)];
-        let found = first_available(&candidates, |path, index| match path {
-            "ok" => Some(index),
-            _ => None,
-        });
-        assert_eq!(found, Some(("ok".to_string(), 2)));
-    }
-
-    #[test]
-    fn font_lookup_returns_none_when_all_candidates_fail() {
-        let candidates = [("missing", 0), ("broken", 0)];
-        assert!(first_available(&candidates, |_, _| None::<u32>).is_none());
-    }
 }

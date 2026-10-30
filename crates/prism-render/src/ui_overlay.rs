@@ -43,4 +43,28 @@ pub struct UiOverlayInput {
 #[cfg(feature = "ui")]
 mod gpu;
 #[cfg(feature = "ui")]
+pub(crate) mod text;
+#[cfg(feature = "ui")]
 pub use gpu::UiOverlay;
+
+// ---------------------------------------------------------------------------
+// 文本后端 feature 组合校验
+// ---------------------------------------------------------------------------
+//
+// 两个后端互斥：同时打开会把 fontdue + ttf-parser（~90 KB）白白留在二进制里，
+// 而用户以为自己已经切到系统文本渲染了。宁可编译失败也不要静默多占体积。
+
+// `ui-fontdue` 与 `ui-directwrite` 只能选一个。
+#[cfg(all(feature = "ui-fontdue", feature = "ui-directwrite"))]
+compile_error!(
+    "features `ui-fontdue` 与 `ui-directwrite` 互斥：只选一个文本光栅后端。\n\
+     Windows 发布包要省体积时用 `default-features = false, features = [\"ui\", \
+     \"ui-directwrite\"]`；其它平台用 `\"ui-fontdue\"`。"
+);
+
+// DirectWrite 是 Windows 专属后端，非 Windows 目标没有 `windows` 绑定可用。
+#[cfg(all(feature = "ui-directwrite", not(windows)))]
+compile_error!(
+    "feature `ui-directwrite` 只在 Windows 目标可用（它依赖 `windows` 的 DirectWrite/GDI 绑定）。\n\
+     非 Windows 目标请用 `ui-fontdue`，或不选任何文本后端（只画 quad、不画文字）。"
+);

@@ -22,6 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 # (标签, cargo 参数)。每条都必须是「项目模板会真的这样构建」的组合。
 MATRIX: list[tuple[str, list[str]]] = [
     ("prism-render 全关", ["check", "-p", "prism-render", "--no-default-features"]),
+    # UI 叠加但**不要**文字：只画四边形，不链接任何文本光栅后端。
+    (
+        "prism-render ui（无文本后端）",
+        ["check", "-p", "prism-render", "--no-default-features", "--features", "ui"],
+    ),
+    # 文本后端必须各自单独成立（互斥，不能一起开）。
+    (
+        "prism-render ui + fontdue",
+        ["check", "-p", "prism-render", "--no-default-features", "--features", "ui,ui-fontdue"],
+    ),
     # Linux 上 winit 必须至少有一个窗口后端，所以「全关」不是合法组合；
     # 最小可用组合是 x11-only（或 wayland-only）。
     ("prism-app 最小 (x11)", ["check", "-p", "prism-app", "--no-default-features", "--features", "x11"]),
