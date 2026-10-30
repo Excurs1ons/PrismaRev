@@ -104,7 +104,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     重名自动加 `-2` 后缀；`.prefab.json` 在资产树里递归枚举。反向拖 `.prefab.json`
     到层级实体/空白处会实例化到该父级/根；层级行的眼睛按钮切换 `Active` 组件。
   - 设置类窗口：`projectSettings`（`[app]`/`[window]`/`[build]` + `[render]`，写
-    `assets/settings.toml`）、`preferences`（本机 localStorage：自动保存/删除确认/
+    `assets/settings.ini`）、`preferences`（本机 localStorage：自动保存/删除确认/
     紧凑模式/日志上限/默认运行场景）、`theme`（本机 localStorage 的界面主题）、
     `build`（构建项目）。从菜单打开时默认用较大的浮动面板，用户仍可拖回 dock。
   - **主题**是纯前端配色层：`editor/src/theme.ts` 用 `THEME_TOKEN_GROUPS` 描述
@@ -116,11 +116,11 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     `color-mix(in srgb, var(--token) N%, transparent)` 派生透明色。主题状态存
     `prisma-editor.theme.v1`（`{preset, overrides}`），只影响编辑器，不写项目文件。
   - 「构建项目」= `cargo build --manifest-path projects/prisma/Cargo.toml`
-    (+`--release`) → `build-scenes` → 把 exe/scenes.pak/settings.toml 复制到
+    (+`--release`) → `build-scenes` → 把 exe/scenes.pak/settings.ini 复制到
     `[build].output_dir`（默认 `build/windows`，已 gitignore），可选构建后运行。
     命令是 `editor_build_project`；编辑器仍不链接 cooker/build 流水线。
   - Build Settings 的**场景列表可编辑**（Unity 风格）：勾选 `enabled`、上下移动、
-    移除、从 `assets/scenes` 添加；顺序即 `assets/scenes.toml` 顺序，第一个启用项是
+    移除、从 `assets/scenes` 添加；顺序即 `assets/scenes.json` 顺序，第一个启用项是
     启动场景。Tauri 命令 `editor_scene_manifest` / `editor_write_scene_manifest`；
     engine 的 `SceneManifestEntry.enabled` 与 build-scenes 都会跳过未启用项。
   - 「日志」是独立 dock 面板（`log`），同时区分 **编辑器 / Game** 两个来源，并按
@@ -256,8 +256,8 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   选中实体可「存为预制体」，资产面板可把 `.prefab.json` 实例化到场景，实例的 P 徽章可打开源预制体，
   实例可应用修改回预制体 / 还原 / 同步；
   资产重命名会改磁盘文件并精确改写打开文档的路径引用；
-  项目设置面板会合并写回 `assets/settings.toml`（保留 `[render]` 等其它段）；
-  构建面板会真实读写 `assets/scenes.toml`（勾选 / 排序 / 移除 / 从 `assets/scenes` 添加），
+  项目设置面板会合并写回 `assets/settings.ini`（保留 `[render]` 等其它段）；
+  构建面板会真实读写 `assets/scenes.json`（勾选 / 排序 / 移除 / 从 `assets/scenes` 添加），
   「构建项目 / 构建场景包」会真的 spawn cargo 并把产物拷到输出目录（面板显示步骤进度）；
   删除文档会删文件、打开标签与清单条目（带确认）；
   Scene View 支持点击拾取、双击聚焦、空白拖拽框选与 W/E/R 三种 gizmo（移动 / 旋转 / 缩放，
@@ -601,7 +601,7 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 
 ## Asset root resolution (runtime, do not regress)
 - `assets/` 的定位只允许一处实现：`prisma_engine::asset_paths`（`asset_root` / `asset_dir` /
-  `asset_path` / `search_roots`）。`.pak`、`settings.toml`、`scenes.toml`、环境贴图都走它；
+  `asset_path` / `search_roots`）。`.pak`、`settings.ini`、`scenes.json`、环境贴图都走它；
   **不要**再新增 `std::fs::read_to_string("assets/...")` 这类 cwd 相对路径。
 - 解析顺序：`PRISMREV_ASSET_ROOT`（指向含 `assets/` 的目录）→ cwd 及其各级父目录 →
   可执行文件目录及其各级父目录；只有**确实存在 `assets/` 子目录**的候选才算命中。
@@ -609,6 +609,28 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   launcher 用绝对路径 spawn、快捷方式改了起始位置。Android 不受影响：`run_on_android`
   先解包到 `<filesDir>/assets` 并 `set_current_dir`，第一个候选即命中。
 - 命中路径用 `log::debug!` 输出；完全找不到时每进程只 warn 一次（避免启动日志刷屏）。
+
+## 项目配置文件（settings.ini / scenes.json，do not regress）
+- 项目配置只有两个文件：`assets/settings.ini`（`[app]`/`[build]`/`[render]`/`[window]`）与
+  `assets/scenes.json`（`{"scenes":[{name,path,enabled}]}`，顺序 = 构建 = 启动顺序）。
+- **`toml` 依赖已整条移除**（连带 `toml_parser` / `winnow` / `toml_datetime`）：
+  `cargo tree -p prism-app -e normal | grep -E "toml|winnow"` 必须为空。新增配置项用
+  INI 键，不要为了「结构化配置」把 `toml` 加回来；需要树形数据就用 `serde_json`。
+- INI 方言（完整定义与理由见 [`docs/DESIGN.md`](docs/DESIGN.md) §10.14）：`[section]` +
+  `key = value`；整行 `#` / `;` 注释、**行内不解析注释**（路径里的 `#` 不能截断）；
+  值可加双引号（支持 `\"` `\\` `\n`），不加引号取到行尾并 trim；解析器只产出
+  `String`，类型转换由调用方做（失败 → 默认值 + `warn!`）；未知 section/key 忽略并
+  `debug!`；重复 section 合并、后者覆盖前者。
+- 解析器有三份**同方言**实现，改一处必须同步另外两处：
+  `crates/prism-engine/src/config/ini.rs`（引擎读取）、
+  `crates/prism-editor-api/src/ini.rs`（Web 编辑器，需保留未知段）、
+  `editor-gpui/crates/prism-editor-gpui-core/src/ini.rs`（GPUI/egui 数据层）。
+- 兼容旧项目：读端「新文件优先、旧 `.toml` 只读回退 + `warn!`」，`.pak` 里的旧
+  `scenes.toml` 清单同样可解析；**写端只产出新格式**。一次性迁移 =
+  `prism-build-pipeline build-scenes`（`migrate_legacy_config`，幂等，打印 `migrated …`）。
+- 场景清单读写统一走 `prism_editor_api::scene_manifest`（`read` / `render` / `write` /
+  `existing_manifest`）与引擎的 `SceneManifest::parse`，不要各自 `serde_json::from_str`
+  后再拼字符串。
 
 ## Logging
 - Use the `log` crate (`log::trace!`/`warn!`/...). Verbose pass tracing uses `log::trace!`.
@@ -649,7 +671,7 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   `ANDROID_NDK_HOME` by **overwriting** it with the validated path, since cargo-ndk reads that env
   var itself), derives the cargo-ndk API level from the manifest's `minSdk`, compiles shaders if
   `slangc` exists (else requires prebuilt `.spv`), runs `prism-build-pipeline build-scenes`,
-  copies `scenes.pak`/`.pak.meta.json` (plus `settings.toml` and the environment HDR) into
+  copies `scenes.pak`/`.pak.meta.json` (plus `settings.ini` and the environment HDR) into
   `launcher/src-tauri/gen/android/app/src/main/assets/game/`, runs
   `cargo ndk -P <api> -t arm64-v8a -o <jniLibs> build --release --manifest-path projects/prisma/Cargo.toml`,
   then assembles the APK via `pnpm tauri android build --debug --target aarch64`.

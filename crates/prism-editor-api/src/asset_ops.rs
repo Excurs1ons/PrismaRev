@@ -20,18 +20,8 @@ use crate::scene::{list_docs, read_doc, write_doc, DocKind};
 
 /// 与 [`crate::assets`] 保持一致：构建产物目录不参与编辑。
 const SKIP_DIRS: [&str; 3] = ["cooked", "heightmaps", "target"];
-const SCENE_MANIFEST: &str = "assets/scenes.toml";
-
-#[derive(serde::Deserialize)]
-struct SceneManifest {
-    #[serde(default)]
-    scenes: Vec<SceneManifestEntry>,
-}
-
-#[derive(serde::Deserialize)]
-struct SceneManifestEntry {
-    path: String,
-}
+/// 场景清单的**写端**路径（新格式；旧 `scenes.toml` 只读兼容）。
+const SCENE_MANIFEST: &str = "assets/scenes.json";
 
 /// 一次资产操作的结果。
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -180,7 +170,7 @@ pub fn delete_asset(
         std::fs::remove_file(&path).map_err(|e| format!("删除 {rel} 失败: {e}"))?;
     }
 
-    // 删掉场景文档/产物后，`scenes.toml` 里指向它的条目必须一起消失，
+    // 删掉场景文档/产物后，`scenes.json` 里指向它的条目必须一起消失，
     // 否则 build-scenes 会因为悬空条目失败，运行场景列表也会留下无效项。
     let mut references_updated = 0;
     let target_stem = rel.strip_prefix("assets/").and_then(|asset_rel| {
@@ -349,7 +339,7 @@ fn is_asset_path_field(name: &str) -> bool {
 struct RewritePlan {
     /// `(旧文档绝对路径, 改写后的 JSON)`。
     documents: Vec<(PathBuf, serde_json::Value)>,
-    /// 改写后的 `assets/scenes.toml` 文本。
+    /// 改写后的 `assets/scenes.json` 文本。
     manifest: Option<String>,
     /// 内容变化或自身被移动的文档（相对项目根，新路径）。
     affected: Vec<String>,
@@ -401,7 +391,7 @@ fn apply_plan(project_root: &Path, plan: RewritePlan, renamer: &Renamer) -> Resu
         write_doc(&target, &value)?;
     }
     if let Some(text) = plan.manifest {
-        let path = project_root.join(SCENE_MANIFEST);
+        let path = crate::scene_manifest::manifest_path(project_root);
         std::fs::write(&path, text).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
     }
     Ok(plan.references)
@@ -496,56 +486,42 @@ fn rewrite_manifest(
     renamer: &Renamer,
     references: &mut usize,
 ) -> Result<Option<String>, String> {
-    let path = project_root.join(SCENE_MANIFEST);
-    if !path.is_file() {
+    if crate::scene_manifest::existing_manifest(project_root).is_none() {
         return Ok(None);
     }
-    let text =
-        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
-    let Ok(manifest) = toml::from_str::<SceneManifest>(&text) else {
-        return Ok(None);
-    };
+    let mut scenes = crate::scene_manifest::read(project_root)?;
 
     let base = assets_dir(project_root);
-    let mut next = text.clone();
     let mut changed = 0;
-    for scene in &manifest.scenes {
-        let value = scene.path.as_str();
-        let abs = lexical_abs(&base, value);
+    for scene in &mut scenes {
+        let abs = lexical_abs(&base, &scene.path);
         let Some(mapped) = renamer.map_manifest(&abs) else {
             continue;
         };
         let new_value = slash_path(&relative_to(&base, &mapped));
-        if new_value == value {
+        if new_value == scene.path {
             continue;
         }
-        let needle = format!("\"{value}\"");
-        let replacement = format!("\"{new_value}\"");
-        if next.contains(&needle) {
-            next = next.replace(&needle, &replacement);
-            changed += 1;
-        }
+        scene.path = new_value;
+        changed += 1;
     }
     if changed == 0 {
         Ok(None)
     } else {
         *references += changed;
-        Ok(Some(next))
+        crate::scene_manifest::render(&scenes).map(Some)
     }
 }
 
 fn manifest_references(project_root: &Path, target: &Path, is_dir: bool) -> Result<bool, String> {
-    let path = project_root.join(SCENE_MANIFEST);
-    if !path.is_file() {
+    if crate::scene_manifest::existing_manifest(project_root).is_none() {
         return Ok(false);
     }
-    let text =
-        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
-    let Ok(manifest) = toml::from_str::<SceneManifest>(&text) else {
+    let Ok(scenes) = crate::scene_manifest::read(project_root) else {
         return Ok(false);
     };
     let base = assets_dir(project_root);
-    Ok(manifest.scenes.iter().any(|scene| {
+    Ok(scenes.iter().any(|scene| {
         let abs = lexical_abs(&base, &scene.path);
         abs == *target || (is_dir && abs.starts_with(target))
     }))
@@ -570,70 +546,27 @@ fn stem_matches(target: &str, stem: &str, is_dir: bool) -> bool {
                 .is_some_and(|rest| rest.starts_with('/')))
 }
 
-/// 从 `assets/scenes.toml` 删除指向被删场景的 `[[scenes]]` 条目。
+/// 从 `assets/scenes.json` 删除指向被删场景的条目。
 ///
-/// 按行切块而不是重新序列化：清单是手写文档，注释与排版要保住。
-/// 条目上方的连续注释行算该条目的一部分，会一起删掉。
+/// JSON 没有注释可保，直接解析 → 过滤 → 写回（顺序与 enabled 不变）。
 fn remove_manifest_entries(
     project_root: &Path,
     target_stem: &str,
     is_dir: bool,
 ) -> Result<usize, String> {
-    let path = project_root.join(SCENE_MANIFEST);
-    if !path.is_file() {
+    if crate::scene_manifest::existing_manifest(project_root).is_none() {
         return Ok(0);
     }
-    let text =
-        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
-    let lines: Vec<&str> = text.lines().collect();
-
-    let heads: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.trim_start().starts_with("[[scenes]]"))
-        .map(|(index, _)| {
-            let mut head = index;
-            while head > 0 && lines[head - 1].trim_start().starts_with('#') {
-                head -= 1;
-            }
-            head
-        })
-        .collect();
-    if heads.is_empty() {
-        return Ok(0);
-    }
-
-    let mut kept: Vec<String> = Vec::new();
-    let mut removed = 0;
-    for (index, &head) in heads.iter().enumerate() {
-        let end = heads.get(index + 1).copied().unwrap_or(lines.len());
-        let block = lines[head..end].join("\n");
-        let drops = toml::from_str::<SceneManifest>(&block).is_ok_and(|manifest| {
-            manifest.scenes.iter().any(|scene| {
-                scene_stem(&scene.path).is_some_and(|stem| stem_matches(target_stem, &stem, is_dir))
-            })
-        });
-        if drops {
-            removed += 1;
-        } else {
-            kept.push(block.trim_end().to_string());
-        }
-    }
+    let mut scenes = crate::scene_manifest::read(project_root)?;
+    let before = scenes.len();
+    scenes.retain(|scene| {
+        !scene_stem(&scene.path).is_some_and(|stem| stem_matches(target_stem, &stem, is_dir))
+    });
+    let removed = before - scenes.len();
     if removed == 0 {
         return Ok(0);
     }
-
-    let header = lines[..heads[0]].join("\n").trim_end().to_string();
-    let mut out = String::new();
-    if !header.is_empty() {
-        out.push_str(&header);
-        out.push_str("\n\n");
-    }
-    out.push_str(&kept.join("\n\n"));
-    if !kept.is_empty() {
-        out.push('\n');
-    }
-    std::fs::write(&path, out).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+    crate::scene_manifest::write(project_root, &scenes)?;
     Ok(removed)
 }
 
@@ -768,6 +701,19 @@ mod tests {
                 }
             }]
         })
+    }
+
+    /// 写一份 `assets/scenes.json`（新格式）。
+    fn write_manifest(root: &Path, entries: &[(&str, &str)]) {
+        let scenes: Vec<crate::scene_manifest::SceneListEntry> = entries
+            .iter()
+            .map(|(name, path)| crate::scene_manifest::SceneListEntry {
+                name: (*name).to_string(),
+                path: (*path).to_string(),
+                enabled: true,
+            })
+            .collect();
+        crate::scene_manifest::write(root, &scenes).unwrap();
     }
 
     #[test]
@@ -1004,11 +950,7 @@ mod tests {
     #[test]
     fn rename_scene_updates_manifest_entry() {
         let root = temp_root("manifest");
-        std::fs::write(
-            root.join("assets/scenes.toml"),
-            "[[scenes]]\nname = \"demo\"\npath = \"scenes/demo.rscn\"\n",
-        )
-        .unwrap();
+        write_manifest(&root, &[("demo", "scenes/demo.rscn")]);
         let doc = scene_with(&["assets/a.png", "assets/a.png"]);
         write_doc(&root.join("assets/scenes/demo.scene.json"), &doc).unwrap();
 
@@ -1018,21 +960,22 @@ mod tests {
             "assets/scenes/level.scene.json",
         )
         .unwrap();
-        let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        let manifest = std::fs::read_to_string(root.join("assets/scenes.json")).unwrap();
         assert!(manifest.contains("scenes/level.rscn"), "{manifest}");
+        assert!(!manifest.contains("scenes/demo.rscn"), "{manifest}");
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn delete_scene_drops_its_manifest_entry() {
         let root = temp_root("delete_scene_manifest");
-        std::fs::write(
-            root.join("assets/scenes.toml"),
-            "# Scene list edited by hand.\n\n\
-             # Intro entry.\n[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n\n\
-             # Default entry.\n[[scenes]]\nname = \"default\"\npath = \"scenes/default.rscn\"\n",
-        )
-        .unwrap();
+        write_manifest(
+            &root,
+            &[
+                ("intro", "scenes/intro.rscn"),
+                ("default", "scenes/default.rscn"),
+            ],
+        );
         for name in ["intro", "default"] {
             let doc = scene_with(&["assets/a.png", "assets/a.png"]);
             write_doc(&root.join(format!("assets/scenes/{name}.scene.json")), &doc).unwrap();
@@ -1043,30 +986,25 @@ mod tests {
         assert_eq!(result.references_updated, 1);
         assert!(result
             .affected_documents
-            .contains(&"assets/scenes.toml".to_string()));
+            .contains(&"assets/scenes.json".to_string()));
 
-        let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        let manifest = std::fs::read_to_string(root.join("assets/scenes.json")).unwrap();
         assert!(!manifest.contains("scenes/intro.rscn"), "{manifest}");
-        assert!(!manifest.contains("# Intro entry."), "{manifest}");
         assert!(manifest.contains("scenes/default.rscn"), "{manifest}");
-        assert!(manifest.contains("# Default entry."), "{manifest}");
-        assert!(
-            manifest.contains("# Scene list edited by hand."),
-            "{manifest}"
-        );
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn delete_scene_directory_drops_nested_entries() {
         let root = temp_root("delete_scene_dir_manifest");
-        std::fs::write(
-            root.join("assets/scenes.toml"),
-            "[[scenes]]\nname = \"chapter\"\npath = \"scenes/chapter/intro.rscn\"\n\
-             [[scenes]]\nname = \"chaptered\"\npath = \"scenes/chaptered.rscn\"\n\
-             [[scenes]]\nname = \"other\"\npath = \"scenes/other.rscn\"\n",
-        )
-        .unwrap();
+        write_manifest(
+            &root,
+            &[
+                ("chapter", "scenes/chapter/intro.rscn"),
+                ("chaptered", "scenes/chaptered.rscn"),
+                ("other", "scenes/other.rscn"),
+            ],
+        );
         std::fs::create_dir_all(root.join("assets/scenes/chapter")).unwrap();
         let doc = scene_with(&["assets/a.png", "assets/a.png"]);
         write_doc(&root.join("assets/scenes/chapter/intro.scene.json"), &doc).unwrap();
@@ -1074,7 +1012,7 @@ mod tests {
         let result = delete_asset(&root, "assets/scenes/chapter", true).unwrap();
         assert_eq!(result.references_updated, 1);
 
-        let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        let manifest = std::fs::read_to_string(root.join("assets/scenes.json")).unwrap();
         assert!(
             !manifest.contains("scenes/chapter/intro.rscn"),
             "{manifest}"
@@ -1089,17 +1027,13 @@ mod tests {
         let root = temp_root("delete_unrelated_manifest");
         std::fs::create_dir_all(root.join("assets/textures")).unwrap();
         std::fs::write(root.join("assets/textures/a.png"), b"x").unwrap();
-        std::fs::write(
-            root.join("assets/scenes.toml"),
-            "[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n",
-        )
-        .unwrap();
-        let before = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        write_manifest(&root, &[("intro", "scenes/intro.rscn")]);
+        let before = std::fs::read_to_string(root.join("assets/scenes.json")).unwrap();
 
         let result = delete_asset(&root, "assets/textures/a.png", true).unwrap();
         assert_eq!(result.references_updated, 0);
         assert_eq!(
-            std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap(),
+            std::fs::read_to_string(root.join("assets/scenes.json")).unwrap(),
             before
         );
         std::fs::remove_dir_all(&root).ok();

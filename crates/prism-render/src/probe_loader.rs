@@ -38,7 +38,7 @@ pub struct ProbeVolumeData {
     pub dims: [u32; 3],
     /// SH coefficients: `dims.x * dims.y * dims.z * 9` RGB triplets.
     pub coeffs: Vec<[f32; 3]>,
-    /// Name of the scene this 音量 was baked for (from `scenes.toml`).
+    /// Name of the scene this 音量 was baked for (from the scene manifest).
     /// Used at 运行时 to reject a `.bin` baked for a different scene
     /// (prevents silent wrong-scene 全局光照 空 for v1 files / unknown scenes
     /// -> the 运行时 skips the 绑定 check.

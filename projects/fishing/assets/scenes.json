@@ -1,0 +1,9 @@
+{
+  "scenes": [
+    {
+      "name": "lake",
+      "path": "scenes/lake.rscn",
+      "enabled": true
+    }
+  ]
+}

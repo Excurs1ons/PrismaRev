@@ -5,13 +5,13 @@
 
 ## 运行
 
-Sponza 资源需要先导入并构建到运行目录的资源包（根目录 `assets/scenes.toml` 的 `sponza` 条目）：
+Sponza 资源需要先导入并构建到运行目录的资源包（根目录 `assets/scenes.json` 的 `sponza` 条目）：
 
 ```powershell
 cargo run --manifest-path projects/prisma-sponza/Cargo.toml
 ```
 
-引擎默认加载 manifest 的**第一个**条目，而根 `assets/scenes.toml` 里排第一的是 `intro`（开场动画），
+引擎默认加载 manifest 的**第一个**条目，而根 `assets/scenes.json` 里排第一的是 `intro`（开场动画），
 不是 Sponza。要直接进 Sponza，用启动配置指定场景名（`scenes[].name`）：
 
 ```powershell

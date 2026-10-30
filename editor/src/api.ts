@@ -323,7 +323,7 @@ export function cookScene(path: string): Promise<string> {
 
 // ── 运行 / 预览 ─────────────────────────────────────────────────────────────
 
-/** `assets/scenes.toml` 中的可运行场景名。 */
+/** `assets/scenes.json` 中的可运行场景名。 */
 export function listPlayableScenes(): Promise<PlayableScene[]> {
   return call<PlayableScene[]>("editor_list_playable_scenes");
 }

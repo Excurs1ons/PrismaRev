@@ -1,15 +1,22 @@
-//! `assets/scenes.toml` 场景清单（与 Web 编辑器的 Build Settings 同语义）。
+//! `assets/scenes.json` 场景清单（与 Web 编辑器的 Build Settings 同语义）。
 //!
 //! 顺序 = 构建顺序 = 启动顺序；第一个 `enabled = true` 的条目是启动场景。
 //! `path` 是 `.pak` 里的逻辑路径（`scenes/xxx.rscn`），作者文档用
 //! [`doc_relative_path`] 映射回 `assets/scenes/xxx.scene.json`。
+//!
+//! 形状：`{"scenes": [{"name": "...", "path": "...", "enabled": true}]}`。
+//! 旧项目的 `assets/scenes.toml`（`[[scenes]]` 数组表）仍可读，写端只产出
+//! `scenes.json`；一次性迁移由 `prism-build-pipeline build-scenes` 完成。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-pub const MANIFEST_FILE: &str = "assets/scenes.toml";
+/// 新格式清单路径（相对项目根）。
+pub const MANIFEST_FILE: &str = "assets/scenes.json";
+/// 旧格式清单路径（只读兼容）。
+pub const LEGACY_MANIFEST_FILE: &str = "assets/scenes.toml";
 
 fn default_enabled() -> bool {
     true
@@ -36,7 +43,7 @@ impl SceneEntry {
     }
 }
 
-/// `assets/scenes.toml` 的完整内容。
+/// `assets/scenes.json` 的完整内容。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneManifest {
     #[serde(default)]
@@ -45,13 +52,11 @@ pub struct SceneManifest {
 
 impl SceneManifest {
     pub fn read(root: &Path) -> io::Result<Self> {
-        let path = root.join(MANIFEST_FILE);
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(error) => return Err(error),
+        let Some(path) = Self::existing_path(root) else {
+            return Ok(Self::default());
         };
-        toml::from_str(&text).map_err(|error| {
+        let text = std::fs::read_to_string(&path)?;
+        Self::parse(&text).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("解析 {} 失败: {error}", path.display()),
@@ -59,23 +64,38 @@ impl SceneManifest {
         })
     }
 
-    /// 校验后写回（会丢掉原文件里的注释，与 Web 编辑器一致）。
+    /// 实际存在的清单文件：`scenes.json` 优先，回退旧 `scenes.toml`。
+    pub fn existing_path(root: &Path) -> Option<PathBuf> {
+        [MANIFEST_FILE, LEGACY_MANIFEST_FILE]
+            .into_iter()
+            .map(|rel| root.join(rel))
+            .find(|path| path.is_file())
+    }
+
+    /// 解析：JSON 优先，失败时回退旧 TOML 格式。
+    pub fn parse(text: &str) -> Result<Self, String> {
+        match serde_json::from_str::<Self>(text) {
+            Ok(manifest) => Ok(manifest),
+            Err(json_error) => parse_legacy_toml(text).map_err(|toml_error| {
+                format!("不是 scenes.json（{json_error}），也不是旧 scenes.toml（{toml_error}）")
+            }),
+        }
+    }
+
+    /// 校验后写回（新格式）。
     pub fn write(&self, root: &Path) -> io::Result<()> {
         self.validate()?;
-        let body = toml::to_string_pretty(self).map_err(|error| {
+        let json = serde_json::to_string_pretty(self).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("序列化场景清单失败: {error}"),
             )
         })?;
-        let text = format!(
-            "# Scene list edited by PrismaRev Editor (order = build/startup order).\n{body}"
-        );
         let path = root.join(MANIFEST_FILE);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, text)
+        std::fs::write(path, format!("{json}\n"))
     }
 
     fn validate(&self) -> io::Result<()> {
@@ -191,6 +211,60 @@ impl SceneManifest {
     }
 }
 
+/// 旧格式 `scenes.toml` 的最小读取器（`[[scenes]]` + `name` / `path` / `enabled`）。
+fn parse_legacy_toml(text: &str) -> Result<SceneManifest, String> {
+    let mut scenes: Vec<SceneEntry> = Vec::new();
+    let mut current: Option<SceneEntry> = None;
+    let mut saw_table = false;
+
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == "[[scenes]]" {
+            if let Some(entry) = current.take() {
+                scenes.push(entry);
+            }
+            current = Some(SceneEntry::new("", ""));
+            saw_table = true;
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            if let Some(entry) = current.take() {
+                scenes.push(entry);
+            }
+            continue;
+        }
+        let Some(entry) = current.as_mut() else {
+            continue;
+        };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = crate::ini::parse_value(value);
+        match key.trim() {
+            "name" => entry.name = value,
+            "path" => entry.path = value,
+            "enabled" => {
+                entry.enabled = !matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "false" | "0" | "no" | "off"
+                )
+            }
+            _ => {}
+        }
+    }
+    if let Some(entry) = current.take() {
+        scenes.push(entry);
+    }
+
+    if !saw_table {
+        return Err("没有 [[scenes]] 表".into());
+    }
+    Ok(SceneManifest { scenes })
+}
+
 /// 清单路径（`scenes/x.rscn` / `scenes/x.scene.json`）→ 作者文档路径。
 ///
 /// 其他格式（外部 glTF 等）没有对应的作者文档，返回 `None`。
@@ -236,26 +310,29 @@ mod tests {
             ],
         };
         manifest.write(&dir).unwrap();
+        let text = std::fs::read_to_string(dir.join(MANIFEST_FILE)).unwrap();
+        assert!(text.contains("\"scenes\""), "{text}");
         let read = SceneManifest::read(&dir).unwrap();
         assert_eq!(read, manifest);
         assert_eq!(read.active().unwrap().name, "intro");
     }
 
     #[test]
-    fn legacy_entry_without_enabled_defaults_to_true() {
+    fn legacy_toml_manifest_is_readable() {
         let dir = temp_dir("legacy");
         std::fs::create_dir_all(dir.join("assets")).unwrap();
         std::fs::write(
-            dir.join(MANIFEST_FILE),
+            dir.join(LEGACY_MANIFEST_FILE),
             "[[scenes]]\nname = \"old\"\npath = \"scenes/old.rscn\"\n",
         )
         .unwrap();
         let manifest = SceneManifest::read(&dir).unwrap();
         assert!(manifest.scenes[0].enabled);
+        assert_eq!(manifest.scenes[0].name, "old");
     }
 
     #[test]
-    fn invalid_toml_is_reported() {
+    fn invalid_manifest_is_reported() {
         let dir = temp_dir("invalid");
         std::fs::create_dir_all(dir.join("assets")).unwrap();
         std::fs::write(dir.join(MANIFEST_FILE), "scenes = 3\n").unwrap();

@@ -1,7 +1,7 @@
 //! Android APK asset staging.
 //!
 //! APK assets are only reachable through the NDK `AAssetManager`; the engine
-//! itself is filesystem-based (`assets/scenes.pak`, `assets/settings.toml`,
+//! itself is filesystem-based (`assets/scenes.pak`, `assets/settings.ini`,
 //! relative environment-map paths). The game payload is shipped under the
 //! APK's `game/` asset directory (the launcher frontend owns the asset root).
 //! On startup we copy `game/` to `<internal_data>/assets` and switch the
@@ -121,11 +121,14 @@ fn copy_dir(manager: &AssetManager, rel: &str, dest: &Path) -> Result<CopyStats>
 /// Package and configuration files are small and may change without a length change;
 /// always overwrite them. Everything else is reused when the size matches.
 fn force_refresh(path: &str) -> bool {
-    path.ends_with(".pak")
-        || path.ends_with(".pak.meta.json")
-        || path == "settings.toml"
-        || path.ends_with("/settings.toml")
-        || path.ends_with("\\settings.toml")
+    path.ends_with(".pak") || path.ends_with(".pak.meta.json") || is_settings_file(path)
+}
+
+/// `settings.ini`（新格式）与 `settings.toml`（旧项目回退）都要每次覆盖。
+fn is_settings_file(path: &str) -> bool {
+    ["settings.ini", "settings.toml"].iter().any(|name| {
+        path == *name || path.ends_with(&format!("/{name}")) || path.ends_with(&format!("\\{name}"))
+    })
 }
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -139,10 +142,13 @@ mod tests {
 
     #[test]
     fn force_refresh_matches_packages_and_settings() {
+        assert!(force_refresh("settings.ini"));
+        assert!(force_refresh("game/settings.ini"));
+        assert!(force_refresh("game/nested/settings.ini"));
+        assert!(force_refresh("game\\settings.ini"));
+        // 旧项目的 settings.toml 仍随包分发，同样每次覆盖。
         assert!(force_refresh("settings.toml"));
         assert!(force_refresh("game/settings.toml"));
-        assert!(force_refresh("game/nested/settings.toml"));
-        assert!(force_refresh("game\\settings.toml"));
         assert!(force_refresh("scenes.pak"));
         assert!(force_refresh("game/scenes.pak"));
         assert!(force_refresh("game/scenes.pak.meta.json"));
@@ -150,6 +156,7 @@ mod tests {
         assert!(!force_refresh("game/textures/albedo.rtex"));
         assert!(!force_refresh("game/other_settings.toml"));
         assert!(!force_refresh("game/settings.toml.bak"));
+        assert!(!force_refresh("game/settings.ini.bak"));
         assert!(!force_refresh("game/models/mesh.rmes"));
     }
 }

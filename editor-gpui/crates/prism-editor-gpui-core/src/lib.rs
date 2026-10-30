@@ -20,6 +20,7 @@ pub mod build;
 pub mod doc;
 pub mod dock;
 pub mod i18n;
+pub mod ini;
 pub mod keys;
 pub mod logbuf;
 pub mod manifest;

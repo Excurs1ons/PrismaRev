@@ -186,7 +186,7 @@ async function saveSceneList() {
   try {
     await api.writeSceneManifest(manifest.value);
     manifestDirty.value = false;
-    status.value = "场景列表已写入 assets/scenes.toml";
+    status.value = "场景列表已写入 assets/scenes.json";
     error.value = "";
   } catch (e) {
     error.value = `${e}`;
@@ -337,7 +337,7 @@ onMounted(() => void load());
         </p>
 
         <p class="hint">
-          构建会执行 cargo build、build-scenes，并把 exe / scenes.pak / settings.toml
+          构建会执行 cargo build、build-scenes，并把 exe / scenes.pak / settings.ini
           复制到输出目录。输出目录相对项目根；也可填绝对路径。
         </p>
       </template>

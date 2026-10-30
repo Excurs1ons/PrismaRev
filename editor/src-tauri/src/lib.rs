@@ -955,7 +955,7 @@ fn spawn_preview_log_reader<R: Read + Send + 'static>(
     });
 }
 
-/// `assets/scenes.toml` 中的可运行场景。
+/// `assets/scenes.json` 中的可运行场景。
 #[tauri::command]
 fn editor_list_playable_scenes() -> Result<Vec<PlayableScene>, String> {
     let root = prism_editor_api::find_project_root()?;
@@ -983,7 +983,7 @@ fn editor_scene_package_status() -> Result<ScenePackageStatus, String> {
     Ok(prism_editor_api::scene_package_status(&root))
 }
 
-/// 读取项目级渲染设置（`assets/settings.toml` 的 `[render]`）。
+/// 读取项目级渲染设置（`assets/settings.ini` 的 `[render]`）。
 #[tauri::command]
 fn editor_render_settings() -> Result<RenderSettingsData, String> {
     let root = prism_editor_api::find_project_root()?;
@@ -1249,13 +1249,13 @@ fn build_project_blocking(
     std::fs::copy(&bin, &output_exe).map_err(|error| format!("复制游戏二进制失败: {error}"))?;
     let scene_package = output_dir.join("assets/scenes.pak");
     let scene_package_meta = output_dir.join("assets/scenes.pak.meta.json");
-    let settings = output_dir.join("assets/settings.toml");
+    let settings = output_dir.join("assets/settings.ini");
     copy_if_exists(&root.join("assets/scenes.pak"), &scene_package);
     copy_if_exists(
         &root.join("assets/scenes.pak.meta.json"),
         &scene_package_meta,
     );
-    copy_if_exists(&root.join("assets/settings.toml"), &settings);
+    copy_if_exists(&root.join("assets/settings.ini"), &settings);
     let collect_elapsed = collect_started.elapsed();
 
     log.push_str(&format!("\n==> 输出\n{}\n", output_exe.display()));
@@ -1303,7 +1303,7 @@ fn build_project_blocking(
     })
 }
 
-/// 构建游戏项目并把 exe / scenes.pak / settings.toml 汇总到输出目录。
+/// 构建游戏项目并把 exe / scenes.pak / settings.ini 汇总到输出目录。
 #[tauri::command]
 async fn editor_build_project(options: BuildProjectOptions) -> Result<BuildProjectResult, String> {
     let root = prism_editor_api::find_project_root()?;

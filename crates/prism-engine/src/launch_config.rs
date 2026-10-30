@@ -18,7 +18,7 @@ pub const ENV_KEY: &str = "PRISMREV_LAUNCH_CONFIG";
 /// 启动配置。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LaunchConfig {
-    /// 启动场景名（`assets/scenes.toml` 的 `scenes[].name`）。
+    /// 启动场景名（`assets/scenes.json` 的 `scenes[].name`）。
     ///
     /// `None` = 加载 manifest 中第一个可解析场景（历史默认行为）。
     /// 编辑器 / 启动器可据此直接预览指定场景。

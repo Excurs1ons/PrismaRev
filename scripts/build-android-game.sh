@@ -107,9 +107,10 @@ echo "==> build-scenes"
 cargo run -q -p prism-build-pipeline -- build-scenes
 mkdir -p "$ASSET_DIR"
 cp -f "$ROOT/assets/scenes.pak" "$ROOT/assets/scenes.pak.meta.json" "$ASSET_DIR/"
-if [ -f "$ROOT/assets/settings.toml" ]; then
-    cp -f "$ROOT/assets/settings.toml" "$ASSET_DIR/"
-fi
+# 新格式 `settings.ini`；旧项目还只有 `settings.toml` 时照样带上（引擎会回退读）。
+for name in settings.ini settings.toml; do
+    [ -f "$ROOT/assets/$name" ] && cp -f "$ROOT/assets/$name" "$ASSET_DIR/"
+done
 if [ -f "$ROOT/assets/valley_of_desolation_1k.hdr" ]; then
     cp -f "$ROOT/assets/valley_of_desolation_1k.hdr" "$ASSET_DIR/"
 fi

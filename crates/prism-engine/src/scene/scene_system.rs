@@ -3,8 +3,8 @@
 //! # 职责
 //!
 //! [`SceneManager`] 是引擎的场景子系统：它拥有「当前场景名」，并统一负责
-//! 从 `assets/scenes.toml` manifest 加载场景到 ECS 世界。场景**内容**只按
-//! [`prism_asset::core::AssetId`] 从资源包（`.pak`）加载：`scenes.toml` 的
+//! 从 `assets/scenes.json` manifest 加载场景到 ECS 世界。场景**内容**只按
+//! [`prism_asset::core::AssetId`] 从资源包（`.pak`）加载：`scenes.json` 的
 //! `path` 只是路径清单（`.pak.meta.json`）中的查找键，先解析为 `AssetId`，
 //! 再由 [`ResourceManager`] 读取 RSCN 字节——不做任何磁盘文件回退。
 //! 早期版本由 `Engine` 直接扫描 manifest 加载场景，现收拢到本系统
@@ -199,10 +199,10 @@ impl SceneManager {
         self.environment_bytes = bytes;
     }
 
-    /// 从 `assets/scenes.toml` manifest 加载**第一个**已注册进资源包的场景到世界。
+    /// 从 `assets/scenes.json` manifest 加载**第一个**已注册进资源包的场景到世界。
     ///
     /// 引擎初始化（`Engine::init_scene`）会委托本方法：场景一律按 `AssetId`
-    /// 从 [`ResourceManager`] 加载（`scenes.toml` 的 `path` → 路径清单 → `AssetId`）。
+    /// 从 [`ResourceManager`] 加载（`scenes.json` 的 `path` → 路径清单 → `AssetId`）。
     /// 返回加载成功的场景名并记为当前场景；无 manifest / 无可用场景时返回 `None`。
     pub fn load_first_from_manifest(
         &mut self,
@@ -213,7 +213,7 @@ impl SceneManager {
         self.load_from_manifest(rm, world, registry, None)
     }
 
-    /// 从 `assets/scenes.toml` 按名字加载指定场景。
+    /// 从 `assets/scenes.json` 按名字加载指定场景。
     ///
     /// 清单中找不到该名字或加载失败时，保持「当前场景」不变并返回 `None`。
     pub fn load_named_from_manifest(
@@ -238,7 +238,7 @@ impl SceneManager {
         text: &str,
         scene_name: Option<&str>,
     ) -> Option<String> {
-        let manifest: SceneManifest = match toml::from_str(text) {
+        let manifest: SceneManifest = match SceneManifest::parse(text) {
             Ok(m) => m,
             Err(e) => {
                 log::warn!("scene manifest parse error: {e}");
@@ -354,7 +354,7 @@ impl SceneManager {
                 let cwd = std::env::current_dir()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|_| "<unknown>".into());
-                log::warn!("no assets/scenes.toml found (cwd={cwd}); no scene will be loaded");
+                log::warn!("no assets/scenes.json found (cwd={cwd}); no scene will be loaded");
                 return None;
             }
         };
@@ -366,7 +366,7 @@ impl SceneManager {
             }
         };
         log::info!("scene manifest: {:?} ({} bytes)", manifest_path, text.len());
-        let manifest: SceneManifest = match toml::from_str(&text) {
+        let manifest: SceneManifest = match SceneManifest::parse(&text) {
             Ok(m) => m,
             Err(e) => {
                 log::warn!("scene manifest parse error: {e}");
@@ -397,7 +397,7 @@ impl SceneManager {
                     continue;
                 }
             }
-            // 场景内容一律按 AssetId 从资源包加载：scenes.toml 的 `path` 只是
+            // 场景内容一律按 AssetId 从资源包加载：scenes.json 的 `path` 只是
             // 路径清单（.pak.meta.json）中的查找键，先解析为 AssetId，再由
             // ResourceManager 读取 RSCN 字节——不做磁盘文件回退。
             let Some(id) = rm.id_by_path(&entry.path) else {
@@ -457,7 +457,7 @@ impl SceneManager {
     }
 }
 
-/// 加载 environment 映射表字节 from the **第一个** scene in `scenes.toml`.
+/// 加载 environment 映射表字节 from the **第一个** scene in `scenes.json`.
 ///
 /// Legacy 手动入口——已被 [`SceneManager::current_scene_env_bytes`] 取代
 /// （后者只解析**当前**场景，避免 UI 开屏也加载 3D 环境贴图）。
@@ -502,7 +502,7 @@ fn default_enabled() -> bool {
     true
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SceneManifestEntry {
     pub name: String,
     pub path: String,
@@ -511,29 +511,117 @@ pub struct SceneManifestEntry {
     pub enabled: bool,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SceneManifest {
     pub scenes: Vec<SceneManifestEntry>,
 }
 
-/// 不依赖当前工作目录地定位 `scenes.toml`：
+impl SceneManifest {
+    /// 解析清单文本：优先 `scenes.json`（`{"scenes":[{name,path,enabled}]}`），
+    /// 失败时回退到旧项目的 `scenes.toml`（`[[scenes]]` 数组表）并提示迁移。
+    ///
+    /// 回退只在 JSON 解析失败时发生，所以新格式解析错误不会被旧解析器
+    /// 「猜」成一份空清单——两种格式都失败才返回错误。
+    pub fn parse(text: &str) -> Result<Self, String> {
+        match serde_json::from_str::<Self>(text) {
+            Ok(manifest) => Ok(manifest),
+            Err(json_error) => match parse_legacy_toml(text) {
+                Ok(manifest) => {
+                    log::warn!(
+                        "scene manifest is in the legacy TOML format; run \
+                         `prism-build-pipeline build-scenes` to migrate it to scenes.json"
+                    );
+                    Ok(manifest)
+                }
+                Err(toml_error) => Err(format!(
+                    "not scenes.json ({json_error}) and not legacy scenes.toml ({toml_error})"
+                )),
+            },
+        }
+    }
+}
+
+/// 旧格式 `scenes.toml` 的最小读取器。
+///
+/// 只认清单用到的 TOML 子集：`[[scenes]]` 数组表 + `name` / `path` / `enabled`
+/// 三个键 + 整行注释。它不是通用 TOML 解析器——存在的唯一理由是让旧项目
+/// 在原文件上继续可加载，直到 `build-scenes` 把它们迁移成 `scenes.json`。
+fn parse_legacy_toml(text: &str) -> Result<SceneManifest, String> {
+    let mut scenes: Vec<SceneManifestEntry> = Vec::new();
+    let mut current: Option<SceneManifestEntry> = None;
+    let mut saw_table = false;
+
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == "[[scenes]]" {
+            if let Some(entry) = current.take() {
+                scenes.push(entry);
+            }
+            current = Some(SceneManifestEntry {
+                name: String::new(),
+                path: String::new(),
+                enabled: true,
+            });
+            saw_table = true;
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            // 别的表（理论上不该出现）：结束当前条目，后续键忽略。
+            if let Some(entry) = current.take() {
+                scenes.push(entry);
+            }
+            continue;
+        }
+        let Some(entry) = current.as_mut() else {
+            continue;
+        };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = crate::config::ini::parse_value(value);
+        match key.trim() {
+            "name" => entry.name = value,
+            "path" => entry.path = value,
+            "enabled" => {
+                entry.enabled = match value.trim().to_ascii_lowercase().as_str() {
+                    "false" | "0" | "no" | "off" => false,
+                    _ => true,
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(entry) = current.take() {
+        scenes.push(entry);
+    }
+
+    if !saw_table {
+        return Err("no [[scenes]] table".into());
+    }
+    Ok(SceneManifest { scenes })
+}
+
+/// 不依赖当前工作目录地定位场景清单：
 /// 按 [`crate::asset_paths::search_roots`] 的顺序（`PRISMREV_ASSET_ROOT`、
-/// 当前目录及其父目录、可执行文件目录及其父目录），尝试
-/// `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
+/// 当前目录及其父目录、可执行文件目录及其父目录），先找
+/// `assets/scenes.json`，再回退旧项目的 `assets/scenes.toml`。
 ///
 /// 这样无论从仓库根还是 `projects/prisma/` 子目录启动，
 /// 都能正确找到资源清单——之前从用户项目目录启动时，导致
-/// `assets/scenes.toml` 找不到、回退到空场景而黑屏。
+/// 清单找不到、回退到空场景而黑屏。
 fn find_manifest_path() -> Option<PathBuf> {
-    let rels = [
-        "assets/scenes.toml",
-        "crates/prism-engine/assets/scenes.toml",
-    ];
+    const NAMES: [&str; 2] = ["scenes.json", "scenes.toml"];
+    const DIRS: [&str; 2] = ["assets", "crates/prism-engine/assets"];
     for base in crate::asset_paths::search_roots() {
-        for rel in rels {
-            let candidate = base.join(rel);
-            if candidate.exists() {
-                return Some(candidate);
+        for name in NAMES {
+            for dir in DIRS {
+                let candidate = base.join(dir).join(name);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
             }
         }
     }
@@ -545,7 +633,7 @@ fn find_and_parse_manifest() -> Option<(PathBuf, SceneManifest)> {
     let manifest_path = find_manifest_path()?;
     let manifest_dir = manifest_path.parent()?.to_path_buf();
     let text = std::fs::read_to_string(&manifest_path).ok()?;
-    let manifest: SceneManifest = toml::from_str(&text).ok()?;
+    let manifest = SceneManifest::parse(&text).ok()?;
     log::info!(
         "scene manifest: {:?} ({} entries)",
         manifest_path,

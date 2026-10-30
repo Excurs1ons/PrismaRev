@@ -319,7 +319,7 @@ export const enUS: LocaleMessages = {
     ptMaxBounces: "Max Bounces",
     ptRayMaxDistance: "Ray Max Distance",
     ptMaxIterations: "Max Iterations (0 = inf)",
-    buildDescTooltip: "Build runs cargo build + cooks scene packages, outputting exe, scenes.pak, and settings.toml",
+    buildDescTooltip: "Build runs cargo build + cooks scene packages, outputting exe, scenes.pak, and settings.ini",
     buildTarget: "Target Platform",
     platform: "Platform",
     profile: "Profile",

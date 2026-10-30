@@ -1,8 +1,8 @@
-//! 项目级渲染设置（`assets/settings.toml` 的 `[render]` 段）。
+//! 项目级渲染设置（`assets/settings.ini` 的 `[render]` 段）。
 //!
 //! 引擎启动时由 `prism_app::load_config` 读取并覆盖 `RenderSettings`，
 //! 因此这里的字段就是「编辑器 → 运行时」的持久化契约。读写保留文件里
-//! 其它段（`[app]` / `[window]`），但 TOML 往返不会保留注释。
+//! 其它段（`[app]` / `[window]` / `[build]`），但 INI 往返不会保留注释。
 //!
 //! 这里刻意重复一份字段定义（而不是依赖 `prism-engine`）：编辑器后端
 //! 必须保持 Vulkan-free。字段名/取值与 `prism_engine::config::RenderConfig`
@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+use crate::ini::IniDocument;
 
 /// 前端使用的渲染设置（camelCase JSON）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,104 +73,100 @@ impl RenderSettingsData {
     }
 }
 
-/// TOML 文件里的 snake_case 形状（与引擎字段一致）。
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(default)]
-struct RenderFile {
-    render_mode: String,
-    debug_flags: u32,
-    tonemap_mode: u32,
-    debug_rt: u32,
-    pt_max_bounces: u32,
-    pt_ray_max_distance: f32,
-    pt_max_iterations: u32,
-}
-
-impl Default for RenderFile {
-    fn default() -> Self {
-        Self::from(RenderSettingsData::default())
-    }
-}
-
-impl From<RenderSettingsData> for RenderFile {
-    fn from(data: RenderSettingsData) -> Self {
-        Self {
-            render_mode: data.render_mode,
-            debug_flags: data.debug_flags,
-            tonemap_mode: data.tonemap_mode,
-            debug_rt: data.debug_rt,
-            pt_max_bounces: data.pt_max_bounces,
-            pt_ray_max_distance: data.pt_ray_max_distance,
-            pt_max_iterations: data.pt_max_iterations,
-        }
-    }
-}
-
-impl From<RenderFile> for RenderSettingsData {
-    fn from(file: RenderFile) -> Self {
-        Self {
-            render_mode: file.render_mode,
-            debug_flags: file.debug_flags,
-            tonemap_mode: file.tonemap_mode,
-            debug_rt: file.debug_rt,
-            pt_max_bounces: file.pt_max_bounces,
-            pt_ray_max_distance: file.pt_ray_max_distance,
-            pt_max_iterations: file.pt_max_iterations,
-        }
-    }
-}
-
-/// `assets/settings.toml` 的路径。
+/// 写端目标：`assets/settings.ini`。
 pub fn settings_path(root: &Path) -> PathBuf {
+    root.join("assets").join("settings.ini")
+}
+
+/// 旧的 `assets/settings.toml`——只读回退，写端不再产出。
+pub fn legacy_settings_path(root: &Path) -> PathBuf {
     root.join("assets").join("settings.toml")
+}
+
+/// 读取现有配置文档：`settings.ini` 优先，缺失时回退旧 `settings.toml`
+/// （并提示迁移）。两者都没有时返回空文档（= 全部默认值）。
+fn read_document(root: &Path) -> Result<IniDocument, String> {
+    for (path, legacy) in [
+        (settings_path(root), false),
+        (legacy_settings_path(root), true),
+    ] {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                if legacy {
+                    log::warn!(
+                        "{} is deprecated: run `prism-build-pipeline build-scenes` to migrate \
+                         it to settings.ini",
+                        path.display()
+                    );
+                }
+                return Ok(IniDocument::parse(&text));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
+        }
+    }
+    Ok(IniDocument::default())
+}
+
+fn write_document(root: &Path, document: &IniDocument) -> Result<(), String> {
+    let path = settings_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建 {}: {error}", parent.display()))?;
+    }
+    std::fs::write(&path, document.render())
+        .map_err(|error| format!("无法写入 {}: {error}", path.display()))
 }
 
 /// 读取 `[render]` 段（文件/段缺失时返回默认值）。
 pub fn read_render_settings(root: &Path) -> Result<RenderSettingsData, String> {
-    let path = settings_path(root);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(RenderSettingsData::default())
-        }
-        Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
-    };
-
-    let table: toml::Table =
-        toml::from_str(&text).map_err(|error| format!("解析 {} 失败: {error}", path.display()))?;
-    let Some(render) = table.get("render") else {
-        return Ok(RenderSettingsData::default());
-    };
-    let file: RenderFile = render
-        .clone()
-        .try_into()
-        .map_err(|error| format!("解析 [render] 失败: {error}"))?;
-    Ok(file.into())
+    let document = read_document(root)?;
+    let mut data = RenderSettingsData::default();
+    if let Some(value) = document.get_string("render", "render_mode") {
+        data.render_mode = value;
+    }
+    data.debug_flags = document
+        .get_u32("render", "debug_flags")
+        .unwrap_or(data.debug_flags);
+    data.tonemap_mode = document
+        .get_u32("render", "tonemap_mode")
+        .unwrap_or(data.tonemap_mode);
+    data.debug_rt = document
+        .get_u32("render", "debug_rt")
+        .unwrap_or(data.debug_rt);
+    data.pt_max_bounces = document
+        .get_u32("render", "pt_max_bounces")
+        .unwrap_or(data.pt_max_bounces);
+    data.pt_ray_max_distance = document
+        .get_f32("render", "pt_ray_max_distance")
+        .unwrap_or(data.pt_ray_max_distance);
+    data.pt_max_iterations = document
+        .get_u32("render", "pt_max_iterations")
+        .unwrap_or(data.pt_max_iterations);
+    Ok(data)
 }
 
 /// 写入 `[render]` 段（保留文件中的其它段）。
 pub fn write_render_settings(root: &Path, data: &RenderSettingsData) -> Result<(), String> {
     data.validate()?;
 
-    let path = settings_path(root);
-    let mut table: toml::Table = match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text)
-            .map_err(|error| format!("解析 {} 失败: {error}", path.display()))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
-        Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
-    };
-
-    let file = RenderFile::from(data.clone());
-    let value = toml::Value::try_from(&file).map_err(|error| format!("序列化失败: {error}"))?;
-    table.insert("render".to_string(), value);
-
-    let text = toml::to_string_pretty(&table)
-        .map_err(|error| format!("序列化 settings.toml 失败: {error}"))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("无法创建 {}: {error}", parent.display()))?;
-    }
-    std::fs::write(&path, text).map_err(|error| format!("无法写入 {}: {error}", path.display()))
+    let mut document = read_document(root)?;
+    document.set("render", "render_mode", &data.render_mode);
+    document.set("render", "debug_flags", &data.debug_flags.to_string());
+    document.set("render", "tonemap_mode", &data.tonemap_mode.to_string());
+    document.set("render", "debug_rt", &data.debug_rt.to_string());
+    document.set("render", "pt_max_bounces", &data.pt_max_bounces.to_string());
+    document.set(
+        "render",
+        "pt_ray_max_distance",
+        &format!("{:.1}", data.pt_ray_max_distance),
+    );
+    document.set(
+        "render",
+        "pt_max_iterations",
+        &data.pt_max_iterations.to_string(),
+    );
+    write_document(root, &document)
 }
 
 // ---------------------------------------------------------------------------
@@ -271,86 +269,11 @@ impl ProjectSettingsData {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(default)]
-struct AppFile {
-    company: String,
-    name: String,
-    version: String,
-}
-
-impl Default for AppFile {
-    fn default() -> Self {
-        let data = AppSettingsData::default();
-        Self {
-            company: data.company,
-            name: data.name,
-            version: data.version,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(default)]
-struct WindowFile {
-    title: String,
-    width: u32,
-    height: u32,
-    resizable: bool,
-    fullscreen: bool,
-    vsync: bool,
-}
-
-impl Default for WindowFile {
-    fn default() -> Self {
-        let data = WindowSettingsData::default();
-        Self {
-            title: data.title,
-            width: data.width,
-            height: data.height,
-            resizable: data.resizable,
-            fullscreen: data.fullscreen,
-            vsync: data.vsync,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(default)]
-struct BuildFile {
-    target: String,
-    profile: String,
-    output_dir: String,
-    run_after: bool,
-}
-
-impl Default for BuildFile {
-    fn default() -> Self {
-        let data = BuildSettingsData::default();
-        Self {
-            target: data.target,
-            profile: data.profile,
-            output_dir: data.output_dir,
-            run_after: data.run_after,
-        }
-    }
-}
-
-fn section<T: DeserializeOwned + Default>(table: &toml::Table, key: &str) -> Result<T, String> {
-    match table.get(key) {
-        Some(value) => value
-            .clone()
-            .try_into()
-            .map_err(|error| format!("解析 [{key}] 失败: {error}")),
-        None => Ok(T::default()),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 只写入「真正改动的字段」
 // ---------------------------------------------------------------------------
 //
-// 编辑器里有多个面板同时编辑同一个 `settings.toml`（项目设置面板管
+// 编辑器里有多个面板同时编辑同一个 `settings.ini`（项目设置面板管
 // `[app]`/`[window]`/`[build]`/`[render]`，构建面板也改 `[build]`）。面板都是
 // 打开时读一份快照、保存时整段写回，于是一个面板会把另一个面板**没碰过**的
 // 段（以及同段里没碰过的字段）用旧值覆盖掉。
@@ -439,102 +362,82 @@ pub fn write_render_settings_diff(
 
 /// 读取项目设置（`[app]` / `[window]` / `[build]`）；缺失时使用默认值。
 pub fn read_project_settings(root: &Path) -> Result<ProjectSettingsData, String> {
-    let path = settings_path(root);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(ProjectSettingsData::default())
-        }
-        Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
-    };
-    let table: toml::Table =
-        toml::from_str(&text).map_err(|error| format!("解析 {} 失败: {error}", path.display()))?;
-    let app: AppFile = section(&table, "app")?;
-    let window: WindowFile = section(&table, "window")?;
-    let build: BuildFile = section(&table, "build")?;
-    Ok(ProjectSettingsData {
-        app: AppSettingsData {
-            company: app.company,
-            name: app.name,
-            version: app.version,
-        },
-        window: WindowSettingsData {
-            title: window.title,
-            width: window.width,
-            height: window.height,
-            resizable: window.resizable,
-            fullscreen: window.fullscreen,
-            vsync: window.vsync,
-        },
-        build: BuildSettingsData {
-            target: build.target,
-            profile: build.profile,
-            output_dir: build.output_dir,
-            run_after: build.run_after,
-        },
-    })
+    let document = read_document(root)?;
+    let mut data = ProjectSettingsData::default();
+
+    if let Some(value) = document.get_string("app", "company") {
+        data.app.company = value;
+    }
+    if let Some(value) = document.get_string("app", "name") {
+        data.app.name = value;
+    }
+    if let Some(value) = document.get_string("app", "version") {
+        data.app.version = value;
+    }
+
+    if let Some(value) = document.get_string("window", "title") {
+        data.window.title = value;
+    }
+    data.window.width = document
+        .get_u32("window", "width")
+        .unwrap_or(data.window.width);
+    data.window.height = document
+        .get_u32("window", "height")
+        .unwrap_or(data.window.height);
+    data.window.resizable = document
+        .get_bool("window", "resizable")
+        .unwrap_or(data.window.resizable);
+    data.window.fullscreen = document
+        .get_bool("window", "fullscreen")
+        .unwrap_or(data.window.fullscreen);
+    data.window.vsync = document
+        .get_bool("window", "vsync")
+        .unwrap_or(data.window.vsync);
+
+    if let Some(value) = document.get_string("build", "target") {
+        data.build.target = value;
+    }
+    if let Some(value) = document.get_string("build", "profile") {
+        data.build.profile = value;
+    }
+    if let Some(value) = document.get_string("build", "output_dir") {
+        data.build.output_dir = value;
+    }
+    data.build.run_after = document
+        .get_bool("build", "run_after")
+        .unwrap_or(data.build.run_after);
+
+    Ok(data)
 }
 
 /// 写入项目设置，保留 `[render]` 等其它段。
 pub fn write_project_settings(root: &Path, data: &ProjectSettingsData) -> Result<(), String> {
     data.validate()?;
-    let path = settings_path(root);
-    let mut table: toml::Table = match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text)
-            .map_err(|error| format!("解析 {} 失败: {error}", path.display()))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
-        Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
-    };
+    let mut document = read_document(root)?;
 
-    let app = AppFile {
-        company: data.app.company.clone(),
-        name: data.app.name.clone(),
-        version: data.app.version.clone(),
-    };
-    let window = WindowFile {
-        title: data.window.title.clone(),
-        width: data.window.width,
-        height: data.window.height,
-        resizable: data.window.resizable,
-        fullscreen: data.window.fullscreen,
-        vsync: data.window.vsync,
-    };
-    let build = BuildFile {
-        target: data.build.target.clone(),
-        profile: data.build.profile.clone(),
-        output_dir: data.build.output_dir.clone(),
-        run_after: data.build.run_after,
-    };
+    document.set("app", "company", &data.app.company);
+    document.set("app", "name", &data.app.name);
+    document.set("app", "version", &data.app.version);
 
-    for (key, value) in [
-        (
-            "app",
-            toml::Value::try_from(&app).map_err(|e| e.to_string())?,
-        ),
-        (
-            "window",
-            toml::Value::try_from(&window).map_err(|e| e.to_string())?,
-        ),
-        (
-            "build",
-            toml::Value::try_from(&build).map_err(|e| e.to_string())?,
-        ),
-    ] {
-        table.insert(key.to_string(), value);
-    }
+    document.set("window", "title", &data.window.title);
+    document.set("window", "width", &data.window.width.to_string());
+    document.set("window", "height", &data.window.height.to_string());
+    document.set("window", "resizable", &data.window.resizable.to_string());
+    document.set("window", "fullscreen", &data.window.fullscreen.to_string());
+    document.set("window", "vsync", &data.window.vsync.to_string());
 
-    let text = toml::to_string_pretty(&table)
-        .map_err(|error| format!("序列化 settings.toml 失败: {error}"))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("无法创建 {}: {error}", parent.display()))?;
-    }
-    std::fs::write(&path, text).map_err(|error| format!("无法写入 {}: {error}", path.display()))
+    document.set("build", "target", &data.build.target);
+    document.set("build", "profile", &data.build.profile);
+    document.set("build", "output_dir", &data.build.output_dir);
+    document.set("build", "run_after", &data.build.run_after.to_string());
+
+    write_document(root, &document)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ini::IniDocument;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(name);
@@ -567,9 +470,27 @@ mod tests {
         write_render_settings(&dir, &data).unwrap();
 
         let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
-        let table: toml::Table = toml::from_str(&text).unwrap();
-        assert_eq!(table["app"]["name"].as_str(), Some("Demo"));
+        let document = IniDocument::parse(&text);
+        assert_eq!(document.get("app", "name"), Some("Demo"));
         assert_eq!(read_render_settings(&dir).unwrap().pt_max_bounces, 5);
+    }
+
+    #[test]
+    fn legacy_toml_settings_are_readable() {
+        let dir = temp_dir("prism-editor-api-settings-legacy");
+        std::fs::write(
+            legacy_settings_path(&dir),
+            "[render]\nrender_mode = \"path_trace\"\ntonomap = 0\ntonemap_mode = 1\n",
+        )
+        .unwrap();
+        let data = read_render_settings(&dir).unwrap();
+        assert_eq!(data.render_mode, "path_trace");
+        assert_eq!(data.tonemap_mode, 1);
+
+        // 写端只产出 settings.ini；旧文件不再被改写。
+        write_render_settings(&dir, &data).unwrap();
+        assert!(settings_path(&dir).is_file());
+        assert!(legacy_settings_path(&dir).is_file());
     }
 
     #[test]
@@ -599,11 +520,11 @@ mod tests {
         write_project_settings(&dir, &data).unwrap();
 
         let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
-        let table: toml::Table = toml::from_str(&text).unwrap();
-        assert_eq!(table["app"]["name"].as_str(), Some("DemoGame"));
-        assert_eq!(table["window"]["width"].as_integer(), Some(1280));
-        assert_eq!(table["build"]["profile"].as_str(), Some("debug"));
-        assert_eq!(table["render"]["render_mode"].as_str(), Some("path_trace"));
+        let document = IniDocument::parse(&text);
+        assert_eq!(document.get("app", "name"), Some("DemoGame"));
+        assert_eq!(document.get_u32("window", "width"), Some(1280));
+        assert_eq!(document.get("build", "profile"), Some("debug"));
+        assert_eq!(document.get("render", "render_mode"), Some("path_trace"));
     }
 
     #[test]

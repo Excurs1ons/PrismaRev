@@ -45,7 +45,7 @@ pub enum BuildFileRole {
     Executable,
     /// 场景包（`assets/scenes.pak`）。
     ScenePackage,
-    /// 项目设置（`assets/settings.toml`）。
+    /// 项目设置（`assets/settings.ini`）。
     Settings,
     /// 元数据（`.pak.meta.json` 等）。
     Metadata,
@@ -225,7 +225,7 @@ mod tests {
         let report = BuildReport::new("build/windows", "windows", 10)
             .with_file_size("prisma.exe", BuildFileRole::Executable, 4096)
             .with_file_size("assets/scenes.pak", BuildFileRole::ScenePackage, 1024)
-            .with_file_size("assets/settings.toml", BuildFileRole::Settings, 64);
+            .with_file_size("assets/settings.ini", BuildFileRole::Settings, 64);
         assert_eq!(report.summary.total_size_bytes, 5184);
         assert_eq!(
             report

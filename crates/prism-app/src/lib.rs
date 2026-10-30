@@ -100,25 +100,35 @@ pub use winit::platform::android::activity::AndroidApp;
 pub use android_assets::init_android_assets;
 
 /// 从应用资源目录读取配置；文件系统访问属于应用层，解析逻辑由 engine
-/// 的 `AppConfig::from_toml` 提供。
+/// 的 `AppConfig::from_ini` 提供。
 ///
-/// 路径经 `prism_engine::asset_paths` 解析（cwd / 可执行文件目录 / 父目录 /
-/// `PRISMREV_ASSET_ROOT`），因此从任意目录启动 exe 都能读到 `settings.toml`。
+/// 优先 `assets/settings.ini`；不存在时回退读旧的 `assets/settings.toml`
+/// （并提示迁移）。路径经 `prism_engine::asset_paths` 解析（cwd / 可执行文件
+/// 目录 / 父目录 / `PRISMREV_ASSET_ROOT`），因此从任意目录启动 exe 都能读到配置。
 pub fn load_config() -> AppConfig {
-    let Some(path) = prism_engine::asset_paths::asset_path("settings.toml") else {
-        return AppConfig::default();
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(text) => AppConfig::from_toml(&text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
-        Err(error) => {
-            log::warn!(
-                "settings.toml ({}): {error} - using defaults",
-                path.display()
-            );
-            AppConfig::default()
+    for (name, legacy) in [("settings.ini", false), ("settings.toml", true)] {
+        let Some(path) = prism_engine::asset_paths::asset_path(name) else {
+            return AppConfig::default();
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                if legacy {
+                    log::warn!(
+                        "{} is deprecated: run `prism-build-pipeline build-scenes` to migrate \
+                         it to settings.ini",
+                        path.display()
+                    );
+                }
+                return AppConfig::from_ini(&text);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                log::warn!("{name} ({}): {error} - using defaults", path.display());
+                return AppConfig::default();
+            }
         }
     }
+    AppConfig::default()
 }
 
 /// 创建应用并完成全部引擎初始化（配置加载、场景、运行时 init）。
@@ -139,7 +149,7 @@ pub fn app() -> App {
 /// 用户项目传入一个构造 [`App`] 的闭包，而不是已经构造好的 `App`：
 /// 本函数会先把 APK assets 复制到内部存储、切换 cwd、注入启动配置，
 /// 然后才调用闭包。这样闭包里的 [`app`] 能按与桌面完全相同的
-/// `assets/...` 路径加载 `scenes.pak`、`settings.toml` 和环境贴图。
+/// `assets/...` 路径加载 `scenes.pak`、`settings.ini` 和环境贴图。
 ///
 /// 用户项目的 cdylib 导出 `#[no_mangle] fn android_main(...)`，在此调用
 /// 本函数，JNI 样板（android_logger、crash handler、AssetManager 拷贝、

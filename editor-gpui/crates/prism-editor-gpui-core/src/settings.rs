@@ -1,12 +1,17 @@
-//! 项目设置（`assets/settings.toml` 的 `[app]` / `[window]` / `[build]` 段）。
+//! 项目设置（`assets/settings.ini` 的 `[app]` / `[window]` / `[build]` 段）。
 //!
 //! 写回时**保留文件里其它段**（`[render]` 等），只覆盖这三个段里我们负责的键，
 //! 与 Web 编辑器 `prism-editor-api::settings` 的行为一致。
+//!
+//! 方言见 [`crate::ini`]（`docs/DESIGN.md` §「项目配置文件」）。旧项目的
+//! `assets/settings.toml` 仍可读（只读回退），写端只产出 `settings.ini`。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::ini::IniDocument;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,128 +84,108 @@ pub struct ProjectSettings {
 }
 
 impl ProjectSettings {
+    /// 写端目标：`assets/settings.ini`。
     pub fn path(root: &Path) -> PathBuf {
+        root.join("assets/settings.ini")
+    }
+
+    /// 旧项目的 `assets/settings.toml`（只读回退）。
+    pub fn legacy_path(root: &Path) -> PathBuf {
         root.join("assets/settings.toml")
     }
 
-    /// 读取；文件不存在返回默认值，格式错误返回错误（调用方决定是否回退）。
+    /// 读取；文件不存在返回默认值。畸形行会被跳过（INI 解析不会整体失败）。
     pub fn read(root: &Path) -> io::Result<Self> {
-        let text = match fs::read_to_string(Self::path(root)) {
-            Ok(text) => text,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(error) => return Err(error),
-        };
-        let value: toml::Value = text
-            .parse()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        Ok(Self::from_toml(&value))
+        Ok(Self::from_document(&Self::read_document(root)?))
     }
 
-    pub fn from_toml(value: &toml::Value) -> Self {
+    fn read_document(root: &Path) -> io::Result<IniDocument> {
+        for (path, legacy) in [(Self::path(root), false), (Self::legacy_path(root), true)] {
+            match fs::read_to_string(&path) {
+                Ok(text) => {
+                    if legacy {
+                        log::warn!(
+                            "{} is deprecated: run `prism-build-pipeline build-scenes` to \
+                             migrate it to settings.ini",
+                            path.display()
+                        );
+                    }
+                    return Ok(IniDocument::parse(&text));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(IniDocument::default())
+    }
+
+    pub fn from_document(document: &IniDocument) -> Self {
         let mut settings = Self::default();
-        let Some(root) = value.as_table() else {
-            return settings;
-        };
-        if let Some(app) = root.get("app").and_then(|value| value.as_table()) {
-            settings.app.company = string_or(app, "company", &settings.app.company);
-            settings.app.name = string_or(app, "name", &settings.app.name);
-            settings.app.version = string_or(app, "version", &settings.app.version);
-        }
-        if let Some(window) = root.get("window").and_then(|value| value.as_table()) {
-            settings.window.title = string_or(window, "title", &settings.window.title);
-            settings.window.width = int_or(window, "width", settings.window.width);
-            settings.window.height = int_or(window, "height", settings.window.height);
-            settings.window.resizable = bool_or(window, "resizable", settings.window.resizable);
-            settings.window.fullscreen = bool_or(window, "fullscreen", settings.window.fullscreen);
-            settings.window.vsync = bool_or(window, "vsync", settings.window.vsync);
-        }
-        if let Some(build) = root.get("build").and_then(|value| value.as_table()) {
-            settings.build.target = string_or(build, "target", &settings.build.target);
-            settings.build.profile = string_or(build, "profile", &settings.build.profile);
-            settings.build.output_dir = string_or(build, "output_dir", &settings.build.output_dir);
-            settings.build.run_after = bool_or(build, "run_after", settings.build.run_after);
-        }
+        settings.app.company = string_or(document, "app", "company", &settings.app.company);
+        settings.app.name = string_or(document, "app", "name", &settings.app.name);
+        settings.app.version = string_or(document, "app", "version", &settings.app.version);
+
+        settings.window.title = string_or(document, "window", "title", &settings.window.title);
+        settings.window.width = int_or(document, "window", "width", settings.window.width);
+        settings.window.height = int_or(document, "window", "height", settings.window.height);
+        settings.window.resizable =
+            bool_or(document, "window", "resizable", settings.window.resizable);
+        settings.window.fullscreen =
+            bool_or(document, "window", "fullscreen", settings.window.fullscreen);
+        settings.window.vsync = bool_or(document, "window", "vsync", settings.window.vsync);
+
+        settings.build.target = string_or(document, "build", "target", &settings.build.target);
+        settings.build.profile = string_or(document, "build", "profile", &settings.build.profile);
+        settings.build.output_dir =
+            string_or(document, "build", "output_dir", &settings.build.output_dir);
+        settings.build.run_after =
+            bool_or(document, "build", "run_after", settings.build.run_after);
         settings
     }
 
     /// 合并写回：只覆盖 app/window/build 里我们负责的键，其它段原样保留。
     pub fn write(&self, root: &Path) -> io::Result<()> {
+        let mut document = Self::read_document(root)?;
+
+        document.set("app", "company", &self.app.company);
+        document.set("app", "name", &self.app.name);
+        document.set("app", "version", &self.app.version);
+
+        document.set("window", "title", &self.window.title);
+        document.set("window", "width", &self.window.width.to_string());
+        document.set("window", "height", &self.window.height.to_string());
+        document.set("window", "resizable", &self.window.resizable.to_string());
+        document.set("window", "fullscreen", &self.window.fullscreen.to_string());
+        document.set("window", "vsync", &self.window.vsync.to_string());
+
+        document.set("build", "target", &self.build.target);
+        document.set("build", "profile", &self.build.profile);
+        document.set("build", "output_dir", &self.build.output_dir);
+        document.set("build", "run_after", &self.build.run_after.to_string());
+
         let path = Self::path(root);
-        let mut document: toml::Value = match fs::read_to_string(&path) {
-            Ok(text) => text
-                .parse()
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                toml::Value::Table(Default::default())
-            }
-            Err(error) => return Err(error),
-        };
-        let table = document
-            .as_table_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "settings.toml 不是表"))?;
-
-        let app = existing_table(table, "app");
-        app.insert("company".into(), self.app.company.clone().into());
-        app.insert("name".into(), self.app.name.clone().into());
-        app.insert("version".into(), self.app.version.clone().into());
-
-        let window = existing_table(table, "window");
-        window.insert("title".into(), self.window.title.clone().into());
-        window.insert("width".into(), (self.window.width as i64).into());
-        window.insert("height".into(), (self.window.height as i64).into());
-        window.insert("resizable".into(), self.window.resizable.into());
-        window.insert("fullscreen".into(), self.window.fullscreen.into());
-        window.insert("vsync".into(), self.window.vsync.into());
-
-        let build = existing_table(table, "build");
-        build.insert("target".into(), self.build.target.clone().into());
-        build.insert("profile".into(), self.build.profile.clone().into());
-        build.insert("output_dir".into(), self.build.output_dir.clone().into());
-        build.insert("run_after".into(), self.build.run_after.into());
-
-        let text = toml::to_string_pretty(&document)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, text)
+        fs::write(path, document.render())
     }
 }
 
-fn existing_table<'a>(
-    root: &'a mut toml::map::Map<String, toml::Value>,
-    key: &str,
-) -> &'a mut toml::map::Map<String, toml::Value> {
-    let entry = root
-        .entry(key.to_string())
-        .or_insert_with(|| toml::Value::Table(Default::default()));
-    if !entry.is_table() {
-        *entry = toml::Value::Table(Default::default());
-    }
-    entry.as_table_mut().expect("just ensured table")
+fn string_or(document: &IniDocument, section: &str, key: &str, fallback: &str) -> String {
+    document
+        .get_string(section, key)
+        .unwrap_or_else(|| fallback.to_string())
 }
 
-fn string_or(table: &toml::map::Map<String, toml::Value>, key: &str, fallback: &str) -> String {
-    table
-        .get(key)
-        .and_then(|value| value.as_str())
-        .unwrap_or(fallback)
-        .to_string()
-}
-
-fn int_or(table: &toml::map::Map<String, toml::Value>, key: &str, fallback: u32) -> u32 {
-    table
-        .get(key)
-        .and_then(|value| value.as_integer())
-        .map(|value| value.clamp(1, 16_384) as u32)
+fn int_or(document: &IniDocument, section: &str, key: &str, fallback: u32) -> u32 {
+    document
+        .get_u32(section, key)
+        .map(|value| value.clamp(1, 16_384))
         .unwrap_or(fallback)
 }
 
-fn bool_or(table: &toml::map::Map<String, toml::Value>, key: &str, fallback: bool) -> bool {
-    table
-        .get(key)
-        .and_then(|value| value.as_bool())
-        .unwrap_or(fallback)
+fn bool_or(document: &IniDocument, section: &str, key: &str, fallback: bool) -> bool {
+    document.get_bool(section, key).unwrap_or(fallback)
 }
 
 #[cfg(test)]
@@ -241,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn write_creates_file_and_roundtrips() {
+    fn write_creates_ini_and_roundtrips() {
         let temp = TempRoot::new();
         let mut settings = ProjectSettings::default();
         settings.app.company = "Acme".into();
@@ -296,10 +281,30 @@ title = "Old"
     }
 
     #[test]
-    fn invalid_file_is_reported() {
+    fn legacy_toml_settings_are_readable() {
+        let temp = TempRoot::new();
+        fs::write(
+            ProjectSettings::legacy_path(&temp.root),
+            "[app]\ncompany = \"Legacy\"\n[window]\nwidth = 800\n",
+        )
+        .unwrap();
+
+        let settings = ProjectSettings::read(&temp.root).unwrap();
+        assert_eq!(settings.app.company, "Legacy");
+        assert_eq!(settings.window.width, 800);
+
+        // 写端只产出 settings.ini。
+        settings.write(&temp.root).unwrap();
+        assert!(ProjectSettings::path(&temp.root).is_file());
+        assert!(ProjectSettings::legacy_path(&temp.root).is_file());
+    }
+
+    #[test]
+    fn malformed_lines_fall_back_to_defaults() {
         let temp = TempRoot::new();
         fs::write(ProjectSettings::path(&temp.root), "[app\ncompany =").unwrap();
-        assert!(ProjectSettings::read(&temp.root).is_err());
+        let settings = ProjectSettings::read(&temp.root).unwrap();
+        assert_eq!(settings, ProjectSettings::default());
     }
 
     #[test]

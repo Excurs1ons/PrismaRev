@@ -107,7 +107,7 @@ function resetAll() {
       </div>
 
       <p class="hint">
-        主题只覆盖编辑器自己的颜色变量；场景、预制体与 assets/settings.toml 都不会被写入。
+        主题只覆盖编辑器自己的颜色变量；场景、预制体与 assets/settings.ini 都不会被写入。
       </p>
     </div>
     <footer class="panel-footer">

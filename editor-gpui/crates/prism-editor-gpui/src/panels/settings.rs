@@ -104,18 +104,18 @@ impl EditorView {
                     Ok(()) => this.workspace.log(
                         prism_editor_gpui_core::LogSource::System,
                         prism_editor_gpui_core::LogLevel::Info,
-                        "已写入 assets/settings.toml（保留其它段）",
+                        "已写入 assets/settings.ini（保留其它段）",
                     ),
                     Err(error) => this.workspace.log(
                         prism_editor_gpui_core::LogSource::System,
                         prism_editor_gpui_core::LogLevel::Error,
-                        format!("写入 settings.toml 失败：{error}"),
+                        format!("写入 settings.ini 失败：{error}"),
                     ),
                 },
                 (None, _) => this.workspace.log(
                     prism_editor_gpui_core::LogSource::System,
                     prism_editor_gpui_core::LogLevel::Warn,
-                    "没有绑定项目根，无法写入 settings.toml",
+                    "没有绑定项目根，无法写入 settings.ini",
                 ),
             },
         ));
@@ -125,7 +125,7 @@ impl EditorView {
                 .text_size(px(9.0))
                 .text_color(style.muted())
                 .child(SharedString::from(
-                    "写回 assets/settings.toml 的 [app] / [window] / [build] 段，[render] 等其它段原样保留。",
+                    "写回 assets/settings.ini 的 [app] / [window] / [build] 段，[render] 等其它段原样保留。",
                 )),
         );
 
@@ -492,13 +492,13 @@ impl EditorView {
         body = body.child(muted(
             style,
             format!(
-                "启动场景：{active_scene} · 启用 {enabled_count}/{total} · assets/scenes.toml（改动立即写盘）"
+                "启动场景：{active_scene} · 启用 {enabled_count}/{total} · assets/scenes.json（改动立即写盘）"
             ),
         ));
         if entries.is_empty() {
             body = body.child(muted(
                 style,
-                "scenes.toml 为空：从下面的列表添加，或先保存一个场景文档。",
+                "scenes.json 为空：从下面的列表添加，或先保存一个场景文档。",
             ));
         }
         for (index, name, path, enabled) in entries.iter().cloned() {

@@ -262,7 +262,7 @@ async function copyGuid() {
             v-for="(ref, i) in usage"
             :key="i"
             class="usage-link-btn"
-            :title="ref.kind === 'manifest' ? '构建清单 (assets/scenes.toml)' : '打开文档并高亮实体字段'"
+            :title="ref.kind === 'manifest' ? '构建清单 (assets/scenes.json)' : '打开文档并高亮实体字段'"
             @click="emit('jump', ref)"
           >
             <template v-if="ref.kind === 'manifest'">

@@ -1060,7 +1060,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bf3c259d255ca70051b30e2e95b5446cdb8949ac4cd22c0d7fd634d89f568e2"
 dependencies = [
  "log",
- "regex",
 ]
 
 [[package]]
@@ -3160,7 +3159,6 @@ dependencies = [
  "prism-scene",
  "serde",
  "serde_json",
- "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]
@@ -3181,7 +3179,6 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
- "toml 1.1.8+spec-1.1.0",
  "windows-sys 0.61.2",
 ]
 

@@ -2,7 +2,7 @@
 //!
 //! 引擎的构建由 `prism-build-pipeline`（`build-scenes`）+ `cargo build` 完成，
 //! 编辑器只是把「构建哪个配置、哪些场景、输出到哪」整理成声明式数据。这一层
-//! 把现有 `assets/settings.toml` 的 `[build]` 段与 `assets/scenes.toml` 投影成
+//! 把现有 `assets/settings.ini` 的 `[build]` 段与 `assets/scenes.json` 投影成
 //! Unity 的形状，供属性面板 / 未来的原生宿主读取。
 //!
 //! | Unity | 这里 |
@@ -27,7 +27,7 @@ use crate::settings::{read_project_settings, BuildSettingsData};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildScene {
-    /// 场景名（`scenes.toml` 的 `name`）。
+    /// 场景名（`scenes.json` 的 `name`）。
     pub name: String,
     /// 作者路径（相对项目根，`/` 分隔）。
     pub path: String,
@@ -191,7 +191,7 @@ impl BuildProfile {
     }
 }
 
-/// 读取项目根下的 `assets/settings.toml` + `assets/scenes.toml`。
+/// 读取项目根下的 `assets/settings.ini` + `assets/scenes.json`。
 pub fn read_build_profile(root: &Path) -> Result<BuildProfile, String> {
     let settings = read_project_settings(root)?;
     let scenes = read_scene_manifest(root)?;
@@ -366,7 +366,7 @@ mod tests {
         let root = temp_root("read");
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(
-            root.join("assets/settings.toml"),
+            root.join("assets/settings.ini"),
             r#"
 [app]
 company = "Excurs1ons"
