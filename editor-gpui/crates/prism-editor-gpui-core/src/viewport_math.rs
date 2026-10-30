@@ -584,9 +584,40 @@ pub fn normalize2(v: (f32, f32)) -> [f32; 2] {
     [v.0 / len, v.1 / len]
 }
 
-/// 框选：投影中心 / 8 个立方体角，任意一点落在矩形内即选中。
+/// 实体局部单位立方体的 8 个角（世界坐标，含旋转与缩放）。
+///
+/// 代理里的 `transform` 已经是世界变换（`world_position` / `world_rotation` /
+/// `world_scale`），所以这里不再沿父链推导。
+fn transformed_corners(transform: &TransformJson) -> [[f32; 3]; 8] {
+    let rotation = quat_normalize(transform.rotation);
+    let half = [
+        transform.scale[0].abs().max(0.05) * 0.5,
+        transform.scale[1].abs().max(0.05) * 0.5,
+        transform.scale[2].abs().max(0.05) * 0.5,
+    ];
+    let mut corners = [[0.0f32; 3]; 8];
+    let mut next = 0;
+    for dx in [-1.0f32, 1.0] {
+        for dy in [-1.0f32, 1.0] {
+            for dz in [-1.0f32, 1.0] {
+                let local = [half[0] * dx, half[1] * dy, half[2] * dz];
+                let rotated = quat_rotate(rotation, local);
+                corners[next] = [
+                    transform.position[0] + rotated[0],
+                    transform.position[1] + rotated[1],
+                    transform.position[2] + rotated[2],
+                ];
+                next += 1;
+            }
+        }
+    }
+    corners
+}
+
+/// 框选：实体旋转后的包围盒投影成屏幕 AABB，与矩形**相交**即选中。
 ///
 /// 矩形是 `(min_x, min_y, max_x, max_y)`（视口像素坐标）；索引按文档顺序返回。
+/// 用相交而不是「角点落在矩形内」，所以填满视口的大物体也能被小框选中。
 pub fn box_select(
     rect: (f32, f32, f32, f32),
     frame: &CameraFrame,
@@ -597,33 +628,62 @@ pub fn box_select(
     let (min_x, min_y, max_x, max_y) = rect;
     let mut selected = Vec::new();
     for (index, transform) in entities {
-        let half = [
-            transform.scale[0].abs().max(0.05) * 0.5,
-            transform.scale[1].abs().max(0.05) * 0.5,
-            transform.scale[2].abs().max(0.05) * 0.5,
-        ];
-        let mut points = vec![transform.position];
-        for dx in [-1.0f32, 1.0] {
-            for dy in [-1.0f32, 1.0] {
-                for dz in [-1.0f32, 1.0] {
-                    points.push([
-                        transform.position[0] + half[0] * dx,
-                        transform.position[1] + half[1] * dy,
-                        transform.position[2] + half[2] * dz,
-                    ]);
+        let mut bounds: Option<(f32, f32, f32, f32)> = None;
+        for corner in transformed_corners(transform) {
+            let Some((x, y, _)) = project(corner, frame, width, height) else {
+                continue;
+            };
+            bounds = Some(match bounds {
+                None => (x, y, x, y),
+                Some((min_px, min_py, max_px, max_py)) => {
+                    (min_px.min(x), min_py.min(y), max_px.max(x), max_py.max(y))
                 }
-            }
+            });
         }
-        let hit = points.iter().any(|point| {
-            project(*point, frame, width, height)
-                .map(|(x, y, _)| x >= min_x && x <= max_x && y >= min_y && y <= max_y)
-                .unwrap_or(false)
-        });
-        if hit {
+        // 全部角点都在相机背后 → 无法投影，跳过。
+        let Some((min_px, min_py, max_px, max_py)) = bounds else {
+            continue;
+        };
+        if max_px >= min_x && min_px <= max_x && max_py >= min_y && min_py <= max_y {
             selected.push(*index);
         }
     }
     selected
+}
+
+/// 射线与实体的**有向**包围盒求交，返回世界空间射线参数。
+///
+/// 把射线变换到实体局部空间（先反旋转、再除以缩放）后与单位立方体
+/// `[-0.5, 0.5]³` 求交；`ray_box` 返回的参数与世界射线同一尺度，所以
+/// 不同缩放的实体之间仍可直接比较远近。
+fn ray_obb(origin: [f32; 3], direction: [f32; 3], transform: &TransformJson) -> Option<f32> {
+    let inverse = quat_conjugate(quat_normalize(transform.rotation));
+    let scale = [
+        transform.scale[0].abs().max(0.05),
+        transform.scale[1].abs().max(0.05),
+        transform.scale[2].abs().max(0.05),
+    ];
+    let offset = [
+        origin[0] - transform.position[0],
+        origin[1] - transform.position[1],
+        origin[2] - transform.position[2],
+    ];
+    let local_offset = quat_rotate(inverse, offset);
+    let local_direction = quat_rotate(inverse, direction);
+    ray_box(
+        [
+            local_offset[0] / scale[0],
+            local_offset[1] / scale[1],
+            local_offset[2] / scale[2],
+        ],
+        [
+            local_direction[0] / scale[0],
+            local_direction[1] / scale[1],
+            local_direction[2] / scale[2],
+        ],
+        [0.0, 0.0, 0.0],
+        [0.5, 0.5, 0.5],
+    )
 }
 
 /// 拾取离相机最近的实体（索引, 命中距离）。
@@ -637,12 +697,7 @@ pub fn pick_entity(
     let (origin, direction) = ray_from_screen(point.0, point.1, frame, width, height);
     let mut best: Option<(usize, f32)> = None;
     for (index, transform) in entities {
-        let half = [
-            transform.scale[0].abs().max(0.05) * 0.5,
-            transform.scale[1].abs().max(0.05) * 0.5,
-            transform.scale[2].abs().max(0.05) * 0.5,
-        ];
-        if let Some(distance) = ray_box(origin, direction, transform.position, half) {
+        if let Some(distance) = ray_obb(origin, direction, transform) {
             if best.map(|(_, best)| distance < best).unwrap_or(true) {
                 best = Some((*index, distance));
             }
@@ -722,6 +777,58 @@ mod tests {
         let (x, _, _) = project([3.0, 0.0, 0.0], &frame, 800.0, 600.0).unwrap();
         let picked = pick_entity((x, 300.0), &frame, 800.0, 600.0, &entities);
         assert_eq!(picked, Some(1));
+    }
+
+    #[test]
+    fn picking_uses_the_rotated_box_not_its_axis_aligned_bounds() {
+        // 薄板 2 × 0.1 × 2，绕 Z 转 45°：视觉上是斜的，轴对齐盒却是正放的。
+        let plate = TransformJson {
+            position: [0.0, 0.0, 0.0],
+            rotation: quat_axis_angle(2, std::f32::consts::FRAC_PI_4),
+            scale: [2.0, 0.1, 2.0],
+        };
+        let (origin, direction) = ([0.9f32, 0.0, 5.0], [0.0f32, 0.0, -1.0]);
+        // 轴对齐盒里的空白点（旧实现会误选）现在必须落空。
+        assert!(
+            ray_obb(origin, direction, &plate).is_none(),
+            "AABB 角落的空处不应命中旋转后的薄板"
+        );
+        // 薄板真实的一端（旧实现反而选不中）。
+        assert!(
+            ray_obb([0.636, 0.636, 5.0], direction, &plate).is_some(),
+            "旋转后薄板本体应可点中"
+        );
+    }
+
+    #[test]
+    fn box_select_matches_a_wall_that_fills_the_viewport() {
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        // 一面 40 × 40 的墙，投影后覆盖整个视口，但四个角都在视口外。
+        let wall = TransformJson {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [40.0, 40.0, 0.2],
+        };
+        let entities = vec![(7, wall)];
+        let hits = box_select(
+            (100.0, 100.0, 150.0, 150.0),
+            &frame,
+            800.0,
+            600.0,
+            &entities,
+        );
+        assert_eq!(hits, vec![7], "与屏幕矩形相交的大物体应被框选中");
+
+        // 远离墙的框仍然什么都选不到。
+        let misses = box_select(
+            (4000.0, 4000.0, 4100.0, 4100.0),
+            &frame,
+            800.0,
+            600.0,
+            &entities,
+        );
+        assert!(misses.is_empty());
     }
 
     #[test]
