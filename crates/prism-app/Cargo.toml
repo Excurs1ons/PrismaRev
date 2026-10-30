@@ -38,13 +38,17 @@ flume.workspace = true
 
 winit = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
+# `regex` 只用于 RUST_LOG 的正则过滤（`env_filter` 的 `regex` feature），
+# 默认开着一整套 regex 引擎（regex-automata + regex-syntax + aho-corasick ≈ 0.47 MB）。
+# 我们只用 `module=level` 这种指令，子串匹配足够；需要正则的项目自行打开默认特性。
+env_logger = { workspace = true, default-features = false, features = ["auto-color", "humantime"] }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.15"
+# 默认特性 `regex` 只为 RUST_LOG 的正则过滤；Android 上它同样会拉进整套 regex 引擎。
+android_logger = { version = "0.15", default-features = false }
 ndk = "0.9"
 
 [dev-dependencies]
