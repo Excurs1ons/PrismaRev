@@ -90,3 +90,27 @@ pub fn drain() -> Vec<(LogSource, LogLevel, String)> {
         .map(|entry| (LogSource::Engine, entry.level, entry.text))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_preserves_levels_and_maps_source_to_engine() {
+        sink().lock().unwrap().clear();
+        sink().lock().unwrap().push_back(Entry {
+            level: LogLevel::Warn,
+            text: "engine warning".to_owned(),
+        });
+        let entries = drain();
+        assert_eq!(
+            entries,
+            vec![(
+                LogSource::Engine,
+                LogLevel::Warn,
+                "engine warning".to_owned()
+            )]
+        );
+        assert!(drain().is_empty());
+    }
+}

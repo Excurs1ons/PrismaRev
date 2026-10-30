@@ -2580,7 +2580,7 @@ mod window_smoke_tests {
         let ctx = egui::Context::default();
         let mut workspace = Workspace::sample();
         let mut state = UiState::new();
-        ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 draw(ui, &mut workspace, &mut state);
             });
@@ -2616,7 +2616,7 @@ mod window_smoke_tests {
     fn boolean_window_builds_and_can_be_closed() {
         let ctx = egui::Context::default();
         let mut open = true;
-        ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
             boolean_window(ctx, &mut open, "Test", |ui| {
                 ui.label("content");
             });

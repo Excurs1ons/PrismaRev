@@ -157,6 +157,32 @@ pub fn border(colors: &ThemeColors) -> Color32 {
     color32(colors, ThemeToken::Border)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_installs_editor_visuals_and_metrics() {
+        let ctx = egui::Context::default();
+        let colors = ThemeColors::preset("studio");
+        apply(&ctx, &colors);
+        let visuals = ctx.style().visuals.clone();
+        assert_eq!(visuals.window_corner_radius, CornerRadius::same(3));
+        assert_eq!(visuals.widgets.inactive.corner_radius, CornerRadius::ZERO);
+        assert_eq!(ctx.style().spacing.interact_size.y, 20.0);
+        assert_eq!(panel_fill(&colors), color32(&colors, ThemeToken::Panel));
+        assert_eq!(chrome_fill(&colors), color32(&colors, ThemeToken::Chrome));
+    }
+
+    #[test]
+    fn font_installation_is_safe_without_system_font_files() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        assert!(ctx.fonts(|fonts| !fonts.families().is_empty()));
+    }
+}
+
 /// 字体：优先用系统 UI 字体（贴近 Web 编辑器的系统无衬线），
 /// 再追加一个 CJK 回退（egui 自带字体没有中文）。
 ///

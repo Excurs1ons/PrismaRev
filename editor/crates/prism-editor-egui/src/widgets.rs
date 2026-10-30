@@ -104,6 +104,64 @@ fn asset_matches(name: &str, path: &str) -> bool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_filters_match_expected_extensions() {
+        assert!(asset_matches("mesh_path", "assets/ship.GLTF"));
+        assert!(!asset_matches("mesh_path", "assets/ship.png"));
+        assert!(asset_matches("sprite_path", "assets/hero.png"));
+        assert!(asset_matches("environment_path", "assets/sunset.exr"));
+        assert!(asset_matches("custom_path", "assets/data.bin"));
+        assert!(asset_matches("label", "anything.bin"));
+    }
+
+    #[test]
+    fn card_actions_and_field_rows_can_render_without_gpu() {
+        let ctx = egui::Context::default();
+        let schema = Schema::from_value(&serde_json::json!({
+            "types": [{
+                "name": "Test",
+                "displayName": "Test",
+                "typeId": "test",
+                "version": 1,
+                "isComponent": true,
+                "defaultJson": {"value": 0.0},
+                "fields": [{
+                    "name": "value",
+                    "kind": "f32",
+                    "structType": null,
+                    "inner": null,
+                    "arrayLen": null,
+                    "variants": null,
+                    "readOnly": false
+                }]
+            }]
+        }))
+        .unwrap();
+        let component = schema.component("Test").unwrap().clone();
+        let mut actions = Vec::new();
+        let mut writes = Vec::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                component_card_with_assets(
+                    ui,
+                    &schema,
+                    &component,
+                    &serde_json::json!({"value": 1.0}),
+                    &mut actions,
+                    &mut |path, value| writes.push((path.to_owned(), value)),
+                    &[],
+                );
+            });
+        });
+        assert!(actions.is_empty());
+        assert!(writes.is_empty());
+    }
+}
+
 /// 带资产选择器的字段行（路径字段右侧多一个 `…` 按钮，列出 `assets` 里的候选）。
 fn field_row_at(
     ui: &mut Ui,

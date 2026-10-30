@@ -29,6 +29,12 @@ fn pan_camera(camera: &mut prism_editor_core::workspace::OrbitCamera, dx: f32, d
     }
 }
 
+fn orbit_axis(horizontal: Option<bool>, delta: egui::Vec2) -> Option<bool> {
+    horizontal.or_else(|| {
+        ((delta.x != 0.0) || (delta.y != 0.0)).then_some(delta.x.abs() >= delta.y.abs())
+    })
+}
+
 /// 共享给视口的 GPU 句柄（设备 + egui 纹理表 + 采样器）。
 pub struct ImageBridge {
     pub registry: ImageRegistry,
@@ -510,9 +516,7 @@ impl ViewportState {
                         .replace(pos)
                         .map(|last| pos - last)
                         .unwrap_or_default();
-                    if self.orbit_horizontal.is_none() && (delta.x != 0.0 || delta.y != 0.0) {
-                        self.orbit_horizontal = Some(delta.x.abs() >= delta.y.abs());
-                    }
+                    self.orbit_horizontal = orbit_axis(self.orbit_horizontal, delta);
                     match self.orbit_horizontal {
                         Some(true) => workspace.camera.orbit(delta.x, 0.0),
                         Some(false) => workspace.camera.orbit(0.0, delta.y),
@@ -986,6 +990,15 @@ fn pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orbit_axis_locks_to_dominant_initial_delta() {
+        assert_eq!(orbit_axis(None, egui::vec2(5.0, 1.0)), Some(true));
+        assert_eq!(orbit_axis(None, egui::vec2(1.0, -5.0)), Some(false));
+        assert_eq!(orbit_axis(None, egui::Vec2::ZERO), None);
+        assert_eq!(orbit_axis(Some(true), egui::vec2(0.0, 10.0)), Some(true));
+        assert_eq!(orbit_axis(Some(false), egui::vec2(10.0, 0.0)), Some(false));
+    }
 
     #[test]
     fn extent_follows_scale_and_dpi() {

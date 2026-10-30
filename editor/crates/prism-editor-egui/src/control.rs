@@ -154,3 +154,77 @@ fn serve(stream: TcpStream, tx: &Sender<ControlRequest>) {
         let _ = writer.flush();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+
+    #[test]
+    fn server_publishes_loopback_port_and_removes_it_on_drop() {
+        let dir = std::env::temp_dir().join(format!(
+            "prisma-editor-control-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let server = ControlServer::start(&dir).unwrap();
+        let port_file = dir.join("control.port");
+        let port: u16 = std::fs::read_to_string(&port_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        writeln!(stream, "{{\"cmd\":\"PiNg\"}}").unwrap();
+
+        let request = loop {
+            match server.requests.try_recv() {
+                Ok(request) => break request,
+                Err(mpsc::TryRecvError::Empty) => std::thread::yield_now(),
+                Err(mpsc::TryRecvError::Disconnected) => panic!("control queue disconnected"),
+            }
+        };
+        assert_eq!(request.command, "ping");
+        request.reply.send(json!({ "ok": true })).unwrap();
+        let mut response = String::new();
+        BufReader::new(stream).read_line(&mut response).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&response).unwrap()["ok"],
+            true
+        );
+
+        drop(server);
+        assert!(!port_file.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn malformed_and_missing_commands_return_errors_without_queueing() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let client = TcpStream::connect(address).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        std::thread::spawn(move || serve(server_stream, &tx));
+        let mut writer = client;
+        writeln!(writer, "{{bad").unwrap();
+        writeln!(writer, "{{\"value\":1}}").unwrap();
+        let mut reader = BufReader::new(writer.try_clone().unwrap());
+        let mut first = String::new();
+        let mut second = String::new();
+        reader.read_line(&mut first).unwrap();
+        reader.read_line(&mut second).unwrap();
+        assert!(serde_json::from_str::<Value>(&first).unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("bad json:"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&second).unwrap()["error"],
+            "missing cmd"
+        );
+        assert!(rx.try_recv().is_err());
+    }
+}
