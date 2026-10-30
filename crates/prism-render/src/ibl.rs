@@ -12,8 +12,11 @@
 
 use anyhow::Context as _;
 use ash::vk;
+#[cfg(feature = "ibl")]
 use std::collections::hash_map::DefaultHasher;
+#[cfg(feature = "ibl")]
 use std::hash::Hasher;
+#[cfg(feature = "ibl")]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -56,21 +59,34 @@ pub struct IblResources {
 }
 
 // Convolution constants
+#[cfg(feature = "ibl")]
 const IRRADIANCE_FACE_SIZE: u32 = 64;
+#[cfg(feature = "ibl")]
 const IRRADIANCE_SAMPLES: u32 = 64;
+#[cfg(feature = "ibl")]
 const PREFILTERED_FACE_SIZE: u32 = 128;
+#[cfg(feature = "ibl")]
 const PREFILTERED_MIP_LEVELS: u32 = 5;
+#[cfg(feature = "ibl")]
 const PREFILTERED_SAMPLES: u32 = 128;
+#[cfg(feature = "ibl")]
 const BRDF_LUT_SIZE: u32 = 512;
+#[cfg(feature = "ibl")]
 const BRDF_LUT_SAMPLES: u32 = 1024;
 
 // IBL disk cache paths 相对 to working directory).
+#[cfg(feature = "ibl")]
 const IBL_CACHE_DIR: &str = "assets/ibr";
+#[cfg(feature = "ibl")]
 const BRDF_CACHE_FILE: &str = "brdf_lut_512.bin";
+#[cfg(feature = "ibl")]
 const ENV_CUBE_CACHE_FILE: &str = "cube_512.bin";
 /// Bump when cubemap/convolution math changes so stale on-disk caches are ignored.
+#[cfg(feature = "ibl")]
 const IBL_CACHE_VERSION: u32 = 2;
+#[cfg(feature = "ibl")]
 const IRRADIANCE_CACHE_FILE: &str = "irradiance_64.bin";
+#[cfg(feature = "ibl")]
 const PREFILTERED_CACHE_PREFIX: &str = "prefiltered_mip";
 
 /// 共享的 IBL 描述符 集合 布局（集合 2）：3 个 COMBINED_IMAGE_SAMPLER
@@ -141,6 +157,7 @@ fn alloc_neutral_cube(
 }
 
 impl IblResources {
+    #[cfg(feature = "ibl")]
     pub fn new(
         context: Arc<VulkanContext>,
         command_pool: vk::CommandPool,
@@ -1539,6 +1556,7 @@ impl Drop for IblResources {
 // ---------------------------------------------------------------------------
 
 /// Ensure the IBL cache subdirectory 存在 creating it if needed.
+#[cfg(feature = "ibl")]
 fn ensure_cache_dir(subdir: &str) -> Option<std::path::PathBuf> {
     let path = std::path::PathBuf::from(IBL_CACHE_DIR).join(subdir);
     std::fs::create_dir_all(&path).ok()?;
@@ -1546,6 +1564,7 @@ fn ensure_cache_dir(subdir: &str) -> Option<std::path::PathBuf> {
 }
 
 /// 构建 a 完整 cache path from 哈希 subdir and filename.
+#[cfg(feature = "ibl")]
 fn cache_path(hash: &str, filename: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(IBL_CACHE_DIR)
         .join(hash)
@@ -1554,6 +1573,7 @@ fn cache_path(hash: &str, filename: &str) -> std::path::PathBuf {
 
 /// 确定性 content 哈希 of the raw 高动态范围 file 字节
 /// Used as subdirectory name so a changed env 映射表 produces a new cache.
+#[cfg(feature = "ibl")]
 fn env_content_hash(bytes: &[u8]) -> String {
     let mut hasher = DefaultHasher::new();
     use std::hash::Hash;
@@ -1563,6 +1583,7 @@ fn env_content_hash(bytes: &[u8]) -> String {
 }
 
 /// 保存 `data` (f32 切片 to `path` as `u32 LE count + f32 LE × count`.
+#[cfg(feature = "ibl")]
 fn save_f32_cache(path: &Path, data: &[f32]) {
     use std::io::Write;
     let count = data.len() as u32;
@@ -1579,6 +1600,7 @@ fn save_f32_cache(path: &Path, data: &[f32]) {
 
 /// 加载 an f32 cache file written by `save_f32_cache`. Returns `None` on any
 /// 错误 缺少 file, wrong 大小 I/O 错误
+#[cfg(feature = "ibl")]
 fn load_f32_cache(path: &Path) -> Option<Vec<f32>> {
     let raw = std::fs::read(path).ok()?;
     if raw.len() < 4 {
@@ -1603,6 +1625,7 @@ fn load_f32_cache(path: &Path) -> Option<Vec<f32>> {
 
 /// Cosine-weighted hemisphere convolution of the equirect into a diffuse
 /// irradiance cubemap (64²/face, 6 faces, 1 mip).
+#[cfg(feature = "ibl")]
 fn convolve_irradiance(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<f32> {
     let mut out = vec![0.0f32; (6 * face_size * face_size * 4) as usize];
     // Stratified uniform hemisphere sampling. Use sqrt(IRRADIANCE_SAMPLES) steps per axis.
@@ -1669,6 +1692,7 @@ fn convolve_irradiance(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<
 
 /// GGX importance-sampled prefiltered environment 映射表
 /// Returns one RGBA f32 缓冲区 per mip level.
+#[cfg(feature = "ibl")]
 fn convolve_prefiltered(
     eq: &[f32],
     eq_w: u32,
@@ -1749,6 +1773,7 @@ fn convolve_prefiltered(
 
 /// 计算 the BRDF integration LUT (split-sum approximation).
 /// Returns RG f32 data for the 2D 纹理 (512x512).
+#[cfg(feature = "ibl")]
 fn compute_brdf_lut(size: u32) -> Vec<f32> {
     let mut out = vec![0.0f32; (size * size * 2) as usize];
     let inv_size = 1.0 / size as f32;
@@ -1803,6 +1828,7 @@ fn compute_brdf_lut(size: u32) -> Vec<f32> {
 // ---------------------------------------------------------------------------
 
 /// 构建 an orthonormal 切线 帧 from a 法线 向量
+#[cfg(feature = "ibl")]
 fn build_tangent_frame(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let up = if n[1].abs() < 0.9999 {
         [0.0, 1.0, 0.0]
@@ -1814,6 +1840,7 @@ fn build_tangent_frame(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     (t, b)
 }
 
+#[cfg(feature = "ibl")]
 fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -1823,10 +1850,12 @@ fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 /// Hammersley 2D sequence (radical inverse in base 2).
+#[cfg(feature = "ibl")]
 fn hammersley(i: u32, n: u32) -> [f32; 2] {
     [i as f32 / n as f32, radical_inverse_vdc(i)]
 }
 
+#[cfg(feature = "ibl")]
 fn radical_inverse_vdc(mut bits: u32) -> f32 {
     bits = bits.rotate_right(16);
     bits = ((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >> 1);
@@ -1837,6 +1866,7 @@ fn radical_inverse_vdc(mut bits: u32) -> f32 {
 }
 
 /// GGX importance 样本 direction in 切线 空间 (z = 上
+#[cfg(feature = "ibl")]
 fn importance_sample_ggx(xi: [f32; 2], roughness: f32) -> [f32; 3] {
     let a = roughness * roughness;
     let a2 = a * a;
@@ -1852,6 +1882,7 @@ fn importance_sample_ggx(xi: [f32; 2], roughness: f32) -> [f32; 3] {
 
 /// 构建 a cubemap (6 faces × `face_size`² RGBA from an equirectangular 高动态范围
 /// 缓冲区 by sampling it per cube-texel direction.
+#[cfg(feature = "ibl")]
 fn generate_cubemap(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<f32> {
     let mut out = vec![0.0f32; (6 * face_size * face_size * 4) as usize];
     for f in 0..6u32 {
@@ -1873,6 +1904,7 @@ fn generate_cubemap(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<f32
 }
 
 /// Cube face → 世界 direction, matching Vulkan `samplerCube` face selection.
+#[cfg(feature = "ibl")]
 fn cube_direction(face: u32, u: f32, v: f32) -> [f32; 3] {
     match face {
         0 => [1.0, -v, -u],  // +X
@@ -1884,12 +1916,14 @@ fn cube_direction(face: u32, u: f32, v: f32) -> [f32; 3] {
     }
 }
 
+#[cfg(feature = "ibl")]
 fn normalize3(d: [f32; 3]) -> [f32; 3] {
     let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-8);
     [d[0] / len, d[1] / len, d[2] / len]
 }
 
 /// Bilinear 样本 of an equirectangular RGBA-float 缓冲区
+#[cfg(feature = "ibl")]
 fn sample_equirect_bilinear(eq: &[f32], w: u32, h: u32, u: f32, v: f32) -> [f32; 4] {
     let fw = w as f32;
     let fh = h as f32;
@@ -1917,6 +1951,7 @@ fn sample_equirect_bilinear(eq: &[f32], w: u32, h: u32, u: f32, v: f32) -> [f32;
     out
 }
 
+#[cfg(feature = "ibl")]
 fn mip_extent(width: u32, height: u32, level: u32) -> vk::Extent3D {
     vk::Extent3D {
         width: (width >> level).max(1),
@@ -1925,6 +1960,7 @@ fn mip_extent(width: u32, height: u32, level: u32) -> vk::Extent3D {
     }
 }
 
+#[cfg(feature = "ibl")]
 fn transition_image(
     device: &ash::Device,
     cmd: vk::CommandBuffer,
@@ -2224,6 +2260,7 @@ fn f32_to_f16(x: f32) -> u16 {
 
 /// Procedural equirectangular environment (gradient sky + sun) used when no
 /// 高动态范围 资源 is supplied.
+#[cfg(feature = "ibl")]
 fn procedural_equirect(width: u32, height: u32) -> (Vec<f32>, u32, u32) {
     let mut data = vec![0.0f32; (width * height * 4) as usize];
     for y in 0..height {
@@ -2253,6 +2290,7 @@ fn procedural_equirect(width: u32, height: u32) -> (Vec<f32>, u32, u32) {
     (data, width, height)
 }
 
+#[cfg(feature = "ibl")]
 fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }

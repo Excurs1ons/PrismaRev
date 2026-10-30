@@ -1032,6 +1032,9 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 组件组 3D | `prism-scene/group-3d`（透传 `prism-app`/`prism-engine`） | on | 灯光/天空盒/网格/相机控制/GI 配置不注册，serde 与反射代码不链接 |
 | 组件组 2D | `prism-scene/group-2d` | on | 精灵/线段/精灵动画不注册 |
 | 组件组 UI | `prism-scene/group-ui` | on | Node/Style/Text/布局类型不注册 |
+| IBL | `prism-render/ibl`（透传） | on | 环境 cubemap 卷积/irradiance/prefilter/BRDF LUT/HDR 解码不编译；退化为 1x1 中性灰，descriptor 布局不变。3D 档 −64 KB |
+| 阴影贴图 | `prism-render/shadows` | on | `shadow_map_pass` 不编译 |
+| GTAO | `prism-render/gtao` | on | 半分辨率 AO pass 不编译 |
 
 **待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
 
