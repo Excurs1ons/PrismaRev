@@ -388,6 +388,306 @@ fn gltf_importer_imports_real_glb() {
 }
 
 // -------------------------------------------------------------------
+// glTF 场景图（#520）
+// -------------------------------------------------------------------
+
+/// 把任意 JSON + 二进制块打成 GLB（chunk 按 4 字节对齐）。
+fn pack_glb(json: serde_json::Value, bin: &[u8]) -> Vec<u8> {
+    let json_bytes = serde_json::to_string(&json).unwrap();
+    let json_padding = (4 - (json_bytes.len() % 4)) % 4;
+    let bin_padding = (4 - (bin.len() % 4)) % 4;
+    let json_chunk = 8 + json_bytes.len() + json_padding;
+    let bin_chunk = if bin.is_empty() {
+        0
+    } else {
+        8 + bin.len() + bin_padding
+    };
+    let total = 12 + json_chunk + bin_chunk;
+
+    let mut glb = Vec::with_capacity(total);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total as u32).to_le_bytes());
+    glb.extend_from_slice(&((json_bytes.len() + json_padding) as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(json_bytes.as_bytes());
+    glb.extend(std::iter::repeat_n(b' ', json_padding));
+    if !bin.is_empty() {
+        glb.extend_from_slice(&((bin.len() + bin_padding) as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(bin);
+        glb.extend(std::iter::repeat_n(0u8, bin_padding));
+    }
+    glb
+}
+
+fn import_bytes(name: &str, glb: Vec<u8>) -> ImportResult {
+    let path = std::env::temp_dir().join(name);
+    std::fs::write(&path, &glb).unwrap();
+    let ctx = ImportContext {
+        source_path: path.clone(),
+        source_hash: xxhash_rust::xxh3::xxh3_64(&glb),
+        settings: serde_json::Value::Null,
+        db: Arc::new(AssetDatabase::new()),
+    };
+    let result = GltfImporter.import(&ctx).unwrap();
+    std::fs::remove_file(&path).ok();
+    result
+}
+
+/// 读 RMXI 的头部与顶点/索引数量。
+fn rmxi_counts(data: &[u8]) -> (usize, usize) {
+    assert_eq!(&data[..4], b"RMXI");
+    let verts = u32::from_le_bytes(data[5..9].try_into().unwrap()) as usize;
+    let idxs = u32::from_le_bytes(data[9..13].try_into().unwrap()) as usize;
+    (verts, idxs)
+}
+
+/// 读 RMXI 的第 `index` 个顶点位置（顶点区紧跟 17 字节头部）。
+fn rmxi_position(data: &[u8], index: usize) -> [f32; 3] {
+    let base = 17 + index * 12;
+    [
+        f32::from_le_bytes(data[base..base + 4].try_into().unwrap()),
+        f32::from_le_bytes(data[base + 4..base + 8].try_into().unwrap()),
+        f32::from_le_bytes(data[base + 8..base + 12].try_into().unwrap()),
+    ]
+}
+
+/// 一个三角形的位置 + 索引（u16），返回 (bin 片段, bufferView/accessor 的偏移信息)。
+fn triangle_bytes(scale: f32) -> (Vec<u8>, Vec<u8>) {
+    let positions: &[f32] = &[0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, scale, 0.0];
+    let indices: &[u16] = &[0, 1, 2];
+    let mut positions_bytes = Vec::new();
+    for p in positions {
+        positions_bytes.extend_from_slice(&p.to_le_bytes());
+    }
+    let mut index_bytes = Vec::new();
+    for i in indices {
+        index_bytes.extend_from_slice(&i.to_le_bytes());
+    }
+    (positions_bytes, index_bytes)
+}
+
+fn accessor(
+    buffer_view: usize,
+    component_type: u32,
+    count: usize,
+    kind: &str,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "bufferView": buffer_view,
+        "componentType": component_type,
+        "count": count,
+        "type": kind,
+    });
+    // glTF 要求 POSITION 访问器带 min/max。
+    if kind == "VEC3" && component_type == 5126 {
+        value["min"] = serde_json::json!([-1000.0, -1000.0, -1000.0]);
+        value["max"] = serde_json::json!([1000.0, 1000.0, 1000.0]);
+    }
+    value
+}
+
+#[test]
+fn gltf_import_bakes_every_node_and_primitive_into_one_mesh() {
+    // 一个网格含两个 primitive，被两个带平移的节点引用 —— 旧实现只会留下
+    // 「第一个网格的第一个 primitive」在原点（#520）。
+    let (pos_a, idx_a) = triangle_bytes(1.0);
+    let (pos_b, idx_b) = triangle_bytes(2.0);
+    let mut bin = Vec::new();
+    bin.extend_from_slice(&pos_a); // 0..36
+    let idx_a_offset = bin.len();
+    bin.extend_from_slice(&idx_a); // 36..42
+    let pad = (4 - (bin.len() % 4)) % 4;
+    bin.extend(std::iter::repeat_n(0u8, pad));
+    let pos_b_offset = bin.len();
+    bin.extend_from_slice(&pos_b);
+    let idx_b_offset = bin.len();
+    bin.extend_from_slice(&idx_b);
+
+    let json = serde_json::json!({
+        "asset": { "version": "2.0", "generator": "prisma-test" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0, 1] }],
+        "nodes": [
+            { "mesh": 0, "translation": [5.0, 0.0, 0.0] },
+            { "mesh": 0, "translation": [0.0, 0.0, 7.0] }
+        ],
+        "meshes": [{
+            "primitives": [
+                { "attributes": { "POSITION": 0 }, "indices": 1 },
+                { "attributes": { "POSITION": 2 }, "indices": 3 }
+            ]
+        }],
+        "accessors": [
+            accessor(0, 5126, 3, "VEC3"),
+            accessor(1, 5123, 3, "SCALAR"),
+            accessor(2, 5126, 3, "VEC3"),
+            accessor(3, 5123, 3, "SCALAR")
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": idx_a_offset, "byteLength": 6 },
+            { "buffer": 0, "byteOffset": pos_b_offset, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": idx_b_offset, "byteLength": 6 }
+        ],
+        "buffers": [{ "byteLength": bin.len() }]
+    });
+
+    let result = import_bytes("test_multi_primitive.glb", pack_glb(json, &bin));
+    let (verts, idxs) = rmxi_counts(&result.output_data);
+    assert_eq!(verts, 12, "两个节点 × 两个 primitive × 3 顶点");
+    assert_eq!(idxs, 12);
+
+    let meta = result.metadata.unwrap();
+    assert_eq!(meta["primitive_count"], 4);
+    assert_eq!(meta["node_count"], 2);
+
+    // 第一个节点的顶点被平移了 +5，第二个节点在 z=7。
+    let first = rmxi_position(&result.output_data, 0);
+    assert!((first[0] - 5.0).abs() < 1e-5, "got {first:?}");
+    // 第 7..9 个顶点属于第二个节点（每个节点的网格有 6 个顶点）。
+    let second_node = rmxi_position(&result.output_data, 6);
+    assert!((second_node[0]).abs() < 1e-5, "got {second_node:?}");
+    assert!((second_node[2] - 7.0).abs() < 1e-5, "got {second_node:?}");
+}
+
+#[test]
+fn gltf_import_synthesises_indices_for_non_indexed_primitives() {
+    let (positions, _) = triangle_bytes(1.0);
+    let json = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+        "accessors": [accessor(0, 5126, 3, "VEC3")],
+        "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+        "buffers": [{ "byteLength": positions.len() }]
+    });
+
+    let result = import_bytes("test_non_indexed.glb", pack_glb(json, &positions));
+    let (verts, idxs) = rmxi_counts(&result.output_data);
+    assert_eq!(verts, 3);
+    assert_eq!(idxs, 3, "非索引网格要补一条顺序索引，而不是报错");
+}
+
+#[test]
+fn gltf_import_transforms_normals_with_the_inverse_transpose() {
+    // 节点绕 X 轴转 90°、X 方向再放大 4 倍：法线 (0,0,1) 应该变成 (0,-1,0)，
+    // 而且不能因为缩放被拉长或反向。
+    let (positions, indices) = triangle_bytes(1.0);
+    let normals: Vec<u8> = [0.0f32, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    let mut bin = Vec::new();
+    bin.extend_from_slice(&positions);
+    let idx_offset = bin.len();
+    bin.extend_from_slice(&indices);
+    let pad = (4 - (bin.len() % 4)) % 4;
+    bin.extend(std::iter::repeat_n(0u8, pad));
+    let normal_offset = bin.len();
+    bin.extend_from_slice(&normals);
+
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    let json = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{
+            "mesh": 0,
+            "rotation": [half, 0.0, 0.0, half],
+            "scale": [4.0, 1.0, 1.0]
+        }],
+        "meshes": [{
+            "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2 }]
+        }],
+        "accessors": [
+            accessor(0, 5126, 3, "VEC3"),
+            accessor(2, 5126, 3, "VEC3"),
+            accessor(1, 5123, 3, "SCALAR")
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": idx_offset, "byteLength": 6 },
+            { "buffer": 0, "byteOffset": normal_offset, "byteLength": 36 }
+        ],
+        "buffers": [{ "byteLength": bin.len() }]
+    });
+
+    let result = import_bytes("test_rotated_normals.glb", pack_glb(json, &bin));
+    let (verts, idxs) = rmxi_counts(&result.output_data);
+    assert_eq!((verts, idxs), (3, 3));
+    assert!(result.metadata.unwrap()["has_normals"].as_bool().unwrap());
+
+    // 头部 17 字节 + 顶点区（3 * 12）+ UV（0 通道没有，所以跳过）= 法线区。
+    let normal_base = 17 + 3 * 12;
+    let read = |offset: usize| {
+        f32::from_le_bytes(result.output_data[offset..offset + 4].try_into().unwrap())
+    };
+    let normal = [
+        read(normal_base),
+        read(normal_base + 4),
+        read(normal_base + 8),
+    ];
+    assert!(normal[0].abs() < 1e-5, "got {normal:?}");
+    assert!((normal[1] + 1.0).abs() < 1e-5, "got {normal:?}");
+    assert!(normal[2].abs() < 1e-5, "got {normal:?}");
+}
+
+#[test]
+fn gltf_import_drops_normals_when_any_primitive_lacks_them() {
+    let (positions, indices) = triangle_bytes(1.0);
+    let normals: Vec<u8> = [0.0f32, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    let mut bin = Vec::new();
+    bin.extend_from_slice(&positions); // 0..36
+    let idx_offset = bin.len();
+    bin.extend_from_slice(&indices); // 36..42
+    let pad = (4 - (bin.len() % 4)) % 4;
+    bin.extend(std::iter::repeat_n(0u8, pad));
+    let normal_offset = bin.len();
+    bin.extend_from_slice(&normals);
+
+    let json = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [{
+            "primitives": [
+                { "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2 },
+                { "attributes": { "POSITION": 0 }, "indices": 2 }
+            ]
+        }],
+        "accessors": [
+            accessor(0, 5126, 3, "VEC3"),
+            accessor(2, 5126, 3, "VEC3"),
+            accessor(1, 5123, 3, "SCALAR")
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": idx_offset, "byteLength": 6 },
+            { "buffer": 0, "byteOffset": normal_offset, "byteLength": 36 }
+        ],
+        "buffers": [{ "byteLength": bin.len() }]
+    });
+
+    let result = import_bytes("test_partial_normals.glb", pack_glb(json, &bin));
+    let (verts, idxs) = rmxi_counts(&result.output_data);
+    assert_eq!(verts, 6);
+    assert_eq!(idxs, 6);
+    let meta = result.metadata.unwrap();
+    assert_eq!(
+        meta["has_normals"], false,
+        "有一个 primitive 缺法线时整份网格不带法线（不拿零值冒充）"
+    );
+}
+
+// -------------------------------------------------------------------
 // 材质 Importer
 // -------------------------------------------------------------------
 
