@@ -1991,6 +1991,7 @@ impl Workspace {
         let mut ids: Vec<u32> = entity_ids.to_vec();
         ids.sort_unstable();
         ids.dedup();
+        let ids = Self::prune_selected_descendants(&self.document().doc, &ids);
         let space = self.gizmo_space;
         let doc = &self.document().doc;
         let center = if space == GizmoSpace::World && ids.len() > 1 {
@@ -2146,6 +2147,33 @@ impl Workspace {
         document.dirty = true;
     }
 
+    /// 去掉「祖先也在本次操作集合里」的后代。
+    ///
+    /// 父级和子级同时被选中时，父级的世界变换会经层级传播带到子级；如果子级自己
+    /// 再吃一份同样的 delta，它的世界位移就是两倍（#404）。这里只保留「集合里没有
+    /// 祖先」的实体，其余交给层级传播。
+    fn prune_selected_descendants(doc: &SceneDoc, ids: &[u32]) -> Vec<u32> {
+        let selected: HashSet<u32> = ids.iter().copied().collect();
+        ids.iter()
+            .copied()
+            .filter(|id| {
+                let Some(index) = doc.index_of_id(*id) else {
+                    return true;
+                };
+                let mut parent = doc.entities[index].parent;
+                while let Some(parent_id) = parent {
+                    if selected.contains(&parent_id) {
+                        return false;
+                    }
+                    parent = doc
+                        .index_of_id(parent_id)
+                        .and_then(|parent_index| doc.entities[parent_index].parent);
+                }
+                true
+            })
+            .collect()
+    }
+
     /// 多选 gizmo 平移：每个实体各自换算父空间位移，但整次拖动只产生一个撤销步。
     pub fn translate_entities_world(&mut self, entity_ids: &[u32], delta_world: [f32; 3]) {
         if entity_ids.is_empty() || delta_world.iter().all(|value| value.abs() < 1e-6) {
@@ -2154,6 +2182,7 @@ impl Workspace {
         let mut ids: Vec<u32> = entity_ids.to_vec();
         ids.sort_unstable();
         ids.dedup();
+        let ids = Self::prune_selected_descendants(&self.document().doc, &ids);
         let doc = &self.document().doc;
         let mut changes = Vec::new();
         for entity_id in &ids {
@@ -2215,6 +2244,9 @@ impl Workspace {
         let mut sorted: Vec<(u32, f32)> = targets.to_vec();
         sorted.sort_by_key(|(entity_id, _)| *entity_id);
         sorted.dedup_by_key(|(entity_id, _)| *entity_id);
+        let keep: Vec<u32> = sorted.iter().map(|(entity_id, _)| *entity_id).collect();
+        let keep = Self::prune_selected_descendants(&self.document().doc, &keep);
+        sorted.retain(|(entity_id, _)| keep.contains(entity_id));
         let doc = &self.document().doc;
         let mut changes = Vec::new();
         for (entity_id, start_value) in &sorted {
@@ -3511,6 +3543,59 @@ mod tests {
         for axis in 0..3 {
             assert!((after[axis] - before[axis] - delta[axis]).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn multi_select_translate_skips_descendants_of_selected_parents() {
+        // 回归 #404：父级 + 子级同时选中时，子级只能跟着父级走一份 delta。
+        let mut workspace = Workspace::sample();
+        let parent = index_named(&workspace, "Cube");
+        let child = index_named(&workspace, "Detail");
+        let parent_id = workspace.document().doc.entities[parent].id.unwrap();
+        let child_id = workspace.document().doc.entities[child].id.unwrap();
+        workspace.document_mut().doc.entities[child]
+            .transform
+            .position = [0.0, 0.0, 0.0];
+        let child_before = world_position(&workspace.document().doc, child);
+
+        workspace.translate_entities_world(&[parent_id, child_id], [1.0, 0.0, 0.0]);
+
+        let child_after = world_position(&workspace.document().doc, child);
+        let moved = child_after[0] - child_before[0];
+        assert!(
+            (moved - 1.0).abs() < 1e-4,
+            "子级应只跟随父级移动 1 个单位，实际 {moved}"
+        );
+        assert_eq!(
+            workspace.document().doc.entities[child].transform.position,
+            [0.0, 0.0, 0.0],
+            "子级的局部位置不该被单独改动"
+        );
+    }
+
+    #[test]
+    fn multi_select_scale_skips_descendants_of_selected_parents() {
+        let mut workspace = Workspace::sample();
+        let parent = index_named(&workspace, "Cube");
+        let child = index_named(&workspace, "Detail");
+        let parent_id = workspace.document().doc.entities[parent].id.unwrap();
+        let child_id = workspace.document().doc.entities[child].id.unwrap();
+        let parent_start = workspace.document().doc.entities[parent].transform.scale[0];
+        let child_start = workspace.document().doc.entities[child].transform.scale[0];
+
+        workspace.scale_entities_axis(
+            &[(parent_id, parent_start), (child_id, child_start)],
+            0,
+            2.0,
+        );
+
+        let parent_after = workspace.document().doc.entities[parent].transform.scale[0];
+        let child_after = workspace.document().doc.entities[child].transform.scale[0];
+        assert!((parent_after - parent_start * 2.0).abs() < 1e-4);
+        assert!(
+            (child_after - child_start).abs() < 1e-4,
+            "子级自己的缩放不该再乘一次，实际 {child_after}，起始 {child_start}"
+        );
     }
 
     #[test]
