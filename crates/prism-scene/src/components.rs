@@ -4,7 +4,8 @@
 //! |-----------|------------|
 //! | 层次结构  | `Parent`, `Child` |
 //! | 变换     | `LocalTransform`, `LocalToWorld`, `TransformDirty` |
-//! | 渲染     | `MeshRenderer`, `SpriteRenderer`, `SpriteAnimation`, `Active` |
+//! | 渲染     | `MeshRenderer`, `SpriteRenderer`, `Active` |
+//! | 动画     | `SpriteAnimation`（2D 帧）, `KeyframeAnimation`（曲线） |
 //! | 光源 | `Light`（形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
@@ -379,6 +380,86 @@ impl Default for SpriteAnimation {
             looped: true,
             playing: true,
             phase: 0.0,
+        }
+    }
+}
+
+/// 关键帧动画剪辑：驱动**自身** `Transform` 的 position / euler / scale。
+///
+/// 与 [`SpriteAnimation`]（2D 精灵帧，换 `frame_index`）并列，这里是曲线动画。
+/// 播放头不放在组件里（那样会随 `.scene.json` 序列化），而是引擎侧的运行时
+/// 组件 `ClipPlayhead`，见
+/// `prism_engine::scene::systems::animation::keyframe_animation_system`。
+///
+/// 三条轨道互相独立：没有关键帧的通道保持作者写进 `transform` 的值，
+/// 因此「只动画 position」不会把旋转 / 缩放清零。
+///
+/// 旋转的关键帧是 XYZ 欧拉角（**度**），与 [`DirectionalLight::euler_xyz`]
+/// 同一约定；端点保持（不外插），所以单次播放结束时停在最后一帧。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::KeyframeAnimation")]
+#[serde(default)]
+pub struct KeyframeAnimation {
+    /// 剪辑名（日志 / 编辑器显示用，不影响播放）。
+    pub name: String,
+    /// 剪辑时长（秒）；`0` = 由三条轨道里最后一个关键帧推导。
+    ///
+    /// 比最后一帧更长时，末帧之后保持最后一帧的值。
+    pub duration: f32,
+    /// 播放倍率；`0` 等于暂停，负数倒放。
+    pub speed: f32,
+    /// 是否循环；`false` 时播到 `duration` 停在末帧。
+    pub looped: bool,
+    /// 是否播放（暂停时保持当前姿势）。
+    pub playing: bool,
+    /// 起始时间偏移（秒）。
+    pub phase: f32,
+    /// 位置轨道。
+    pub position: Vec<crate::animation::Vec3Key>,
+    /// 旋转轨道（XYZ 欧拉角，度）。
+    pub euler_xyz: Vec<crate::animation::Vec3Key>,
+    /// 缩放轨道。
+    pub scale: Vec<crate::animation::Vec3Key>,
+}
+
+impl Default for KeyframeAnimation {
+    fn default() -> Self {
+        Self {
+            name: "clip".into(),
+            duration: 0.0,
+            speed: 1.0,
+            looped: true,
+            playing: true,
+            phase: 0.0,
+            position: Vec::new(),
+            euler_xyz: Vec::new(),
+            scale: Vec::new(),
+        }
+    }
+}
+
+impl KeyframeAnimation {
+    /// 有效时长：`duration > 0` 用它，否则取三条轨道里最晚的关键帧。
+    pub fn clip_duration(&self) -> f32 {
+        if self.duration > 0.0 && self.duration.is_finite() {
+            return self.duration;
+        }
+        crate::animation::max_key_time(&self.position)
+            .max(crate::animation::max_key_time(&self.euler_xyz))
+            .max(crate::animation::max_key_time(&self.scale))
+    }
+
+    /// 三条轨道是否都为空（空剪辑不驱动任何通道）。
+    pub fn is_empty(&self) -> bool {
+        self.position.is_empty() && self.euler_xyz.is_empty() && self.scale.is_empty()
+    }
+
+    /// 采样 `local_time`（已按循环 / 端点处理过的时间）。
+    pub fn sample(&self, local_time: f32) -> crate::animation::ClipSample {
+        crate::animation::ClipSample {
+            position: crate::animation::sample_vec3(&self.position, local_time),
+            euler_xyz: crate::animation::sample_vec3(&self.euler_xyz, local_time),
+            scale: crate::animation::sample_vec3(&self.scale, local_time),
         }
     }
 }

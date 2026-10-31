@@ -305,3 +305,58 @@ fn topological_order_resolves_non_contiguous_ids() {
     // 索引而非 id：40 → 0，12 → 1，3 → 2。
     assert_eq!(order, vec![0, 1, 2]);
 }
+
+#[test]
+fn keyframe_animation_tracks_cook_and_decode() {
+    // 轨道是「结构体列表」，最容易在 RSCN 的位置化编码里掉数据（#490）。
+    let mut registry = ComponentRegistry::new();
+    register_builtin_components(&mut registry);
+    let scene = SceneJson::parse(
+        r#"{
+            "version": 3,
+            "entities": [{
+                "id": 0,
+                "name": "Bob",
+                "components": {
+                    "prism_engine::scene::KeyframeAnimation": {
+                        "name": "walk",
+                        "duration": 2.0,
+                        "speed": 1.0,
+                        "looped": true,
+                        "playing": true,
+                        "phase": 0.0,
+                        "position": [
+                            {"time": 0.0, "value": [0,0,0]},
+                            {"time": 2.0, "value": [0,0,4]}
+                        ],
+                        "euler_xyz": [{"time": 0.0, "value": [0,0,0]}],
+                        "scale": []
+                    }
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let bytes = crate::encode_scene(&scene, &registry).expect("scene with a clip must cook");
+    let decoded = crate::decode_scene(&bytes, &registry).expect("cooked scene must decode");
+    let clip = decoded.entities[0]
+        .components
+        .iter()
+        .find(|component| component.type_name == "prism_engine::scene::KeyframeAnimation")
+        .expect("clip component must survive the cook");
+
+    let mut world = prism_ecs::World::new();
+    let entity = world.spawn();
+    assert!(registry.apply_object(&mut world, entity, clip));
+    let clip = world
+        .get::<crate::components::KeyframeAnimation>(entity)
+        .expect("clip must apply to the world");
+    assert_eq!(clip.name, "walk");
+    assert_eq!(clip.clip_duration(), 2.0);
+    assert_eq!(clip.position.len(), 2);
+    assert_eq!(clip.position[1].time, 2.0);
+    assert_eq!(clip.position[1].value, [0.0, 0.0, 4.0]);
+    assert_eq!(clip.euler_xyz.len(), 1);
+    assert!(clip.scale.is_empty());
+}

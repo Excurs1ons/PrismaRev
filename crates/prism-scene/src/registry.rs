@@ -483,6 +483,12 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     // `LocalTransform`，留下一个按旧变换算出的世界矩阵。
     registry.register_reflect_type::<LocalTransform>();
 
+    // ── 关键帧动画 ──
+    // 轨道里的是嵌套结构体，先登记类型（RTTIBin 类型表 / 编辑器字段描述），
+    // 再登记组件本身。
+    registry.register_reflect_type::<crate::animation::Vec3Key>();
+    registry.register_reflect_serde::<KeyframeAnimation>("prism_engine::scene::KeyframeAnimation");
+
     // ── 预制体实例（编辑器元数据）──
     registry.register_reflect_serde::<PrefabInstance>("prism_engine::scene::PrefabInstance");
 
