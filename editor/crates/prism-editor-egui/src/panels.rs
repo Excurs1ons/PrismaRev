@@ -1533,6 +1533,8 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
             line_renderer_editor(ui, workspace, entity_id, &schema.name, &value);
         } else if name == "prism_engine::scene::SpriteAnimation" {
             sprite_animation_editor(ui, workspace, index, entity_id, &value);
+        } else if name == "prism_engine::scene::KeyframeAnimation" {
+            keyframe_animation_editor(ui, workspace, entity_id, &schema.name, &value);
         }
     }
     for action in actions {
@@ -1734,6 +1736,221 @@ fn set_sprite_frame(workspace: &mut Workspace, entity_id: u32, frame: u32) {
         "frame_index",
         json!(frame),
     );
+}
+
+/// 三条轨道的字段名 / 显示名 / 空轨道时的「单位值」。
+///
+/// 旋转写欧拉角（度），与组件本身和 `DirectionalLight` 的约定一致。
+const CLIP_TRACKS: [(&str, &str, [f32; 3]); 3] = [
+    ("position", "Position", [0.0, 0.0, 0.0]),
+    ("euler_xyz", "Rotation (deg)", [0.0, 0.0, 0.0]),
+    ("scale", "Scale", [1.0, 1.0, 1.0]),
+];
+
+/// 「关键帧」编辑区（`KeyframeAnimation`）。
+///
+/// 通用 reflect 卡片只能把轨道当只读 JSON 显示，这里给出真正能改的表格：
+/// 每行「时间 + 三分量」，加 / 删关键帧，写入时按时间排序（采样假设升序）。
+/// 播放本身在引擎侧（Play 时才跑），所以这里不画曲线预览。
+fn keyframe_animation_editor(
+    ui: &mut Ui,
+    workspace: &mut Workspace,
+    entity_id: u32,
+    component: &str,
+    value: &Value,
+) {
+    let mut longest = 0.0f32;
+    for (field, _, _) in CLIP_TRACKS {
+        for key in value
+            .get(field)
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            longest = longest.max(time_of(key) as f32);
+        }
+    }
+    let duration = value
+        .get("duration")
+        .and_then(Value::as_f64)
+        .unwrap_or_default();
+    let length_label = if duration > 0.0 {
+        format!("{duration:.2}s")
+    } else {
+        format!("{longest:.2}s (auto)")
+    };
+    ui.label(
+        RichText::new(format!("Keyframes · {length_label}"))
+            .strong()
+            .size(11.0),
+    );
+
+    for (field, label, identity) in CLIP_TRACKS {
+        let keys = value
+            .get(field)
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if let Some(updated) = keyframe_track_editor(ui, label, field, keys, identity) {
+            workspace.set_field(entity_id, component, field, Value::Array(updated));
+        }
+    }
+}
+
+/// 单条轨道的表格；返回 `Some` 表示需要写回新数组。
+fn keyframe_track_editor(
+    ui: &mut Ui,
+    label: &str,
+    field: &str,
+    keys: &[Value],
+    identity: [f32; 3],
+) -> Option<Vec<Value>> {
+    let mut updated = keys.to_vec();
+    let mut remove = None;
+    let mut dirty = false;
+    egui::CollapsingHeader::new(format!("{label} ({})", keys.len()))
+        .id_salt(("clip-track", field))
+        .default_open(true)
+        .show(ui, |ui| {
+            for (index, key) in keys.iter().enumerate() {
+                let mut time = time_of(key) as f32;
+                let mut coords = identity;
+                for (axis, coord) in coords.iter_mut().enumerate() {
+                    *coord = key
+                        .get("value")
+                        .and_then(|value| value.get(axis))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(identity[axis] as f64) as f32;
+                }
+                let (changed, remove_clicked) = ui
+                    .horizontal(|ui| {
+                        let mut changed = ui
+                            .add(
+                                egui::DragValue::new(&mut time)
+                                    .speed(0.01)
+                                    .range(0.0..=3600.0)
+                                    .suffix("s"),
+                            )
+                            .changed();
+                        for (axis, coord) in coords.iter_mut().enumerate() {
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(coord)
+                                        .speed(0.01)
+                                        .prefix(["X ", "Y ", "Z "][axis]),
+                                )
+                                .changed();
+                        }
+                        let remove_clicked =
+                            ui.small_button("x").on_hover_text("Remove key").clicked();
+                        (changed, remove_clicked)
+                    })
+                    .inner;
+                if remove_clicked {
+                    remove = Some(index);
+                }
+                // 同一行的改动合并成一次写回。
+                if changed {
+                    updated[index] = json!({ "time": time, "value": coords });
+                    dirty = true;
+                }
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button("+ Key")
+                    .on_hover_text("Append a key one second after the last one")
+                    .clicked()
+                {
+                    append_key(&mut updated, identity);
+                    dirty = true;
+                }
+            });
+        });
+    if let Some(index) = remove {
+        if index < updated.len() {
+            updated.remove(index);
+            dirty = true;
+        }
+    }
+    if !dirty {
+        return None;
+    }
+    // 采样按时间升序（同时间保持插入顺序），所以写回前统一排序。
+    sort_key_values(&mut updated);
+    Some(updated)
+}
+
+/// 在轨道末尾追加一个关键帧：时间 = 上一个 +1 秒，值沿用上一个（空轨道用单位值）。
+fn append_key(keys: &mut Vec<Value>, identity: [f32; 3]) {
+    let last = keys.last();
+    let time = last.map(|key| time_of(key) + 1.0).unwrap_or_default();
+    let value = last
+        .and_then(|key| key.get("value"))
+        .cloned()
+        .unwrap_or_else(|| json!(identity));
+    keys.push(json!({ "time": time, "value": value }));
+}
+
+/// 按时间稳定排序；同一时刻保持插入顺序（采样假设升序）。
+fn sort_key_values(keys: &mut [Value]) {
+    keys.sort_by(|a, b| time_of(a).total_cmp(&time_of(b)));
+}
+
+fn time_of(key: &Value) -> f64 {
+    key.get("time").and_then(Value::as_f64).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod keyframe_editor_tests {
+    use super::*;
+
+    #[test]
+    fn appending_a_key_lands_one_second_after_the_last_one() {
+        let mut keys = vec![json!({"time": 0.0, "value": [0.0, 0.0, 0.0]})];
+        append_key(&mut keys, [1.0, 1.0, 1.0]);
+        assert_eq!(keys[1], json!({"time": 1.0, "value": [0.0, 0.0, 0.0]}));
+    }
+
+    #[test]
+    fn the_first_key_of_an_empty_track_uses_the_identity_value() {
+        let mut keys: Vec<Value> = Vec::new();
+        append_key(&mut keys, [1.0, 1.0, 1.0]);
+        assert_eq!(keys[0], json!({"time": 0.0, "value": [1.0, 1.0, 1.0]}));
+    }
+
+    #[test]
+    fn the_track_rows_render_without_writing_when_nothing_is_touched() {
+        let ctx = egui::Context::default();
+        let keys = vec![
+            json!({"time": 0.0, "value": [0.0, 0.0, 0.0]}),
+            json!({"time": 1.0, "value": [0.0, 2.0, 0.0]}),
+        ];
+        let mut written = None;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                written = keyframe_track_editor(ui, "Position", "position", &keys, [0.0; 3]);
+            });
+        });
+        assert!(
+            written.is_none(),
+            "only user edits may write the track back"
+        );
+    }
+
+    #[test]
+    fn sorting_keyframes_keeps_equal_times_in_insertion_order() {
+        let mut keys = vec![
+            json!({"time": 2.0, "value": [2.0, 0.0, 0.0]}),
+            json!({"time": 0.0, "value": [0.0, 0.0, 0.0]}),
+            json!({"time": 2.0, "value": [7.0, 0.0, 0.0]}),
+        ];
+        sort_key_values(&mut keys);
+        let order: Vec<f64> = keys
+            .iter()
+            .map(|key| key["value"][0].as_f64().unwrap())
+            .collect();
+        assert_eq!(order, vec![0.0, 2.0, 7.0]);
+    }
 }
 
 #[cfg(test)]

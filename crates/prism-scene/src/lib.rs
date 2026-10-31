@@ -6,6 +6,7 @@
 //! into RSCN; the engine uses it to turn RSCN back into ECS components. Both
 //! sides therefore share one schema and one registry.
 
+pub mod animation;
 pub mod components;
 pub mod helpers;
 pub mod json;

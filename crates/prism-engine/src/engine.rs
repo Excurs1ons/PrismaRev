@@ -611,6 +611,13 @@ fn default_schedule() -> Schedule {
         crate::scene::systems::animation::sprite_animation_system(world, dt)
     });
 
+    // ── 关键帧动画 ──────────────────────────────────────────
+    // 采样 `KeyframeAnimation` → `LocalTransform`。`Engine::update` 在调度之后
+    // 才跑 `hierarchy_system`，所以同一帧的世界矩阵就是动画后的姿势。
+    s.add_system("clip::animation", |world, dt| {
+        crate::scene::systems::animation::keyframe_animation_system(world, dt)
+    });
+
     // ── UI 布局 ─────────────────────────────────────────────
     // 每帧重新计算所有 UI 元素的屏幕空间矩形。
     s.add_system("ui::layout", |world, _dt| {
