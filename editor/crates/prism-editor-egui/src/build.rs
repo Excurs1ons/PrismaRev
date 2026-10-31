@@ -13,8 +13,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use crate::diagnostics::{parse_cargo_line, Diagnostic, MAX_DIAGNOSTICS};
 
 /// 一次构建任务。
 pub struct BuildJob {
@@ -22,6 +24,8 @@ pub struct BuildJob {
     label: String,
     running: bool,
     cancel: Arc<AtomicBool>,
+    /// `cargo build` 的 JSON 诊断；Console 仍然收到一行摘要，Problems 面板拿结构化数据。
+    diagnostics: Arc<Mutex<Vec<Diagnostic>>>,
 }
 
 pub enum BuildKind {
@@ -93,11 +97,17 @@ impl BuildKind {
             Ok(args)
         };
         let player = |verb: &str| {
-            vec![
+            let mut args = vec![
                 verb.to_string(),
                 "--manifest-path".to_string(),
                 game_manifest_path(root).display().to_string(),
-            ]
+            ];
+            // `cargo run` 的 stdout 是游戏自己的输出，不能混进 JSON。
+            if verb == "build" {
+                args.push("--message-format".to_string());
+                args.push("json-render-diagnostics".to_string());
+            }
+            args
         };
         Ok(match self {
             BuildKind::ScenePack => vec![pipeline(&["build-scenes"])?],
@@ -135,6 +145,43 @@ fn forward_lines(
     })
 }
 
+/// `cargo --message-format=json-render-diagnostics` 的 stdout：解析成诊断，
+/// 同时在 Console 留一行人类可读的摘要（JSON 本身没人想看）。
+fn forward_cargo_json(
+    stream: impl Read + Send + 'static,
+    tx: Sender<String>,
+    root: PathBuf,
+    diagnostics: Arc<Mutex<Vec<Diagnostic>>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for line in BufReader::new(stream).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let Some(diagnostic) = parse_cargo_line(&line, &root) else {
+                // cargo 偶尔混入非 JSON 行；JSON 事件本身已经由诊断/摘要覆盖。
+                if !line.trim_start().starts_with('{') && tx.send(line).is_err() {
+                    break;
+                }
+                continue;
+            };
+            let text = diagnostic.console_line();
+            let stored = {
+                let mut diagnostics = diagnostics.lock().unwrap();
+                if diagnostics.len() < MAX_DIAGNOSTICS {
+                    diagnostics.push(diagnostic);
+                    true
+                } else {
+                    false
+                }
+            };
+            if stored && tx.send(text).is_err() {
+                break;
+            }
+        }
+    })
+}
+
 impl BuildJob {
     /// 启动任务。`root` 是项目根（含 `assets/` 与根 `Cargo.toml`）。
     pub fn spawn(kind: BuildKind, root: &Path) -> Self {
@@ -143,6 +190,8 @@ impl BuildJob {
         let root = root.to_path_buf();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        let worker_diagnostics = Arc::clone(&diagnostics);
         std::thread::spawn(move || {
             let commands = match kind.commands(&root) {
                 Ok(commands) => commands,
@@ -171,10 +220,33 @@ impl BuildJob {
                     }
                 };
 
+                // 这一步是不是结构化诊断模式（只有 `cargo build` 带这个参数）。
+                let json = args.iter().any(|arg| arg == "json-render-diagnostics");
+                if json {
+                    worker_diagnostics.lock().unwrap().clear();
+                }
+                // 诊断里的 span 相对 workspace 根（`--manifest-path` 的父目录）。
+                let span_root = args
+                    .iter()
+                    .position(|arg| arg == "--manifest-path")
+                    .and_then(|index| args.get(index + 1))
+                    .map(PathBuf::from)
+                    .and_then(|manifest| manifest.parent().map(Path::to_path_buf))
+                    .unwrap_or_else(|| root.clone());
+
                 // stdout / stderr 各一个读线程，保证两路输出都不会互相饿死。
                 let mut readers = Vec::new();
                 if let Some(stdout) = child.stdout.take() {
-                    readers.push(forward_lines(stdout, tx.clone()));
+                    readers.push(if json {
+                        forward_cargo_json(
+                            stdout,
+                            tx.clone(),
+                            span_root,
+                            Arc::clone(&worker_diagnostics),
+                        )
+                    } else {
+                        forward_lines(stdout, tx.clone())
+                    });
                 }
                 if let Some(stderr) = child.stderr.take() {
                     readers.push(forward_lines(stderr, tx.clone()));
@@ -221,7 +293,13 @@ impl BuildJob {
             label,
             running: true,
             cancel,
+            diagnostics,
         }
+    }
+
+    /// 取走后台线程解析出的编译器诊断（Problems 面板用）。
+    pub fn take_diagnostics(&self) -> Vec<Diagnostic> {
+        std::mem::take(&mut *self.diagnostics.lock().unwrap())
     }
 
     pub fn label(&self) -> &str {
@@ -307,13 +385,27 @@ mod tests {
             vec![
                 "build".to_string(),
                 "--manifest-path".to_string(),
-                root.join("Cargo.toml").display().to_string()
+                root.join("Cargo.toml").display().to_string(),
+                "--message-format".to_string(),
+                "json-render-diagnostics".to_string(),
             ]
         );
         assert_eq!(
             game_manifest_path(&repo),
             repo.join("projects/prisma/Cargo.toml")
         );
+    }
+
+    /// 玩家构建要 JSON 诊断；`cargo run` 不能加（游戏自己的 stdout 会被污染）。
+    #[test]
+    fn only_the_player_build_asks_for_json_diagnostics() {
+        let repo = repo_root();
+        let build = BuildKind::Player.commands(&repo).unwrap();
+        assert!(mentions(&build[1], "json-render-diagnostics"));
+        let run = BuildKind::PlayerRun.commands(&repo).unwrap();
+        assert!(!mentions(&run[1], "json-render-diagnostics"));
+        let pack = BuildKind::ScenePack.commands(&repo).unwrap();
+        assert!(!mentions(&pack[0], "json-render-diagnostics"));
     }
 
     #[test]

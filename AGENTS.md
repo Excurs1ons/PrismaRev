@@ -166,7 +166,8 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
     Windows). Auto Refresh can be disabled; `Ctrl+R` forces a rebuild. The toolbar
     shows the module state (ready / changes not compiled / compiling / failed), and
     `cargo --message-format=json-render-diagnostics` is parsed into the Problems panel
-    (`file:line:col`, click to open). Reload replaces the whole module — never call it
+    (`file:line:col`, click to open); the player build (`BuildKind::Player`) uses the same
+    parser, `cargo run` must not. Reload replaces the whole module — never call it
     "hot reload".
   - Compilation runs **off** the viewport thread and reports progress through
     `ViewportSnapshot.build`; scene cook/pack and project builds report through

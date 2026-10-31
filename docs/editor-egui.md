@@ -97,6 +97,9 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
   `cargo --message-format=json-render-diagnostics` 的 error / warning，带
   `file:line:col`，点一行用默认编辑器打开（先试 `code -g`，没有 `code` 就交给
   系统默认处理程序）。编译成功时 warning 也保留；失败时第一条 error 同时进 Console。
+  面板有两段：**Project module**（Game View 的 `preview-module`）和
+  **Player build**（`File → Build Player` 的 `cargo build`，它只在这一步加
+  `--message-format`，`Build And Run` 的 `cargo run` 不加，否则会污染游戏 stdout）。
 - Play 前如果模块已加载但源码有未编译改动（Auto Refresh 关、或上一次 build 被 Play
   挡住），会先补编一次，避免试玩跑旧代码。
 - Play 每帧先 `ProjectSession::tick(WorldCommands)`，再跑引擎 system：项目写入的
@@ -168,8 +171,8 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
 - **Project（资产）**：后退 / 前进 / 面包屑、目录浏览、类型过滤、搜索、重命名 /
   复制 / 删除 / 复制路径 / 实例化预制体；**资产可拖拽**：拖到目录 = 移动并改写引用，
   拖到层级实体 = 实例化预制体，拖到检查器的路径字段 = 直接写入路径（`AssetDrag` 载荷）。
-- **Problems**：项目模块编译的 error / warning 列表（`file:line:col`），点一行打开
-  源码；工具栏的模块状态与它同源，`Ctrl+R` / `Compile` 重新编译。
+- **Problems**：项目模块与玩家构建的 error / warning 列表（`file:line:col`），
+  点一行打开源码；工具栏的模块状态与第一段同源，`Ctrl+R` / `Compile` 重新编译。
 - **Docking**：拖动标签页（行为）：拖到另一个 leaf 的左/右/上/下 25% = 分屏，
   中间 = 合并成标签，拖出面板区 = 浮动窗口，拖到本 leaf 边缘 = 原地分屏。
 - **预制体**：实例区块有 Revert / Sync All / **Apply to Prefab**（当前子树覆盖预制体

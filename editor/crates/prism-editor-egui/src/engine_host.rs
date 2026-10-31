@@ -28,7 +28,8 @@ use prism_engine::Engine;
 use prism_render::descriptor::FrameUBOData;
 use prism_render::{FrameInput, GraphRenderer, VulkanContext};
 
-use crate::project_module::{Diagnostic, ProjectEvent, ProjectModuleDriver, ProjectModuleStatus};
+use crate::diagnostics::Diagnostic;
+use crate::project_module::{ProjectEvent, ProjectModuleDriver, ProjectModuleStatus};
 
 /// 视口种类：Scene view 用编辑器轨道相机，Game view 用文档相机。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

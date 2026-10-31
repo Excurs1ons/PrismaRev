@@ -10,7 +10,7 @@ use prism_editor_core::{
 };
 use serde_json::{json, Value};
 
-use crate::{project_module::Diagnostic, theme, widgets};
+use crate::{diagnostics::Diagnostic, theme, widgets};
 use egui_phosphor::regular as icons;
 
 /// 在系统文件管理器里定位一个项目内资产（引擎的 `Reveal in Finder` / `Show in Explorer`）。
@@ -1878,32 +1878,31 @@ pub fn log(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         });
 }
 
-/// Problems 面板：项目模块编译的 error / warning，点一行跳到源码位置。
+/// Problems 面板：编译的 error / warning，点一行跳到源码位置。
 ///
-/// 这是“编译控制”的可观测部分：状态栏只回答“编没编 / 成没成”，
-/// 这里回答“哪个文件哪一行”。诊断由 `cargo --message-format=json` 提供。
-pub fn problems(ui: &mut Ui, diagnostics: &[Diagnostic], state: &mut UiState) {
-    let errors = diagnostics
+/// 两个来源并列：Game View 的项目模块（preview-module）和
+/// `File → Build Player` 的 `cargo build`。诊断都由 `cargo --message-format=json` 提供。
+pub fn problems(ui: &mut Ui, module: &[Diagnostic], build: &[Diagnostic], state: &mut UiState) {
+    let errors = module
         .iter()
+        .chain(build)
         .filter(|diagnostic| diagnostic.level == LogLevel::Error)
         .count();
-    let warnings = diagnostics.len() - errors;
+    let warnings = module.len() + build.len() - errors;
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{errors} errors · {warnings} warnings")).size(11.0));
         ui.label(
-            RichText::new("project module build · Ctrl+R recompiles")
+            RichText::new("module build · player build")
                 .weak()
                 .size(10.5),
         );
     });
     ui.separator();
-    if diagnostics.is_empty() {
+    if module.is_empty() && build.is_empty() {
         ui.label(
-            RichText::new(
-                "No problems. Errors and warnings from the project module build appear here.",
-            )
-            .weak()
-            .size(11.0),
+            RichText::new("No problems. Compiler errors and warnings appear here.")
+                .weak()
+                .size(11.0),
         );
         return;
     }
@@ -1912,41 +1911,48 @@ pub fn problems(ui: &mut Ui, diagnostics: &[Diagnostic], state: &mut UiState) {
         .id_salt("problems-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for diagnostic in diagnostics {
-                let (icon, color) = match diagnostic.level {
-                    LogLevel::Error => (icons::X_CIRCLE, Color32::from_rgb(232, 96, 96)),
-                    _ => (icons::WARNING, Color32::from_rgb(224, 176, 80)),
-                };
-                let location = diagnostic.location();
-                let mut response = ui
-                    .horizontal(|ui| {
-                        ui.label(RichText::new(icon).size(12.0).color(color));
-                        ui.label(RichText::new(&diagnostic.message).size(11.0));
-                        if let Some(location) = &location {
-                            ui.label(RichText::new(location).weak().size(10.0));
-                        }
-                    })
-                    .response;
-                if location.is_some() {
-                    response = response
-                        .interact(Sense::click())
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("Open this location in the default editor");
-                    if response.clicked() {
-                        if let Some(file) = diagnostic.file.as_deref() {
-                            state.status = match open_source_location(
-                                file,
-                                diagnostic.line,
-                                diagnostic.column,
-                            ) {
-                                Ok(()) => format!("opened {}", file.display()),
-                                Err(error) => error,
-                            };
-                        }
-                    }
+            problem_section(ui, "Project module (Ctrl+R recompiles)", module, state);
+            problem_section(ui, "Player build", build, state);
+        });
+}
+
+fn problem_section(ui: &mut Ui, title: &str, diagnostics: &[Diagnostic], state: &mut UiState) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    ui.label(RichText::new(title).size(10.5).weak());
+    for diagnostic in diagnostics {
+        let (icon, color) = match diagnostic.level {
+            LogLevel::Error => (icons::X_CIRCLE, Color32::from_rgb(232, 96, 96)),
+            _ => (icons::WARNING, Color32::from_rgb(224, 176, 80)),
+        };
+        let location = diagnostic.location();
+        let mut response = ui
+            .horizontal(|ui| {
+                ui.label(RichText::new(icon).size(12.0).color(color));
+                ui.label(RichText::new(&diagnostic.message).size(11.0));
+                if let Some(location) = &location {
+                    ui.label(RichText::new(location).weak().size(10.0));
+                }
+            })
+            .response;
+        if location.is_some() {
+            response = response
+                .interact(Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Open this location in the default editor");
+            if response.clicked() {
+                if let Some(file) = diagnostic.file.as_deref() {
+                    state.status =
+                        match open_source_location(file, diagnostic.line, diagnostic.column) {
+                            Ok(()) => format!("opened {}", file.display()),
+                            Err(error) => error,
+                        };
                 }
             }
-        });
+        }
+    }
+    ui.add_space(4.0);
 }
 
 /// 在默认编辑器里打开源码位置（best effort）：先试 VS Code 的 `-g file:line:col`，
