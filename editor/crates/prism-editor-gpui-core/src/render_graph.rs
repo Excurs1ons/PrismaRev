@@ -18,6 +18,9 @@ pub struct RenderGraphReport {
     pub passes: Vec<ReportPass>,
     #[serde(default)]
     pub resources: Vec<ReportResource>,
+    /// 上一帧总 GPU 时间（ms）；设备不支持时间戳时缺失。
+    #[serde(default)]
+    pub gpu_total_ms: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -32,6 +35,9 @@ pub struct ReportPass {
     pub inputs: Vec<u32>,
     #[serde(default)]
     pub outputs: Vec<u32>,
+    /// 该 pass 上一帧的 GPU 时间（ms，#518）。
+    #[serde(default, rename = "gpuMs")]
+    pub gpu_ms: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -62,6 +68,27 @@ impl RenderGraphReport {
             .find(|resource| resource.handle == handle)
             .map(|resource| resource.name.clone())
             .unwrap_or_else(|| format!("resource#{handle}"))
+    }
+
+    /// 解析报告文本（面板手里的 JSON 字符串）。
+    pub fn parse(text: &str) -> Option<Self> {
+        serde_json::from_str(text).ok()
+    }
+
+    /// 有 GPU 计时数据时的总时间。
+    pub fn gpu_total_ms(&self) -> Option<f32> {
+        self.gpu_total_ms
+    }
+
+    /// 按 GPU 时间从高到低排的 pass（没有计时数据的排最后）。
+    pub fn passes_by_cost(&self) -> Vec<&ReportPass> {
+        let mut passes: Vec<&ReportPass> = self.passes.iter().collect();
+        passes.sort_by(|a, b| {
+            b.gpu_ms
+                .unwrap_or(-1.0)
+                .total_cmp(&a.gpu_ms.unwrap_or(-1.0))
+        });
+        passes
     }
 
     /// 解析报告文件；损坏 / 缺字段时返回 `None`。
@@ -108,6 +135,42 @@ mod tests {
         assert_eq!(report.resource_name(2), "shadow_map");
         assert_eq!(report.resource_name(99), "resource#99");
         assert_eq!(report.resources[1].format.as_deref(), Some("D32_SFLOAT"));
+    }
+
+    #[test]
+    fn gpu_timings_parse_and_sort_by_cost() {
+        let json = r#"{
+            "frame": 12,
+            "gpuTotalMs": 7.5,
+            "passes": [
+                {"index":0,"name":"ShadowMapPass","kind":"shadow","gpuMs":1.25},
+                {"index":1,"name":"ForwardPass","kind":"forward","gpuMs":5.5},
+                {"index":2,"name":"PostPass","kind":"post"}
+            ],
+            "resources": []
+        }"#;
+        let report = RenderGraphReport::parse(json).expect("parses");
+        assert_eq!(report.gpu_total_ms(), Some(7.5));
+        let ordered: Vec<&str> = report
+            .passes_by_cost()
+            .iter()
+            .map(|pass| pass.name.as_str())
+            .collect();
+        assert_eq!(
+            ordered,
+            vec!["ForwardPass", "ShadowMapPass", "PostPass"],
+            "most expensive first, un-timed passes last"
+        );
+        assert_eq!(report.passes[0].gpu_ms, Some(1.25));
+        assert_eq!(report.passes[2].gpu_ms, None);
+    }
+
+    #[test]
+    fn a_report_without_timings_has_no_gpu_total() {
+        let report =
+            RenderGraphReport::parse(r#"{"frame":1,"passes":[],"resources":[]}"#).expect("parses");
+        assert_eq!(report.gpu_total_ms(), None);
+        assert!(report.passes_by_cost().is_empty());
     }
 
     #[test]

@@ -3949,12 +3949,19 @@ pub fn render_graph(
                     .weak()
                     .size(10.0),
             );
-            egui::ScrollArea::both()
-                .id_salt("graph-scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.label(RichText::new(json).monospace().size(10.0));
-                });
+            let parsed = prism_editor_core::render_graph::RenderGraphReport::parse(json);
+            if let Some(parsed) = &parsed {
+                render_graph_timings(ui, parsed);
+            }
+            ui.collapsing("Raw JSON", |ui| {
+                egui::ScrollArea::both()
+                    .id_salt("graph-scroll")
+                    .auto_shrink([false, false])
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(json).monospace().size(10.0));
+                    });
+            });
         }
         None => {
             ui.label(
@@ -3966,6 +3973,67 @@ pub fn render_graph(
         }
     }
     changed
+}
+
+/// 每帧预算（16.6 ms ≈ 60 FPS），超过的 pass 标红。
+const FRAME_BUDGET_MS: f32 = 16.6;
+
+/// per-pass GPU 时间表（#518）：总时间 + 按成本从高到低排的 pass。
+///
+/// 数据来自渲染器的时间戳查询（延迟一帧）。设备不支持时整段隐藏 —— 面板只显示
+/// 「没有 GPU 计时」，不会拿 CPU 墙钟冒充 GPU 时间。
+fn render_graph_timings(ui: &mut Ui, report: &prism_editor_core::render_graph::RenderGraphReport) {
+    let Some(total) = report.gpu_total_ms() else {
+        ui.label(
+            RichText::new("No GPU timings (device does not report timestamps).")
+                .weak()
+                .size(11.0),
+        );
+        return;
+    };
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("GPU").strong());
+        let color = if total > FRAME_BUDGET_MS {
+            Color32::from_rgb(232, 96, 96)
+        } else {
+            Color32::from_rgb(120, 200, 140)
+        };
+        ui.label(RichText::new(format!("{total:.2} ms")).color(color));
+        ui.label(
+            RichText::new(format!("budget {FRAME_BUDGET_MS:.1} ms"))
+                .weak()
+                .size(10.0),
+        );
+    });
+
+    egui::Grid::new("graph-pass-timings")
+        .num_columns(3)
+        .spacing([12.0, 3.0])
+        .show(ui, |ui| {
+            ui.label(RichText::new("Pass").weak().size(10.0));
+            ui.label(RichText::new("Kind").weak().size(10.0));
+            ui.label(RichText::new("GPU ms").weak().size(10.0));
+            ui.end_row();
+            for pass in report.passes_by_cost() {
+                ui.label(RichText::new(&pass.name).size(11.0));
+                ui.label(RichText::new(&pass.kind).weak().size(11.0));
+                match pass.gpu_ms {
+                    Some(ms) => {
+                        let color = if ms > FRAME_BUDGET_MS * 0.5 {
+                            Color32::from_rgb(226, 178, 84)
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        ui.label(RichText::new(format!("{ms:.2}")).size(11.0).color(color));
+                    }
+                    None => {
+                        ui.label(RichText::new("—").weak().size(11.0));
+                    }
+                }
+                ui.end_row();
+            }
+        });
 }
 
 // ---------------------------------------------------------------------------

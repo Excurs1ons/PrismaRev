@@ -282,6 +282,10 @@ pub struct GraphRenderer {
     pending_screenshot: Option<crate::screenshot::ScreenshotRequest>,
     /// 已经记录进命令缓冲区、等待帧提交后读回的截图。
     screenshot: Option<crate::screenshot::ScreenshotCapture>,
+    /// per-pass GPU 时间戳池（#518）；设备不支持时为 `None`。
+    gpu_timer: Option<crate::gpu_timer::GpuTimer>,
+    /// 最近一次读回的 per-pass GPU 时间（延迟一帧）。
+    gpu_timings: crate::gpu_timer::GpuTimings,
 
     // ── 最后一个 field ──────────────────────────────────────────────────
     /// Long-lived GPU session 设备 命令 池 descriptors, UBOs).
@@ -544,6 +548,14 @@ impl GraphRenderer {
         }
         graph.add_pass(Box::new(post_pass));
 
+        // per-pass GPU 计时（#518）：设备不支持时间戳时是 `None`（面板回退到 CPU 墙钟）。
+        let gpu_timer = crate::gpu_timer::GpuTimer::new(
+            &context.instance,
+            &context.device,
+            context.physical_device,
+            runtime.command_buffers.len(),
+        )?;
+
         Ok(Self {
             swapchain: Some(swapchain),
             vsync,
@@ -571,6 +583,8 @@ impl GraphRenderer {
             headless_fence: vk::Fence::null(),
             pending_screenshot: None,
             screenshot: None,
+            gpu_timer,
+            gpu_timings: Default::default(),
         })
     }
     // -------------------------------------------------------------------
@@ -877,6 +891,13 @@ impl GraphRenderer {
             )?;
         }
 
+        let gpu_timer = crate::gpu_timer::GpuTimer::new(
+            &context.instance,
+            &context.device,
+            context.physical_device,
+            runtime.command_buffers.len(),
+        )?;
+
         Ok(Self {
             swapchain: None,
             vsync: false,
@@ -902,6 +923,8 @@ impl GraphRenderer {
             is_headless: true,
             pending_screenshot: None,
             screenshot: None,
+            gpu_timer,
+            gpu_timings: Default::default(),
             offscreen: Some(offscreen),
             headless_fence,
         })
@@ -1625,6 +1648,8 @@ impl GraphRenderer {
                 }
             }
 
+            self.begin_gpu_timings(&device, 0);
+
             let cmd = self.runtime.command_buffers[0];
             unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
                 .context("reset command buffer (headless)")?;
@@ -1678,6 +1703,9 @@ impl GraphRenderer {
         let cmd = self.runtime.command_buffers[frame];
         let extent = self.extent();
 
+        // 上一帧（同一帧槽位）的时间戳结果现在一定写好了（acquire 已等过栅栏）。
+        self.begin_gpu_timings(&device, frame as u32);
+
         // --- Reset & 开始 命令 缓冲区 ---
         unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
             .context("reset command buffer")?;
@@ -1695,6 +1723,24 @@ impl GraphRenderer {
             image_available,
             render_finished,
         }))
+    }
+
+    /// 读回该帧槽位上一轮的时间戳，并清空它给本帧用（#518）。
+    fn begin_gpu_timings(&mut self, device: &ash::Device, frame_index: u32) {
+        let Some(timer) = self.gpu_timer.as_mut() else {
+            return;
+        };
+        timer.begin_frame(device, frame_index);
+        self.gpu_timings = timer.timings(frame_index).clone();
+    }
+
+    /// 最近一帧的 per-pass GPU 时间。
+    ///
+    /// `supported = false`（或 `passes` 为空）表示设备不支持时间戳，调用方应回退到
+    /// CPU 墙钟（`frame_time_ms`）。结果比当前帧**晚一帧**：Vulkan 的时间戳只在
+    /// 提交完成后才可读，延迟读回才不会 stall 管线。
+    pub fn gpu_timings(&self) -> &crate::gpu_timer::GpuTimings {
+        &self.gpu_timings
     }
 
     /// 准备阶段：在命令录制前批量同步 CPU 场景状态和 GPU 资源。
@@ -1855,7 +1901,10 @@ impl GraphRenderer {
                 extent,
                 frame: &graph_frame,
             };
-            record = self.graph.execute(&render_ctx).context("graph execute");
+            record = self
+                .graph
+                .execute_with_timer(&render_ctx, self.gpu_timer.as_mut())
+                .context("graph execute");
         }
 
         // --- ECS UI 叠加 (quads + fontdue glyph text) ---
@@ -2230,6 +2279,10 @@ impl GraphRenderer {
 
         if let Some(mut capture) = self.screenshot.take() {
             unsafe { capture.destroy(device) };
+        }
+
+        if let Some(timer) = self.gpu_timer.as_mut() {
+            timer.destroy(device);
         }
 
         // 销毁 IBL resources (env/irradiance/prefiltered cubes, BRDF LUT).

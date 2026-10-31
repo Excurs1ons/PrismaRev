@@ -243,11 +243,13 @@ impl EngineHost {
         path: &std::path::Path,
         frame: u64,
     ) -> anyhow::Result<()> {
-        let report = prism_render::render_graph_report::RenderGraphReport::from_snapshot(
-            &self.renderer.graph().snapshot(),
-            self.settings.to_report_settings(),
-            frame,
-        );
+        let report =
+            prism_render::render_graph_report::RenderGraphReport::from_snapshot_with_timings(
+                &self.renderer.graph().snapshot(),
+                self.settings.to_report_settings(),
+                frame,
+                Some(self.renderer.gpu_timings()),
+            );
         report.write_json(path)?;
         Ok(())
     }

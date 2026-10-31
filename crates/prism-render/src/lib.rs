@@ -51,6 +51,7 @@ pub mod external_overlay;
 pub mod forward_pass;
 pub mod gi;
 pub mod gizmo;
+pub mod gpu_timer;
 pub mod graph_renderer;
 pub mod ground_grid;
 /// 半分辨率环境光遮蔽 pass（Lego 砖块 `gtao`）。
