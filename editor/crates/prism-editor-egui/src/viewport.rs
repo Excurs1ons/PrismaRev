@@ -635,7 +635,7 @@ impl ViewportState {
                                 GameResolution::MatchWindow => {
                                     "Render at the panel size (old behaviour)"
                                 }
-                                GameResolution::Fixed { width, height } => {
+                                GameResolution::Fixed { .. } => {
                                     "Render off-screen at this resolution and letterbox it"
                                 }
                             })

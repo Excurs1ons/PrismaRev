@@ -220,6 +220,13 @@ pub struct UiState {
     pub settings_search: String,
     pub settings_cache: Option<SettingsCache>,
     pub rename: Option<(usize, String)>,
+    /// 就地重命名开始前的文档快照 + 当时的脏标记。
+    ///
+    /// `preview_rename` 会实时改动文档，提交时用这份快照补**恰好一个**撤销步，
+    /// 取消时用它把预览还原（#473）。
+    pub rename_base: Option<(SceneDoc, bool)>,
+    /// 检查器 Name 框的缓冲（延迟提交，不逐字符写文档）。
+    pub name_edit: Option<(usize, String)>,
     /// 重命名刚打开的那一帧要抢一次焦点；之后不能每帧抢，否则
     /// TextEdit 永远保持焦点、点空白处不会退出编辑。
     pub rename_focus: bool,
@@ -389,6 +396,10 @@ enum TreeAction {
     BeginRename(usize, String),
     /// 双击层级行 = 选中并在 Scene 视图里框住它（Unity 的 `FrameSelected`）。
     Frame(usize),
+    /// 重命名输入框每敲一个字符：实时预览 + 标脏（不产生撤销步）。
+    PreviewRename(usize, String),
+    /// Esc：把预览还原回开始编辑前的状态。
+    CancelRename,
 }
 
 /// 层级搜索命中项及其祖先（`path_of` 已包含自身）。
@@ -580,8 +591,11 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                                 .input(|input| input.pointer.interact_pos())
                                 .map(|pos| !row_rect.contains(pos))
                                 .unwrap_or(false);
+                        if response.changed() {
+                            action = Some(TreeAction::PreviewRename(index, buffer.clone()));
+                        }
                         if escape {
-                            state.rename = None;
+                            action = Some(TreeAction::CancelRename);
                             state.rename_focus = false;
                         } else if enter || clicked_outside || response.lost_focus() {
                             action = Some(TreeAction::CommitRename(index, buffer.clone()));
@@ -889,14 +903,27 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     workspace.delete_selection();
                 }
                 state.rename = None;
+                state.rename_base = None;
             }
             TreeAction::Duplicate(index) => {
                 workspace.select(index, false);
                 workspace.duplicate_selection();
             }
             TreeAction::BeginRename(index, name) => {
+                // 记下「开始编辑前」的文档：提交时补一个撤销步，取消时还原（#473）。
+                state.rename_base =
+                    Some((workspace.document().doc.clone(), workspace.document().dirty));
                 state.rename = Some((index, name));
                 state.rename_focus = true;
+            }
+            TreeAction::PreviewRename(index, name) => {
+                workspace.preview_rename(index, &name);
+            }
+            TreeAction::CancelRename => {
+                if let Some((base, was_dirty)) = state.rename_base.take() {
+                    workspace.cancel_rename(base, was_dirty);
+                }
+                state.rename = None;
             }
             TreeAction::Frame(index) => {
                 workspace.select(index, false);
@@ -904,8 +931,21 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
             TreeAction::CommitRename(index, name) => {
                 let name = name.trim().to_string();
-                if !name.is_empty() {
-                    workspace.document_mut().doc.rename(index, &name);
+                match state.rename_base.take() {
+                    Some((base, was_dirty)) => {
+                        if name.is_empty() {
+                            // 空名字 = 放弃这次编辑，把预览还原掉。
+                            workspace.cancel_rename(base, was_dirty);
+                        } else {
+                            workspace.preview_rename(index, &name);
+                            workspace.finish_rename(base, was_dirty);
+                        }
+                    }
+                    None => {
+                        if !name.is_empty() {
+                            workspace.rename_entity(index, &name);
+                        }
+                    }
                 }
                 state.rename = None;
             }
@@ -1086,20 +1126,45 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         return;
     }
     let entity_id = workspace.document().doc.id_of_index(index).unwrap_or(0);
-    let mut name = workspace.document().doc.entities[index]
-        .name
-        .clone()
-        .unwrap_or_default();
+    let name = workspace.document().doc.entities[index].display_name();
     let prefab = workspace.document().doc.entities[index]
         .prefab_link()
         .map(|link| link.to_string());
 
+    // Name：**延迟提交**（Enter / 失焦），一次重命名 = 一个撤销步 + 标脏（#473）。
+    // 以前逐字符写文档：既没有撤销步，也会把每次按键都当成一次编辑去触发
+    // 整场重载（#435）。缓冲留在 `UiState` 里，否则每帧从文档重建会让输入框复位。
+    if state.name_edit.as_ref().map(|(target, _)| *target) != Some(index) {
+        state.name_edit = Some((index, name.clone()));
+    }
+    let mut buffer = state
+        .name_edit
+        .take()
+        .map(|(_, buffer)| buffer)
+        .unwrap_or_else(|| name.clone());
     ui.horizontal(|ui| {
         ui.label(RichText::new("Name").size(11.0));
-        if ui.text_edit_singleline(&mut name).changed() {
-            workspace.document_mut().doc.rename(index, name.trim());
+        let response = ui.text_edit_singleline(&mut buffer);
+        let (enter, escape) = ui.input(|input| {
+            (
+                input.key_pressed(egui::Key::Enter),
+                input.key_pressed(egui::Key::Escape),
+            )
+        });
+        if response.has_focus() && escape {
+            buffer = name.clone();
+            response.surrender_focus();
+        } else if (response.has_focus() && enter) || response.lost_focus() {
+            let trimmed = buffer.trim().to_string();
+            if !trimmed.is_empty() && trimmed != name {
+                workspace.rename_entity(index, &trimmed);
+                buffer = trimmed;
+            } else {
+                buffer = name.clone();
+            }
         }
     });
+    state.name_edit = Some((index, buffer));
 
     // ---- 断掉的资产引用（#467） ----
     // 放在最上面、且不依赖组件 schema：有些组件在编辑器里没有 schema
