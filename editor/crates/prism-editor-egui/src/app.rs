@@ -561,7 +561,13 @@ impl EditorApp {
             return;
         }
         if command == Command::SaveAs {
-            let title = self.workspace.document().title();
+            // 默认值必须是带后缀的完整文件名 —— 否则照着默认值点 OK 就会存出
+            // 一个 `assets/scenes/level2`，文档面板和 Build Settings 都不认（#459）。
+            let kind = self.workspace.document().kind;
+            let title = prism_editor_core::project::ensure_document_suffix(
+                kind,
+                &self.workspace.document().title(),
+            );
             self.open_prompt(
                 panels::PromptKind::SaveAs,
                 "Save As",
