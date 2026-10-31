@@ -2308,6 +2308,26 @@ impl Workspace {
         }
     }
 
+    /// 多选拖拽到某行的上/下边缘：整组（选择集合的顶层）插到目标前后（#525）。
+    ///
+    /// 组内保持相对顺序，一次拖拽 = 一个撤销步。
+    pub fn reparent_selection_at(&mut self, target: usize, before: bool) -> usize {
+        let roots = self.selection_roots();
+        if roots.is_empty() {
+            return 0;
+        }
+        let result = self.edit("调整层级", |document| {
+            document.doc.reparent_many_at(&roots, target, before)
+        });
+        match result {
+            Ok(moved) => moved,
+            Err(reason) => {
+                self.log(LogSource::Editor, LogLevel::Warn, reason);
+                0
+            }
+        }
+    }
+
     pub fn set_active_entity(&mut self, index: usize, active: bool) {
         self.edit(
             if active {
@@ -7727,6 +7747,92 @@ mod tests {
         workspace.select(cube, false);
         workspace.select(detail, true);
         assert_eq!(workspace.reparent_selection(Some(detail)), 0);
+        assert!(!workspace.can_undo());
+    }
+
+    /// #525：拖到某行的下边缘时整组一起插到后面，且保持相对顺序。
+    #[test]
+    fn dragging_a_group_below_a_row_keeps_the_group_order() {
+        let mut workspace = Workspace::sample();
+        // 末尾加一个独立的根实体当落点：Cube 组本来就在相机后面，插回去是空操作。
+        workspace.add_entity("empty");
+        let anchor = workspace.document().doc.entities.len() - 1;
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        workspace.select(cube, false);
+        workspace.select(light, true);
+
+        let names = |workspace: &Workspace| -> Vec<String> {
+            workspace
+                .document()
+                .doc
+                .entities
+                .iter()
+                .map(|entity| entity.display_name())
+                .collect()
+        };
+        let anchor_parent = workspace.document().doc.entities[anchor].parent;
+        let before = names(&workspace);
+        let steps = workspace.document().undo.history().len();
+
+        assert_eq!(workspace.reparent_selection_at(anchor, false), 2);
+        // 两个根都挂到落点所在层级。
+        let moved_cube = index_named(&workspace, "Cube");
+        let moved_light = index_named(&workspace, "Directional Light");
+        assert_eq!(
+            workspace.document().doc.entities[moved_cube].parent,
+            anchor_parent
+        );
+        assert_eq!(
+            workspace.document().doc.entities[moved_light].parent,
+            anchor_parent
+        );
+        // 整组在落点之后，顺序不变（Cube 仍在 Light 前）。
+        let moved_anchor = index_named(&workspace, "GameObject");
+        assert!(
+            moved_cube > moved_anchor && moved_light > moved_anchor,
+            "cube={moved_cube} light={moved_light} anchor={moved_anchor} order={:?}",
+            names(&workspace)
+        );
+        assert!(moved_cube < moved_light, "组内顺序必须保留");
+        // 子树跟着走：Detail 仍是 Cube 的子级。
+        let detail = index_named(&workspace, "Detail");
+        let cube_id = workspace.document().doc.entities[moved_cube].id;
+        assert_eq!(workspace.document().doc.entities[detail].parent, cube_id);
+        assert_eq!(
+            workspace.document().undo.history().len(),
+            steps + 1,
+            "一次拖拽 = 一步撤销"
+        );
+
+        workspace.undo();
+        assert_eq!(names(&workspace), before, "撤销要还原顺序与父级");
+    }
+
+    #[test]
+    fn dragging_a_group_above_a_row_inserts_before_it() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let camera = index_named(&workspace, "Main Camera");
+        workspace.select(cube, false);
+        workspace.select(light, true);
+
+        assert_eq!(workspace.reparent_selection_at(camera, true), 2);
+        let moved_cube = index_named(&workspace, "Cube");
+        let moved_light = index_named(&workspace, "Directional Light");
+        let moved_camera = index_named(&workspace, "Main Camera");
+        assert!(moved_cube < moved_camera && moved_light < moved_camera);
+        assert!(moved_cube < moved_light);
+    }
+
+    #[test]
+    fn a_group_cannot_be_dropped_between_its_own_children() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let detail = index_named(&workspace, "Detail");
+        workspace.select(cube, false);
+        assert_eq!(workspace.reparent_selection_at(detail, true), 0);
         assert!(!workspace.can_undo());
     }
 

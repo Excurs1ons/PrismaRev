@@ -953,12 +953,17 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let parent_of_to = workspace.document().doc.entities[to]
                     .parent
                     .and_then(|id| workspace.document().doc.index_of_id(id));
-                // 拖的是多选中的一员时，整组（顶层根）一起改父级。
+                // 拖的是多选中的一员时，三种落点都作用于整组（顶层根），保持相对顺序：
+                // Child = 改挂到目标下，Before / After = 插到目标前/后（#525）。
                 let group = workspace.selection.len() > 1 && workspace.selection.contains(&from);
-                if group && zone == DropZone::Child {
-                    let moved = workspace.reparent_selection(Some(to));
+                if group {
+                    let moved = match zone {
+                        DropZone::Child => workspace.reparent_selection(Some(to)),
+                        DropZone::Before => workspace.reparent_selection_at(to, true),
+                        DropZone::After => workspace.reparent_selection_at(to, false),
+                    };
                     if moved > 0 {
-                        state.status = format!("reparented {moved} entities");
+                        state.status = format!("moved {moved} entities");
                     }
                     state.drop_target = None;
                     return;
