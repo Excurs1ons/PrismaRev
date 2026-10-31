@@ -138,6 +138,60 @@ fn camera_without_transform_falls_back_to_next_enabled() {
     assert_eq!(out.entity, usable);
 }
 
+/// `#461`：只有 `depth` 最大的那台会画出来，其余相机目前会被忽略 ——
+/// 这个清单就是「用户加了却没生效」的那些相机，用来提示，而不是静默吞掉。
+#[test]
+fn ignored_cameras_lists_everything_but_the_main_camera() {
+    let mut world = World::new();
+
+    let low = world.spawn();
+    world.insert(
+        low,
+        Camera {
+            depth: -10.0,
+            ..Camera::default()
+        },
+    );
+
+    let main = world.spawn();
+    world.insert(
+        main,
+        Camera {
+            depth: 5.0,
+            ..Camera::default()
+        },
+    );
+
+    let middle = world.spawn();
+    world.insert(
+        middle,
+        Camera {
+            depth: 0.0,
+            ..Camera::default()
+        },
+    );
+
+    let off = world.spawn();
+    world.insert(
+        off,
+        Camera {
+            depth: 50.0,
+            enabled: false,
+            ..Camera::default()
+        },
+    );
+
+    // 主相机 = depth 最大的**启用**相机。
+    assert_eq!(main_camera(&world), Some(main));
+    // 关掉的相机既不是主相机也不在忽略清单里（它本就不该参与）。
+    let ignored = ignored_cameras(&world);
+    assert_eq!(ignored.len(), 2);
+    assert!(ignored.contains(&low));
+    assert!(ignored.contains(&middle));
+    assert!(!ignored.contains(&main));
+    assert!(!ignored.contains(&off));
+}
+
 /// 未启用的相机既不取景也不提供清屏色。
 #[test]
 fn disabled_camera_is_skipped_entirely() {
