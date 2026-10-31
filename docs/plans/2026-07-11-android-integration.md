@@ -1,5 +1,15 @@
 # Android Integration Implementation Plan
 
+> **Status:** 🗄️ Historical design doc — the implementation was removed in
+> `b0d394f` (2026-07-30, "remove: standalone android Gradle project"). The
+> root-level `android/` Gradle project and the `crates/prism-android` cdylib
+> described below no longer exist; do not follow this plan as a how-to.
+> Current Android packaging: [`docs/android-apk.md`](../android-apk.md)
+> (game-only host in `projects/prisma/android`, Tauri launcher in
+> `launcher/src-tauri/gen/android`), plus
+> [`docs/android-arm64.md`](../android-arm64.md) when the build host itself is
+> aarch64. The body is kept unchanged as a record of the original design.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Build and run PrismaRev on Android via winit's `android-game-activity` feature + GameActivity + `cargo-ndk`.
