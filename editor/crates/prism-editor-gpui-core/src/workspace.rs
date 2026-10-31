@@ -2385,47 +2385,76 @@ impl Workspace {
     // ── 组件 ────────────────────────────────────────────────────────────
 
     pub fn component_types(&self) -> Vec<&TypeSchema> {
+        let indices: Vec<usize> = self.primary_selection().into_iter().collect();
+        self.component_types_for(&indices)
+    }
+
+    /// 这些实体**还没全部挂上**的组件类型（Add Component 菜单的候选）。
+    ///
+    /// 多选时以「至少一个选中项缺失」为条件：给一排灯补 `Light` 时，
+    /// 已经挂上的那几盏不应该让整个选项消失。
+    pub fn component_types_for(&self, indices: &[usize]) -> Vec<&TypeSchema> {
+        let entities = &self.document().doc.entities;
         self.schema
             .components()
             .into_iter()
             .filter(|component| {
-                self.primary_selection()
-                    .and_then(|index| self.document().doc.entities.get(index))
-                    .map(|entity| !entity.has_component(&component.name))
-                    .unwrap_or(false)
+                indices.iter().any(|index| {
+                    entities
+                        .get(*index)
+                        .map(|entity| !entity.has_component(&component.name))
+                        .unwrap_or(false)
+                })
             })
             .collect()
     }
 
     pub fn add_component(&mut self, component_name: &str) {
-        let Some(index) = self.primary_selection() else {
-            return;
-        };
+        let indices: Vec<usize> = self.primary_selection().into_iter().collect();
+        self.add_component_multi(&indices, component_name);
+    }
+
+    /// 给一组实体加同一个组件（多选检查器、批量操作），一个撤销步。
+    ///
+    /// 已经有该组件的实体跳过（与单选时的行为一致：不把参数静默重置成默认值），
+    /// 返回真正加上组件的实体数。
+    pub fn add_component_multi(&mut self, indices: &[usize], component_name: &str) -> usize {
         let Some(component) = self.schema.component(component_name) else {
-            return;
+            return 0;
         };
-        // 已挂着的组件再点一次不能静默重置成默认值（里它根本不出现在菜单里）。
-        if self
-            .document()
-            .doc
-            .entities
-            .get(index)
-            .map(|entity| entity.has_component(component_name))
-            .unwrap_or(false)
-        {
-            self.log(
-                LogSource::Editor,
-                LogLevel::Warn,
-                format!("{} 已有该组件，未做修改", component.display_name()),
-            );
-            return;
+        let mut targets: Vec<usize> = indices.to_vec();
+        targets.sort_unstable();
+        targets.dedup();
+        let entities = &self.document().doc.entities;
+        let missing: Vec<usize> = targets
+            .into_iter()
+            .filter(|index| {
+                entities
+                    .get(*index)
+                    .map(|entity| !entity.has_component(component_name))
+                    .unwrap_or(false)
+            })
+            .collect();
+        if missing.is_empty() {
+            if !indices.is_empty() {
+                self.log(
+                    LogSource::Editor,
+                    LogLevel::Warn,
+                    format!("{} 已有该组件，未做修改", component.display_name()),
+                );
+            }
+            return 0;
         }
         let name = component.name.clone();
         let value = component_value_with_overrides(&component.default_value(), None);
-        self.edit("添加组件", |document| {
-            let entity = &mut document.doc.entities[index];
-            entity.components.insert(name, value);
+        let added = self.edit("添加组件", |document| {
+            for index in &missing {
+                let entity = &mut document.doc.entities[*index];
+                entity.components.insert(name.clone(), value.clone());
+            }
+            missing.len()
         });
+        added
     }
 
     pub fn remove_component(&mut self, component_name: &str) {
@@ -5341,6 +5370,72 @@ mod tests {
         assert!(workspace.document().doc.entities[1].has_component("prism_engine::scene::Camera"));
         workspace.remove_component("prism_engine::scene::Camera");
         assert!(!workspace.document().doc.entities[1].has_component("prism_engine::scene::Camera"));
+    }
+
+    #[test]
+    fn add_component_multi_writes_every_entity_in_one_step() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let path = "prism_engine::scene::Camera";
+        // fixture 的 0 号实体本来就带 Camera，1 号没有。
+        assert!(workspace.document().doc.entities[0].has_component(path));
+        let undo_before = workspace.undo_history().len();
+
+        let added = workspace.add_component_multi(&[0, 1], path);
+
+        assert_eq!(added, 1, "已经有该组件的实体被跳过");
+        assert!(workspace.document().doc.entities[1].has_component(path));
+        assert_eq!(
+            workspace.undo_history().len(),
+            undo_before + 1,
+            "批量添加只产生一个撤销步"
+        );
+        workspace.undo();
+        assert!(
+            !workspace.document().doc.entities[1].has_component(path),
+            "一次撤销就回退整批"
+        );
+    }
+
+    #[test]
+    fn add_component_multi_ignores_duplicates_and_repeats() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let path = "prism_engine::scene::Camera";
+        let added = workspace.add_component_multi(&[1, 1, 1], path);
+        assert_eq!(added, 1, "重复下标只算一次");
+
+        let undo_before = workspace.undo_history().len();
+        assert_eq!(workspace.add_component_multi(&[1], path), 0);
+        assert_eq!(
+            workspace.undo_history().len(),
+            undo_before,
+            "全都已有组件时不产生撤销步"
+        );
+        assert_eq!(workspace.add_component_multi(&[], path), 0);
+        assert_eq!(
+            workspace.add_component_multi(&[999], path),
+            0,
+            "越界下标跳过"
+        );
+    }
+
+    #[test]
+    fn the_add_component_menu_lists_what_one_entity_is_missing() {
+        let workspace = Workspace::load_fixture(&fixture());
+        let path = "prism_engine::scene::Camera";
+        let names = |workspace: &Workspace, indices: &[usize]| -> Vec<String> {
+            workspace
+                .component_types_for(indices)
+                .into_iter()
+                .map(|component| component.name.clone())
+                .collect()
+        };
+        assert!(!names(&workspace, &[0]).contains(&path.to_string()));
+        assert!(names(&workspace, &[1]).contains(&path.to_string()));
+        assert!(
+            names(&workspace, &[0, 1]).contains(&path.to_string()),
+            "至少一个选中项缺该组件时仍然列出",
+        );
+        assert!(names(&workspace, &[]).is_empty());
     }
 
     #[test]
