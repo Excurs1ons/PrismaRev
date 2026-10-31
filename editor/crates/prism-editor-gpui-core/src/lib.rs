@@ -19,6 +19,7 @@ pub mod assets;
 pub mod build;
 pub mod doc;
 pub mod dock;
+pub mod expr;
 pub mod i18n;
 pub mod ini;
 pub mod keys;

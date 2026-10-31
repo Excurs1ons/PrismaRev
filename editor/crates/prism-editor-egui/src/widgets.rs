@@ -4,7 +4,7 @@
 //! `prism-editor-core` 的 `FieldSchema::widget()`，所以新增组件字段不需要改
 //! 这里。写回统一走 `Workspace::set_field`（反射校验 + 撤销合并）。
 
-use egui::Ui;
+use egui::{Response, Ui};
 use egui_phosphor::regular as icons;
 use prism_editor_core::viewport_math as vm;
 use prism_editor_core::{FieldSchema, FieldWidget, Schema, TypeSchema};
@@ -111,6 +111,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn text_fields_commit_on_enter_or_focus_loss_only() {
+        // 编辑中：每敲一个字符都不碰文档。
+        assert_eq!(
+            text_commit_decision(true, false, false, false, false),
+            TextCommit::Keep
+        );
+        assert_eq!(
+            text_commit_decision(true, false, true, false, false),
+            TextCommit::Commit
+        );
+        // 丢焦点 = 提交（点别处那种情况）。
+        assert_eq!(
+            text_commit_decision(false, true, false, false, false),
+            TextCommit::Commit
+        );
+        // Esc 丢弃，即使同一帧还按了回车。
+        assert_eq!(
+            text_commit_decision(true, false, true, true, false),
+            TextCommit::Cancel
+        );
+        // 多行框里回车是换行，只能靠失焦提交。
+        assert_eq!(
+            text_commit_decision(true, false, true, false, true),
+            TextCommit::Keep
+        );
+    }
+
+    #[test]
     fn asset_filters_match_expected_extensions() {
         assert!(asset_matches("mesh_path", "assets/ship.GLTF"));
         assert!(!asset_matches("mesh_path", "assets/ship.png"));
@@ -165,6 +193,126 @@ mod tests {
     }
 }
 
+/// 数值输入框接的表达式解析器（`90/2`、`2*(3+4)`、`sin(30)`）。
+///
+/// `DragValue::custom_parser` 只在用户敲完回车时调用，所以平时显示的还是数字本身。
+pub fn number_parser(text: &str) -> Option<f64> {
+    prism_editor_core::expr::parse_number_or_expression(text)
+}
+
+/// 画一个可拖动的字段标签，返回**这一帧**拖动产生的增量（已按 `speed` 与修饰键换算）。
+///
+/// Unity 的 `EditorGUIUtility.DragZoneRect`：把数值字段左边的文字变成拖动热区，
+/// 左右拖就能连续调值，不用去够右边那个小把手（#479）。按住 Shift 精调（×0.1），
+/// 按住 Alt 粗调（×10）。
+pub fn drag_label(ui: &mut Ui, text: &str, speed: f32) -> f32 {
+    let response = ui
+        .add(egui::Label::new(egui::RichText::new(text).size(11.0)).sense(egui::Sense::drag()))
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .on_hover_text("Drag to change");
+    if !response.dragged() {
+        return 0.0;
+    }
+    let mut delta = response.drag_delta().x;
+    if delta == 0.0 {
+        return 0.0;
+    }
+    let (shift, alt) = ui.input(|input| (input.modifiers.shift, input.modifiers.alt));
+    if shift {
+        delta *= 0.1;
+    }
+    if alt {
+        delta *= 10.0;
+    }
+    delta * speed
+}
+
+/// [`drag_label`] 的单值版本：拖动标签直接改 `value`，返回是否变了。
+pub fn scrubbable_label(ui: &mut Ui, text: &str, value: &mut f32, speed: f32) -> bool {
+    let delta = drag_label(ui, text, speed);
+    if delta == 0.0 {
+        return false;
+    }
+    *value += delta;
+    true
+}
+
+/// 文本字段该不该写回文档（#479：编辑期间只改本地缓冲）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextCommit {
+    /// 继续编辑，别碰文档。
+    Keep,
+    /// Enter（单行）或失焦：把缓冲写回。
+    Commit,
+    /// Esc：丢弃缓冲，回到文档里的值。
+    Cancel,
+}
+
+/// 输入框状态的纯函数部分，方便单测（egui 交互没法在测试里模拟）。
+pub(crate) fn text_commit_decision(
+    focused: bool,
+    lost_focus: bool,
+    enter: bool,
+    escape: bool,
+    multiline: bool,
+) -> TextCommit {
+    if focused && escape {
+        return TextCommit::Cancel;
+    }
+    // 多行文本的 Enter 是换行，只能靠失焦提交。
+    if (focused && enter && !multiline) || lost_focus {
+        return TextCommit::Commit;
+    }
+    TextCommit::Keep
+}
+
+/// 延迟提交的文本输入：编辑期间只改 `egui` 里的临时缓冲，提交时返回新值。
+///
+/// 以前每敲一个字符就 `set_field`：撤销栈被灌满、`dirty` 一直闪，
+/// 还会触发文档同步的整场重载（#435 / #473）。
+fn delayed_text_edit(
+    ui: &mut Ui,
+    id: egui::Id,
+    value: &str,
+    multiline: bool,
+) -> (Response, String, Option<String>) {
+    let mut buffer = ui
+        .data_mut(|data| data.get_temp::<String>(id))
+        .unwrap_or_else(|| value.to_string());
+    let response = if multiline {
+        ui.add(egui::TextEdit::multiline(&mut buffer))
+    } else {
+        ui.add(egui::TextEdit::singleline(&mut buffer))
+    };
+    let focused = response.has_focus();
+    let (enter, escape) = ui.input(|input| {
+        (
+            input.key_pressed(egui::Key::Enter),
+            input.key_pressed(egui::Key::Escape),
+        )
+    });
+    let mut committed = None;
+    match text_commit_decision(focused, response.lost_focus(), enter, escape, multiline) {
+        TextCommit::Cancel => {
+            buffer = value.to_string();
+            response.surrender_focus();
+        }
+        TextCommit::Commit => {
+            if buffer != value {
+                committed = Some(buffer.clone());
+            }
+        }
+        // 没在编辑（或被别的控件抢走焦点且已经处理过提交）：跟随文档里的值。
+        TextCommit::Keep => {
+            if !focused {
+                buffer = value.to_string();
+            }
+        }
+    }
+    ui.data_mut(|data| data.insert_temp(id, buffer.clone()));
+    (response, buffer, committed)
+}
+
 /// 带资产选择器的字段行（路径字段右侧多一个 `…` 按钮，列出 `assets` 里的候选）。
 fn field_row_at(
     ui: &mut Ui,
@@ -203,9 +351,19 @@ fn field_row_at(
         FieldWidget::Integer => {
             let mut current = value.as_i64().unwrap_or(0);
             ui.horizontal(|ui| {
-                ui.label(label);
-                let drag = ui.add(egui::DragValue::new(&mut current).speed(1.0));
-                if drag.changed() {
+                let mut scrubbed = current as f32;
+                let dragged = scrubbable_label(ui, label, &mut scrubbed, 1.0);
+                if dragged {
+                    current = scrubbed.round() as i64;
+                }
+                let drag = ui
+                    .add(
+                        egui::DragValue::new(&mut current)
+                            .speed(1.0)
+                            .custom_parser(number_parser),
+                    )
+                    .on_hover_text("Type an expression: 90/2, 2*(3+4)");
+                if dragged || drag.changed() {
                     set(&name, Value::from(current));
                 }
             });
@@ -213,7 +371,7 @@ fn field_row_at(
         FieldWidget::Float => {
             let mut current = value.as_f64().unwrap_or(0.0) as f32;
             ui.horizontal(|ui| {
-                ui.label(label);
+                let dragged = scrubbable_label(ui, label, &mut current, 0.01);
                 let drawer = field.drawer();
                 let mut drag = egui::DragValue::new(&mut current).speed(0.01);
                 if let Some((min, max)) = drawer.and_then(|drawer| drawer.range()) {
@@ -226,19 +384,24 @@ fn field_row_at(
                         drag = drag.range(f32::MIN..=max);
                     }
                 }
-                let response = ui.add(drag);
-                if response.changed() {
+                let response = ui
+                    .add(drag.custom_parser(number_parser))
+                    .on_hover_text("Type an expression: 90/2, 2*(3+4), sin(30)");
+                if dragged || response.changed() {
                     set(&name, Value::from(current as f64));
                 }
             });
         }
         FieldWidget::Text => {
             let mut current = value.as_str().unwrap_or_default().to_string();
+            let edit_id = ui.make_persistent_id(("field-text", name.as_str()));
             ui.horizontal(|ui| {
                 ui.label(label);
-                let response = ui.text_edit_singleline(&mut current);
-                if response.changed() {
-                    set(&name, Value::String(current.clone()));
+                let (response, buffer, committed) =
+                    delayed_text_edit(ui, edit_id, &current, false);
+                current = buffer;
+                if let Some(text) = committed {
+                    set(&name, Value::String(text));
                 }
                 // 引擎的「把资产拖到对象字段」：路径类字段接受资产拖放。
                 let looks_like_asset = name.ends_with("_path")
@@ -290,14 +453,15 @@ fn field_row_at(
             });
         }
         FieldWidget::Multiline => {
-            let mut current = value.as_str().unwrap_or_default().to_string();
+            let current = value.as_str().unwrap_or_default().to_string();
+            let edit_id = ui.make_persistent_id(("field-multiline", name.as_str()));
             ui.label(label);
-            if ui.text_edit_multiline(&mut current).changed() {
-                set(&name, Value::String(current.clone()));
+            let (_response, _buffer, committed) = delayed_text_edit(ui, edit_id, &current, true);
+            if let Some(text) = committed {
+                set(&name, Value::String(text));
             }
         }
         FieldWidget::Vector { len } => {
-            ui.label(label);
             let mut values: Vec<f32> = (0..len)
                 .map(|axis| {
                     value
@@ -307,8 +471,34 @@ fn field_row_at(
                 })
                 .collect();
             ui.horizontal(|ui| {
+                // 拖标签 = 所有分量一起动（Unity 的 Vector3 label 行为）。
+                let mut scratch = 0.0f32;
+                let delta = drag_label(ui, label, 0.01);
+                if delta != 0.0 {
+                    for item in values.iter_mut() {
+                        *item += delta;
+                    }
+                    scratch = delta;
+                    let mut next = value.clone();
+                    if let Some(array) = next.as_array_mut() {
+                        for (axis, item) in values.iter().enumerate() {
+                            if let Some(slot) = array.get_mut(axis) {
+                                *slot = Value::from(*item as f64);
+                            }
+                        }
+                        set(&name, next);
+                    }
+                }
+                let _ = scratch;
                 for (axis, item) in values.iter_mut().enumerate() {
-                    if ui.add(egui::DragValue::new(item).speed(0.01)).changed() {
+                    if ui
+                        .add(
+                            egui::DragValue::new(item)
+                                .speed(0.01)
+                                .custom_parser(number_parser),
+                        )
+                        .changed()
+                    {
                         let mut next = value.clone();
                         if let Some(array) = next.as_array_mut() {
                             if let Some(slot) = array.get_mut(axis) {
@@ -333,13 +523,16 @@ fn field_row_at(
             ui.horizontal(|ui| {
                 ui.label(label);
                 for axis in 0..3 {
-                    let response = ui.add(
-                        egui::DragValue::new(&mut degrees[axis])
-                            .speed(0.5)
-                            .max_decimals(2)
-                            .suffix("°")
-                            .prefix(["X ", "Y ", "Z "][axis]),
-                    );
+                    let response = ui
+                        .add(
+                            egui::DragValue::new(&mut degrees[axis])
+                                .speed(0.5)
+                                .max_decimals(2)
+                                .suffix("°")
+                                .prefix(["X ", "Y ", "Z "][axis])
+                                .custom_parser(number_parser),
+                        )
+                        .on_hover_text("Type an expression: 90/2, 45+15");
                     if response.changed() {
                         let quat = vm::euler_degrees_to_quat(degrees);
                         set(
