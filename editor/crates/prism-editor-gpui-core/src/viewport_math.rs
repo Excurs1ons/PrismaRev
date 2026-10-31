@@ -192,6 +192,55 @@ pub fn quat_conjugate(q: [f32; 4]) -> [f32; 4] {
     [-q[0], -q[1], -q[2], q[3]]
 }
 
+/// 四元数 → XYZ 欧拉角（度）。
+///
+/// 约定 `R = Rz * Ry * Rx`（glam 的 `EulerRot::XYZ`），检查器用它把
+/// `rotation` 显示成可读的角度；`euler_degrees_to_quat` 是它的逆。
+pub fn quat_to_euler_degrees(q: [f32; 4]) -> [f32; 3] {
+    let length = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if length < 1e-8 {
+        return [0.0; 3];
+    }
+    let [x, y, z, w] = [q[0] / length, q[1] / length, q[2] / length, q[3] / length];
+    // 旋转矩阵 R = Rz Ry Rx 的元素（行主序）。
+    let m00 = 1.0 - 2.0 * (y * y + z * z);
+    let m10 = 2.0 * (x * y + z * w);
+    let m20 = 2.0 * (x * z - y * w);
+    let m21 = 2.0 * (y * z + x * w);
+    let m22 = 1.0 - 2.0 * (x * x + y * y);
+    let m11 = 1.0 - 2.0 * (x * x + z * z);
+    let m12 = 2.0 * (y * z - x * w);
+
+    let sin_y = (-m20).clamp(-1.0, 1.0);
+    let ey = sin_y.asin();
+    // 万向锁：Y 接近 ±90° 时 X/Z 耦合，把滚转挪到 Z 上（Unity 同样取 0）。
+    let (ex, ez) = if sin_y.abs() < 0.999_99 {
+        (m21.atan2(m22), m10.atan2(m00))
+    } else {
+        ((-m12).atan2(m11), 0.0)
+    };
+    [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()]
+}
+
+/// XYZ 欧拉角（度）→ 四元数，[`quat_to_euler_degrees`] 的逆。
+pub fn euler_degrees_to_quat(euler: [f32; 3]) -> [f32; 4] {
+    let half = [
+        euler[0].to_radians() * 0.5,
+        euler[1].to_radians() * 0.5,
+        euler[2].to_radians() * 0.5,
+    ];
+    let (sx, cx) = half[0].sin_cos();
+    let (sy, cy) = half[1].sin_cos();
+    let (sz, cz) = half[2].sin_cos();
+    // q = qz * qy * qx
+    [
+        cz * cy * sx - sz * sy * cx,
+        cz * sy * cx + sz * cy * sx,
+        sz * cy * cx - cz * sy * sx,
+        cz * cy * cx + sz * sy * sx,
+    ]
+}
+
 /// 局部三轴在世界空间的方向（列向量）。
 pub fn basis_from_quat(q: [f32; 4]) -> [[f32; 3]; 3] {
     [
@@ -828,6 +877,40 @@ mod tests {
             &entities,
         );
         assert!(misses.is_empty());
+    }
+
+    #[test]
+    fn euler_round_trips_through_quaternions() {
+        for euler in [
+            [0.0f32, 0.0, 0.0],
+            [0.0, 90.0, 0.0],
+            [30.0, 45.0, -60.0],
+            [-120.0, 10.0, 170.0],
+        ] {
+            let quat = euler_degrees_to_quat(euler);
+            let back = quat_to_euler_degrees(quat);
+            for axis in 0..3 {
+                assert!(
+                    (back[axis] - euler[axis]).abs() < 1e-4,
+                    "euler {euler:?} -> {back:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn euler_conversion_handles_the_gimbal_pole_and_degenerate_quat() {
+        // Y = 90° 是万向锁：只能保证整体旋转一致，不保证分量一致。
+        let quat = euler_degrees_to_quat([20.0, 90.0, 0.0]);
+        let back = quat_to_euler_degrees(quat);
+        assert!((back[1] - 90.0).abs() < 1e-3, "{back:?}");
+        assert_eq!(back[2], 0.0);
+        // 退化四元数不能出 NaN。
+        assert_eq!(quat_to_euler_degrees([0.0; 4]), [0.0; 3]);
+        // 未归一化的输入先归一化。
+        let long = euler_degrees_to_quat([0.0, 90.0, 0.0]).map(|value| value * 3.0);
+        let back = quat_to_euler_degrees(long);
+        assert!((back[1] - 90.0).abs() < 1e-4, "{back:?}");
     }
 
     #[test]

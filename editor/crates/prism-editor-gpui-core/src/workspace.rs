@@ -2405,6 +2405,68 @@ impl Workspace {
         document.dirty = true;
     }
 
+    /// 整体写一个实体的 `rotation`（检查器按欧拉角编辑后换回四元数）。
+    pub fn set_transform_rotation(&mut self, entity_id: u32, rotation: [f32; 4]) {
+        let Some(rotation) = normalize_quat(rotation) else {
+            return;
+        };
+        let Some(index) = self.document().doc.index_of_id(entity_id) else {
+            return;
+        };
+        let before = self.document().doc.entities[index].transform;
+        let mut after = before;
+        after.rotation = rotation;
+        if before == after {
+            return;
+        }
+        let now_ms = now_ms();
+        let document = self.document_mut();
+        document
+            .undo
+            .push_transform(&mut document.doc, entity_id, before, after, now_ms);
+        document.dirty = true;
+    }
+
+    /// 多选：把同一个 `rotation` 写到所有选中实体（一次撤销步）。
+    pub fn set_transform_rotation_many(&mut self, entity_ids: &[u32], rotation: [f32; 4]) {
+        let Some(rotation) = normalize_quat(rotation) else {
+            return;
+        };
+        let mut ids: Vec<u32> = entity_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let doc = &self.document().doc;
+        let mut changes = Vec::new();
+        for entity_id in &ids {
+            let Some(index) = doc.index_of_id(*entity_id) else {
+                continue;
+            };
+            let before = doc.entities[index].transform;
+            let mut after = before;
+            after.rotation = rotation;
+            if before != after {
+                changes.push((*entity_id, before, after));
+            }
+        }
+        if changes.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        let document = self.document_mut();
+        if changes.len() == 1 {
+            let (entity_id, before, after) = changes[0];
+            document
+                .undo
+                .push_transform(&mut document.doc, entity_id, before, after, now);
+        } else {
+            let key = format!("transform-rotation/{ids:?}");
+            document
+                .undo
+                .push_transform_batch(&mut document.doc, changes, key, now);
+        }
+        document.dirty = true;
+    }
+
     // ── 撤销 ────────────────────────────────────────────────────────────
 
     pub fn undo(&mut self) {
@@ -3198,6 +3260,21 @@ pub fn layout_preset_ids() -> Vec<(&'static str, &'static str)> {
         .iter()
         .map(|preset| (preset.id, preset.label))
         .collect()
+}
+
+/// 归一化四元数；长度接近 0（非法输入）时返回 `None`。
+fn normalize_quat(quat: [f32; 4]) -> Option<[f32; 4]> {
+    let length =
+        (quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3]).sqrt();
+    if !length.is_finite() || length < 1e-6 {
+        return None;
+    }
+    Some([
+        quat[0] / length,
+        quat[1] / length,
+        quat[2] / length,
+        quat[3] / length,
+    ])
 }
 
 #[cfg(test)]
@@ -5190,5 +5267,56 @@ mod tests {
             ..SnapSettings::default()
         };
         assert_eq!(coarse.snapped_scale(0.2), 0.01, "吸附到 0 时夹到 0.01");
+    }
+
+    #[test]
+    fn set_transform_rotation_normalizes_and_undoes_in_one_step() {
+        let mut workspace = Workspace::sample();
+        let entity = workspace.document().doc.id_of_index(0).unwrap();
+        let before = workspace.document().doc.entities[0].transform.rotation;
+        workspace.set_transform_rotation(entity, [0.0, 0.0, 3.0, 3.0]);
+        let after = workspace.document().doc.entities[0].transform.rotation;
+        let length = (after.iter().map(|v| v * v).sum::<f32>()).sqrt();
+        assert!((length - 1.0).abs() < 1e-5, "写入前归一化: {after:?}");
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[0].transform.rotation,
+            before
+        );
+    }
+
+    #[test]
+    fn set_transform_rotation_ignores_degenerate_input() {
+        let mut workspace = Workspace::sample();
+        let entity = workspace.document().doc.id_of_index(0).unwrap();
+        let before = workspace.document().doc.entities[0].transform.rotation;
+        workspace.set_transform_rotation(entity, [0.0; 4]);
+        assert_eq!(
+            workspace.document().doc.entities[0].transform.rotation,
+            before
+        );
+        assert!(!workspace.can_undo(), "非法输入不该产生撤销步");
+    }
+
+    #[test]
+    fn set_transform_rotation_many_writes_every_selection() {
+        let mut workspace = Workspace::sample();
+        let ids: Vec<u32> = (0..2)
+            .map(|index| workspace.document().doc.id_of_index(index).unwrap())
+            .collect();
+        let quat = crate::viewport_math::euler_degrees_to_quat([0.0, 90.0, 0.0]);
+        workspace.set_transform_rotation_many(&ids, quat);
+        for index in 0..2 {
+            let rotation = workspace.document().doc.entities[index].transform.rotation;
+            for axis in 0..4 {
+                assert!((rotation[axis] - quat[axis]).abs() < 1e-5, "{rotation:?}");
+            }
+        }
+        workspace.undo();
+        let restored = workspace.document().doc.entities[0].transform.rotation;
+        assert!(
+            (restored[3] - 1.0).abs() < 1e-5,
+            "一次 undo 回到两个实体都未改的状态"
+        );
     }
 }
