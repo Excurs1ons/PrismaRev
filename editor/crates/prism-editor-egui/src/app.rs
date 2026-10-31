@@ -1858,6 +1858,29 @@ impl EditorApp {
             prism_editor_core::LogLevel::Info,
             format!("build started: {label}"),
         );
+        if kind.is_player_build() {
+            // profile / output_dir 都来自 `assets/settings.ini` 的 `[build]`；
+            // 先把生效值写进 Console，改错路径时一眼就能看出来。
+            let settings = prism_editor_core::settings::ProjectSettings::read(&root)
+                .unwrap_or_else(|error| {
+                    self.workspace.log(
+                        prism_editor_core::LogSource::System,
+                        prism_editor_core::LogLevel::Warn,
+                        format!("cannot read build settings ({error}); using defaults"),
+                    );
+                    Default::default()
+                });
+            let plan = prism_editor_core::build::plan_build(&root, &settings);
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                prism_editor_core::LogLevel::Info,
+                format!(
+                    "build plan: profile={} output_dir={}",
+                    settings.build.profile,
+                    plan.output_dir.display()
+                ),
+            );
+        }
         self.build_diagnostics.clear();
         self.build = Some(crate::build::BuildJob::spawn(kind, &root));
     }
@@ -3965,6 +3988,9 @@ impl EditorApp {
         }
         if !running {
             let cancelled = job.was_cancelled();
+            // `failed` 来自 worker：非 0 退出、产物缺失、spawn 失败都算失败 ——
+            // 以前这里只看「进程结束」，编译报错也显示 build finished。
+            let failed = job.failed() && !cancelled;
             let label = job.label().to_string();
             if cancelled {
                 self.state.status = format!("build cancelled: {label}");
@@ -3972,6 +3998,13 @@ impl EditorApp {
                     prism_editor_core::LogSource::System,
                     prism_editor_core::LogLevel::Warn,
                     format!("build cancelled: {label}"),
+                );
+            } else if failed {
+                self.state.status = format!("build failed: {label}");
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Error,
+                    format!("build failed: {label} (see Console)"),
                 );
             } else {
                 self.state.status = format!("build finished: {label}");
