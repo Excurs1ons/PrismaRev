@@ -44,6 +44,14 @@ pub struct MeshUploadInput {
     pub indices: Vec<u32>,
 }
 
+impl MeshUploadInput {
+    /// 顶点位置的局部包围盒（#491：视锥剔除 / 阴影通道剔除 / 编辑器精确拾取
+    /// 都要它）。空网格或非有限坐标返回 `None`，调用方据此跳过剔除。
+    pub fn bounds(&self) -> Option<crate::culling::Aabb> {
+        crate::culling::Aabb::from_positions(self.positions.iter().copied())
+    }
+}
+
 /// One GPU-uploaded 网格 plus the data the 渲染器 needs to 绘制 it.
 pub struct UploadedMesh {
     /// The underlying Vulkan 缓冲区 + 内存 owned here.
@@ -220,3 +228,34 @@ fn build_vertices(input: &MeshUploadInput) -> Vec<crate::mesh::Vertex> {
 #[cfg(test)]
 #[path = "mesh_manager_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    fn input(positions: Vec<[f32; 3]>) -> MeshUploadInput {
+        MeshUploadInput {
+            positions,
+            normals: Vec::new(),
+            colors: Vec::new(),
+            uvs: Vec::new(),
+            tangents: Vec::new(),
+            indices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn upload_input_reports_its_local_bounds() {
+        let bounds = input(vec![[0.0, 0.0, 0.0], [2.0, -1.0, 4.0]])
+            .bounds()
+            .expect("finite vertices give bounds");
+        assert_eq!(bounds.min, [0.0, -1.0, 0.0]);
+        assert_eq!(bounds.max, [2.0, 0.0, 4.0]);
+    }
+
+    #[test]
+    fn an_empty_or_broken_mesh_has_no_bounds() {
+        assert!(input(Vec::new()).bounds().is_none());
+        assert!(input(vec![[f32::INFINITY, 0.0, 0.0]]).bounds().is_none());
+    }
+}

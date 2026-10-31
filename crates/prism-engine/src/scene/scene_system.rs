@@ -144,6 +144,19 @@ impl<'a> SceneReadView<'a> {
     pub fn draw_items_into(&self, out: &mut Vec<prism_render::DrawItem>) {
         crate::scene::systems::render::scene_render_system_into(self.world, out)
     }
+
+    /// [`Self::draw_items_into`] with camera frustum culling (#491).
+    ///
+    /// `frustum == None` 时等同于 [`Self::draw_items_into`]。
+    pub fn draw_items_with_frustum_into(
+        &self,
+        frustum: Option<&prism_render::culling::Frustum>,
+        out: &mut Vec<prism_render::DrawItem>,
+    ) {
+        crate::scene::systems::render::scene_render_system_into_with_frustum(
+            self.world, frustum, out,
+        )
+    }
 }
 
 /// 把场景里的相对资源路径解析成资源包内路径。

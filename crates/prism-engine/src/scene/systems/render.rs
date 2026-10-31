@@ -51,11 +51,73 @@ pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
 /// The frame packet keeps this `Vec` across frames, so `clear()` + `extend`
 /// reuses the allocation instead of doing one `collect()` per frame (#66).
 pub fn scene_render_system_into(world: &World, out: &mut Vec<DrawItem>) {
+    scene_render_system_into_with_frustum(world, None, out);
+}
+
+/// 网格局部包围盒表（`MeshHandle → 局部 AABB`），由资产解析写回。
+///
+/// 放在 World 资源里而不是每个 [`MeshRef`] 上：同一个网格被多个实体复用时只存一份，
+/// 热重载换句柄时也只更新一条记录。没有记录的网格**不参与剔除**（数据未知时保持
+/// 旧行为），所以程序化网格（标定球、gizmo）仍然照旧绘制。
+#[derive(Debug, Default)]
+pub struct MeshBounds {
+    bounds:
+        std::collections::HashMap<prism_render::managers::MeshHandle, prism_render::culling::Aabb>,
+}
+
+impl MeshBounds {
+    pub fn insert(
+        &mut self,
+        handle: prism_render::managers::MeshHandle,
+        bounds: prism_render::culling::Aabb,
+    ) {
+        self.bounds.insert(handle, bounds);
+    }
+
+    pub fn get(
+        &self,
+        handle: prism_render::managers::MeshHandle,
+    ) -> Option<&prism_render::culling::Aabb> {
+        self.bounds.get(&handle)
+    }
+
+    pub fn len(&self) -> usize {
+        self.bounds.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bounds.is_empty()
+    }
+}
+
+/// [`scene_render_system_into`] with an optional camera frustum (#491).
+///
+/// `frustum == None` 时与旧行为完全一致（不剔除）。有视锥时，把网格的局部
+/// 包围盒按实体模型矩阵变换到世界空间再做保守相交测试；**没有包围盒或变换非
+/// 有限**的实体照旧提交（见 [`MeshBounds`]）。
+///
+/// 注意这只按**主相机**剔除：阴影通道共用同一份绘制列表，因此相机外的投射者
+/// 也不会进阴影贴图（与 Unity 的「只为可见物体渲阴影」一致）。按光源视锥剔除
+/// 是后续单独的一步。
+pub fn scene_render_system_into_with_frustum(
+    world: &World,
+    frustum: Option<&prism_render::culling::Frustum>,
+    out: &mut Vec<DrawItem>,
+) {
     out.clear();
+    let bounds = world.get_resource::<MeshBounds>();
     out.extend(
         world
             .query2::<LocalToWorld, MeshRef>()
             .filter(|(e, _, _)| crate::scene::systems::hierarchy::is_active_in_hierarchy(world, *e))
+            .filter(|(_, wt, mr)| match frustum {
+                Some(frustum) => bounds
+                    .and_then(|bounds| bounds.get(mr.render_handle))
+                    .and_then(|local| local.transformed(&wt.0.to_cols_array_2d()))
+                    .map(|world_bounds| frustum.intersects_aabb(&world_bounds))
+                    .unwrap_or(true),
+                None => true,
+            })
             .map(|(entity, wt, mr)| {
                 // `MeshRenderer.shadow_casting_mode` / `cull_mode`（
                 // `shadowCastingMode` / `CullMode`）。没有该组件的运行时实体按

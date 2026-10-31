@@ -609,3 +609,120 @@ fn child_of_an_inactive_parent_is_skipped() {
     crate::scene::systems::hierarchy::active_hierarchy_system(&mut world);
     assert_eq!(scene_render_system(&world).len(), 1);
 }
+
+// ── 视锥剔除（#491） ──────────────────────────────────────────────
+
+/// 相机在原点、看向 −Z 的视锥（与 `prism-render` 的 culling 测试同一构造）。
+fn camera_frustum() -> prism_render::culling::Frustum {
+    // 走引擎自己的投影（Vulkan 深度 [0,1] + y-flip），不要另写一份公式。
+    let camera = prism_scene::Camera {
+        fov_y_degrees: 45.0,
+        near: 0.1,
+        far: 100.0,
+        ..prism_scene::Camera::default()
+    };
+    let view = glam::camera::rh::view::look_at_mat4(
+        glam::Vec3::ZERO,
+        glam::Vec3::new(0.0, 0.0, -1.0),
+        glam::Vec3::Y,
+    );
+    let view_proj = camera.projection_matrix(1.0) * view;
+    prism_render::culling::Frustum::from_view_proj(&view_proj.to_cols_array_2d())
+        .expect("camera frustum must be valid")
+}
+
+fn spawn_mesh(world: &mut World, model: glam::Mat4) -> prism_ecs::Entity {
+    let entity = world.spawn();
+    world.insert(entity, LocalToWorld(model));
+    world.insert(
+        entity,
+        MeshRef {
+            asset_id: SceneAssetId::generate(),
+            render_handle: MeshHandle::default(),
+            generation: 1,
+        },
+    );
+    entity
+}
+
+fn unit_bounds() -> prism_render::culling::Aabb {
+    prism_render::culling::Aabb::new([-0.5; 3], [0.5; 3])
+}
+
+#[test]
+fn a_mesh_outside_the_camera_frustum_is_culled() {
+    let mut world = World::new();
+    // 两个实体共用同一个网格句柄：区别只在模型矩阵。
+    spawn_mesh(
+        &mut world,
+        glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0)),
+    );
+    spawn_mesh(
+        &mut world,
+        glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 5.0)),
+    );
+    let mut bounds = MeshBounds::default();
+    bounds.insert(MeshHandle::default(), unit_bounds());
+    world.insert_resource(bounds);
+
+    let frustum = camera_frustum();
+    let mut out = Vec::new();
+    scene_render_system_into_with_frustum(&world, Some(&frustum), &mut out);
+
+    assert_eq!(out.len(), 1, "只有相机前的网格留下");
+    assert!(out[0].model[3][2] < 0.0, "留下的是 −Z 方向的实体");
+}
+
+#[test]
+fn meshes_without_bounds_are_never_culled() {
+    let mut world = World::new();
+    spawn_mesh(
+        &mut world,
+        glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 5.0)),
+    );
+
+    let frustum = camera_frustum();
+    let mut out = Vec::new();
+    // 没有 `MeshBounds`：程序化网格 / 还没解析完的网格照旧提交。
+    scene_render_system_into_with_frustum(&world, Some(&frustum), &mut out);
+    assert_eq!(out.len(), 1);
+}
+
+#[test]
+fn culling_keeps_the_rest_of_the_extraction_rules() {
+    let mut world = World::new();
+    let entity = spawn_mesh(
+        &mut world,
+        glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0)),
+    );
+    world.insert(entity, Active(false));
+    let mut bounds = MeshBounds::default();
+    bounds.insert(MeshHandle::default(), unit_bounds());
+    world.insert_resource(bounds);
+
+    let frustum = camera_frustum();
+    let mut out = Vec::new();
+    scene_render_system_into_with_frustum(&world, Some(&frustum), &mut out);
+    assert!(out.is_empty(), "视锥内但未激活的实体仍然不画");
+}
+
+#[test]
+fn no_frustum_matches_the_unculled_extraction() {
+    let mut world = World::new();
+    spawn_mesh(
+        &mut world,
+        glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0)),
+    );
+    spawn_mesh(
+        &mut world,
+        glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 5.0)),
+    );
+    let mut bounds = MeshBounds::default();
+    bounds.insert(MeshHandle::default(), unit_bounds());
+    world.insert_resource(bounds);
+
+    let mut culled = Vec::new();
+    scene_render_system_into_with_frustum(&world, None, &mut culled);
+    assert_eq!(culled.len(), 2);
+    assert_eq!(culled.len(), scene_render_system(&world).len());
+}
