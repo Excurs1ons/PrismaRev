@@ -165,6 +165,15 @@ impl Default for Active {
     }
 }
 
+/// 跨场景保留标记（Unity 的 `DontDestroyOnLoad` 等价物）。
+///
+/// 场景切换（`Engine::unload_scene` 或 `LoadSceneMode::Single` 加载）时，
+/// 带这个标记的实体**以及它们的整棵子树**不会被卸载 —— 玩家管理器、音频源、
+/// 转场遮罩这类东西需要活过换场。只在运行时添加，不是可挂载组件，
+/// 因此不会出现在 `.scene.json` 里（见 `json::DERIVED_COMPONENTS`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Persistent;
+
 /// 派生：自身 [`Active`] 与所有祖先 `Active` 的与（Unity 的
 /// `activeInHierarchy`）。
 ///

@@ -60,6 +60,7 @@ pub struct EntityJson {
 pub const DERIVED_COMPONENTS: &[&str] = &[
     "prism_engine::scene::LocalTransform",
     "prism_engine::scene::ActiveInHierarchy",
+    "prism_engine::scene::Persistent",
     "prism_engine::ui::ComputedLayout",
 ];
 

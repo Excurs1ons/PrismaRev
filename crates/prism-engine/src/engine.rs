@@ -33,6 +33,19 @@ impl crate::scene::EnvironmentProvider for prism_asset::runtime::ResourceManager
 use crate::ecs::schedule::Schedule;
 use crate::input::InputManager;
 
+/// 场景加载模式（Unity `OpenSceneMode` 的等价物）。
+///
+/// 之前的入口只有「往当前世界继续 spawn」，于是第二次加载会让所有实体变成
+/// 两份（见 #482）。现在模式是显式参数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoadSceneMode {
+    /// 卸载已加载的场景（`Persistent` 子树除外）再加载 —— 默认。
+    #[default]
+    Single,
+    /// 保留已加载的场景，把新场景叠加进去。
+    Additive,
+}
+
 // ===========================================================================
 // Engine
 // ===========================================================================
@@ -161,6 +174,19 @@ impl Engine {
         &mut self,
         path: &std::path::Path,
     ) -> Result<Vec<crate::ecs::Entity>, String> {
+        self.load_scene_json_file_with_mode(path, LoadSceneMode::Single)
+    }
+
+    /// [`Self::load_scene_json_file`]，但显式指定 [`LoadSceneMode`]。
+    ///
+    /// `Single` 会先卸载上一次的场景（先问这句话：以前它不清世界，第二次调用
+    /// 就让所有实体变成两份且毫无提示）。卸载发生在新场景 spawn **成功之后** ——
+    /// 解析失败时旧场景保持原样。
+    pub fn load_scene_json_file_with_mode(
+        &mut self,
+        path: &std::path::Path,
+        mode: LoadSceneMode,
+    ) -> Result<Vec<crate::ecs::Entity>, String> {
         let mut registry = crate::scene::ComponentRegistry::new();
         crate::scene::register_builtin_components(&mut registry);
         let mut loader = crate::scene::loader::SceneLoader::new();
@@ -169,14 +195,33 @@ impl Engine {
             crate::scene::loader::SceneSource::JsonFile(path.to_path_buf()),
             &registry,
         )?;
+        let unloaded = self.scene.adopt_author_scene(
+            &mut self.world,
+            &instance,
+            mode == LoadSceneMode::Additive,
+        );
         log::info!(
-            "scene: loaded {} entities from {}",
+            "scene: loaded {} entities from {} ({mode:?}, unloaded {unloaded})",
             instance.all_entities.len(),
             path.display()
         );
         // 返回**文档顺序**的实体表：`spawn_from_json_text` 按文档数组顺序生成，
         // 宿主（编辑器）靠这个下标与 `.scene.json` 的 `entities[i]` 对齐。
         Ok(instance.all_entities)
+    }
+
+    /// 卸载当前场景（`Persistent` 子树与引擎自有实体除外），返回被删的实体数。
+    ///
+    /// 用于「回主菜单」「重开一局」这类只需要清场的场合；配合
+    /// [`Self::load_scene_json_file_with_mode`] 可以换场而不重启进程。
+    pub fn unload_scene(&mut self) -> usize {
+        self.scene.unload_scene(&mut self.world)
+    }
+
+    /// 场景代数：每次切换 / 卸载递增。宿主把它交给项目模块，
+    /// 让后者丢弃已经失效的实体句柄（`prism-project-api::scene_generation`）。
+    pub fn scene_generation(&self) -> u64 {
+        self.scene.generation()
     }
 
     /// 存档原语：将当前 ECS 世界状态写入 `scene_state.json`。
@@ -566,3 +611,7 @@ pub fn orbit_camera_demo_system(world: &mut World, dt: f32) {
         transform.rotation.y += dt * 0.3;
     }
 }
+
+#[cfg(test)]
+#[path = "engine_scene_tests.rs"]
+mod scene_tests;
