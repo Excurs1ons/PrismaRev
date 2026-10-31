@@ -40,6 +40,13 @@ pub struct PostPass {
     /// 交换链 颜色 格式 集合 in `new`, used to rebuild the 渲染 pass on
     /// `drop_target`/`set_target`). Stored so the visualizer can 读取 it.
     color_format: vk::Format,
+    /// Layout the render pass leaves the color attachment in.
+    ///
+    /// Window targets end in `PRESENT_SRC_KHR` so the swapchain image can be
+    /// presented; offscreen targets stay in `COLOR_ATTACHMENT_OPTIMAL` — a
+    /// headless `VulkanContext` never enables `VK_KHR_swapchain` (no surface),
+    /// and `PRESENT_SRC_KHR` is not a valid layout without it.
+    final_layout: vk::ImageLayout,
     /// One 帧缓冲 per 交换链 图像 (each wraps its 交换链 视图
     framebuffers: Vec<Option<vk::Framebuffer>>,
     /// Cached 交换链 views the framebuffers were 内置 against (for
@@ -67,10 +74,15 @@ impl PostPass {
     /// is the number of 描述符 sets to allocate (one per 并发 帧
     /// so `set_input` doesn't disturb an in-flight 集合 The 管线 +
     /// framebuffers are created lazily once a 渲染 pass + 目标 exist.
+    ///
+    /// `final_layout` is where the render pass leaves the color attachment:
+    /// `PRESENT_SRC_KHR` for a swapchain image, `COLOR_ATTACHMENT_OPTIMAL` for
+    /// an offscreen target (see [`Self::final_layout`]).
     pub fn new(
         context: &VulkanContext,
         color_format: vk::Format,
         frames_in_flight: u32,
+        final_layout: vk::ImageLayout,
     ) -> anyhow::Result<Self> {
         let device = &context.device;
 
@@ -128,11 +140,12 @@ impl PostPass {
         .context("PostPass: allocate ds")?;
         let descriptor_sets: Vec<vk::DescriptorSet> = descriptor_sets;
 
-        let render_pass = create_render_pass(device, color_format)?;
+        let render_pass = create_render_pass(device, color_format, final_layout)?;
 
         Ok(Self {
             render_pass: Some(render_pass),
             color_format,
+            final_layout,
             framebuffers: Vec::new(),
             target_views: Vec::new(),
             extent: vk::Extent2D {
@@ -157,6 +170,15 @@ impl PostPass {
     /// 交换链 颜色 格式 PostPass targets. Exposed for the visualizer.
     pub fn color_format(&self) -> vk::Format {
         self.color_format
+    }
+
+    /// Layout the render pass leaves the target image in.
+    ///
+    /// `PRESENT_SRC_KHR` for swapchain targets, `COLOR_ATTACHMENT_OPTIMAL` for
+    /// offscreen targets. Exposed so tests can assert a headless renderer never
+    /// asks for a swapchain-only layout.
+    pub fn final_layout(&self) -> vk::ImageLayout {
+        self.final_layout
     }
 
     /// Ensure the 帧缓冲 for `image_index` 存在 and is 内置 against the
@@ -610,19 +632,31 @@ impl RenderPassNode for PostPass {
             return Ok(());
         }
         if self.render_pass.is_none() {
-            self.render_pass = Some(create_render_pass(device, self.color_format)?);
+            self.render_pass = Some(create_render_pass(
+                device,
+                self.color_format,
+                self.final_layout,
+            )?);
         }
         self.ensure_pipeline(device)
     }
 }
 
-/// 创建 the PostPass 渲染 pass 1 swapchain-format 颜色 附件
+/// 创建 the PostPass 渲染 pass 1 color-format 颜色 附件
 /// 清空 -> 存储 no 深度 `initial_layout = UNDEFINED` so the GPU
-/// transitions the 交换链 图像 from whatever 布局 it was in (typically
-/// PRESENT_SRC_KHR from 最后一个 帧 into COLOR_ATTACHMENT_OPTIMAL as part of
-/// the 加载 op. `final_layout = COLOR_ATTACHMENT_OPTIMAL` so the 调用者 can
-/// 屏障 to PRESENT_SRC_KHR (or the external overlay can 加载 it).
-fn create_render_pass(device: &ash::Device, format: vk::Format) -> anyhow::Result<vk::RenderPass> {
+/// transitions the target 图像 from whatever 布局 it was in (typically
+/// `PRESENT_SRC_KHR` from 最后一个 帧 into COLOR_ATTACHMENT_OPTIMAL as part of
+/// the 加载 op.
+///
+/// `final_layout` is supplied by the caller: `PRESENT_SRC_KHR` for a swapchain
+/// image, `COLOR_ATTACHMENT_OPTIMAL` for an offscreen image. Headless contexts
+/// do not enable `VK_KHR_swapchain`, so the swapchain layout would be an
+/// invalid enum value there (`VUID-VkAttachmentDescription-finalLayout-parameter`).
+fn create_render_pass(
+    device: &ash::Device,
+    format: vk::Format,
+    final_layout: vk::ImageLayout,
+) -> anyhow::Result<vk::RenderPass> {
     let color_attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -631,9 +665,7 @@ fn create_render_pass(device: &ash::Device, format: vk::Format) -> anyhow::Resul
         .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        // Leave COLOR_ATTACHMENT_OPTIMAL so the external overlay can 加载 it, or
-        // the 调用者 can 屏障 to PRESENT_SRC_KHR.
-        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+        .final_layout(final_layout);
 
     let color_ref = vk::AttachmentReference::default()
         .attachment(0)

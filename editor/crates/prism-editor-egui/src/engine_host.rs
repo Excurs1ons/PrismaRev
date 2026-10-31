@@ -530,7 +530,8 @@ impl EngineHost {
             return Err(error);
         }
 
-        // 截图要读 `PRESENT_SRC_KHR` 布局的图像，所以必须在转采样布局**之前**做。
+        // 截图要读离屏图像当前布局（帧结束是 `COLOR_ATTACHMENT_OPTIMAL`），
+        // 所以必须在转采样布局**之前**做。
         if let Some(path) = self.capture_path.take() {
             match self.capture_offscreen(&path) {
                 Ok(path) => log::info!("viewport capture: {}", path.display()),
@@ -538,7 +539,7 @@ impl EngineHost {
             }
         }
 
-        // PRESENT_SRC_KHR → SHADER_READ_ONLY_OPTIMAL：egui 的采样描述符要求
+        // COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL：egui 的采样描述符要求
         // 后者，且这一步在同一个队列上完成，不需要额外 semaphore。
         self.renderer.offscreen_present_for_sampling()?;
 

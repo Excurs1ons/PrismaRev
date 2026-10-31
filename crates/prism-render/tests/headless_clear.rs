@@ -156,6 +156,27 @@ fn headless_render_real_frame_and_readback() {
 }
 
 #[test]
+fn headless_post_pass_never_ends_in_present_src() {
+    let renderer = match try_create_headless() {
+        Some(r) => r,
+        None => return,
+    };
+
+    let post = renderer
+        .graph()
+        .pass_ref::<prism_render::PostPass>()
+        .expect("PostPass should be registered in the render graph");
+
+    // A headless context never enables `VK_KHR_swapchain`, so ending the pass in
+    // PRESENT_SRC_KHR is invalid there (VUID-VkAttachmentDescription-finalLayout-parameter).
+    assert_eq!(
+        post.final_layout(),
+        ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        "headless PostPass must leave the offscreen image in COLOR_ATTACHMENT_OPTIMAL"
+    );
+}
+
+#[test]
 fn rt_scheduler_is_registered_in_graph() {
     let renderer = match try_create_headless() {
         Some(r) => r,
