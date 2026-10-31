@@ -351,6 +351,14 @@ pub fn sanitize_stem(input: &str) -> String {
 }
 
 pub fn default_save_path(root: &Path, kind: DocKind, title: &str) -> String {
+    unique_save_path(root, kind, title, &[])
+}
+
+/// 同 [`default_save_path`]，但额外避开 `taken` 里已经占用的路径。
+///
+/// 磁盘检查只覆盖「上一次会话留下的文件」；同一个会话里连开两个模板文档时，
+/// 前一个还没落盘，只看磁盘会给出同一个名字（#449）。
+pub fn unique_save_path(root: &Path, kind: DocKind, title: &str, taken: &[String]) -> String {
     let stem = title
         .trim_end_matches(kind.suffix())
         .trim_end_matches(".json")
@@ -359,7 +367,7 @@ pub fn default_save_path(root: &Path, kind: DocKind, title: &str) -> String {
     let folder = kind.folder();
     let mut candidate = format!("{folder}/{stem}{}", kind.suffix());
     let mut index = 2;
-    while root.join(&candidate).exists() {
+    while root.join(&candidate).exists() || taken.iter().any(|path| path == &candidate) {
         candidate = format!("{folder}/{stem}-{index}{}", kind.suffix());
         index += 1;
     }
