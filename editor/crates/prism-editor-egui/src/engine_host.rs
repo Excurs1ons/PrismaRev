@@ -71,6 +71,9 @@ pub struct EngineHost {
     height: u32,
     /// Scene view 的编辑器相机是否用场景天空盒当背景（引擎默认开）。
     show_skybox: bool,
+    /// Scene view 当前是否是 2D（正交）视图（#641）。由
+    /// [`Self::place_editor_camera`] 每帧同步，用来关掉侧着看的 XZ 网格。
+    view_2d: bool,
     /// 下一次出帧后把离屏图像读回写到这个路径（编辑器截图）。
     capture_path: Option<PathBuf>,
     simulate: bool,
@@ -95,8 +98,10 @@ pub struct EngineHost {
 fn editor_grid_visible(
     kind: ViewKind,
     settings: &prism_engine::render_settings::RenderSettings,
+    view_2d: bool,
 ) -> bool {
-    kind == ViewKind::Scene && settings.show_grid
+    // 2D 视图里 XZ 网格是侧着的一条线（XY 网格见 #602），先不画。
+    kind == ViewKind::Scene && settings.show_grid && !view_2d
 }
 
 impl EngineHost {
@@ -132,6 +137,7 @@ impl EngineHost {
             width,
             height,
             show_skybox: true,
+            view_2d: false,
             capture_path: None,
             simulate: false,
             paused: false,
@@ -365,11 +371,13 @@ impl EngineHost {
     ///
     /// 与 Tauri 编辑器一致：`LocalTransform` 与 `LocalToWorld` 同时写，
     /// 因为 extract 只读 `LocalToWorld`，而相机实体没有父级、不参与传播。
-    pub fn place_editor_camera(&mut self, yaw: f32, pitch: f32, distance: f32, target: [f32; 3]) {
+    pub fn place_editor_camera(&mut self, orbit: &prism_editor_core::workspace::OrbitCamera) {
         let Some(entity) = self.editor_camera else {
             return;
         };
-        let target = Vec3::from_array(target);
+        let (yaw, pitch, distance) = (orbit.yaw, orbit.pitch, orbit.distance);
+        self.view_2d = orbit.orthographic;
+        let target = Vec3::from_array(orbit.target);
         // Keep the rendered camera on the same orbit as `OrbitCamera::eye()`:
         // yaw is world-Y, while positive pitch raises the eye toward +Y.
         let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
@@ -396,6 +404,11 @@ impl EngineHost {
         );
         if let Some(camera) = world.get_mut::<Camera>(entity) {
             camera.aspect = self.width as f32 / self.height.max(1) as f32;
+            // 2D 视图：正交半高直接复用 `distance`，滚轮缩放的手感不变（#641）。
+            camera.orthographic = orbit.orthographic;
+            if orbit.orthographic {
+                camera.orthographic_size = orbit.distance.max(0.05);
+            }
         }
     }
 
@@ -583,7 +596,7 @@ impl EngineHost {
             clear_color: scene.clear_color,
             shadows_enabled: scene.shadows_enabled,
             ui_overlay: Some(&self.packet.ui_overlay),
-            show_grid: editor_grid_visible(self.kind, &self.settings),
+            show_grid: editor_grid_visible(self.kind, &self.settings, self.view_2d),
         };
 
         let Some(ctx) = self.renderer.begin_frame()? else {
@@ -663,12 +676,20 @@ mod tests {
     fn the_editor_grid_never_reaches_the_game_view() {
         let mut settings = prism_engine::render_settings::RenderSettings::default();
         settings.show_grid = true;
-        assert!(editor_grid_visible(ViewKind::Scene, &settings));
-        assert!(!editor_grid_visible(ViewKind::Game, &settings));
+        assert!(editor_grid_visible(ViewKind::Scene, &settings, false));
+        assert!(!editor_grid_visible(ViewKind::Game, &settings, false));
 
         settings.show_grid = false;
-        assert!(!editor_grid_visible(ViewKind::Scene, &settings));
-        assert!(!editor_grid_visible(ViewKind::Game, &settings));
+        assert!(!editor_grid_visible(ViewKind::Scene, &settings, false));
+        assert!(!editor_grid_visible(ViewKind::Game, &settings, false));
+    }
+
+    /// #641：2D 视图里 XZ 网格是侧着的一条线，必须关掉。
+    #[test]
+    fn the_grid_is_hidden_in_the_2d_view() {
+        let mut settings = prism_engine::render_settings::RenderSettings::default();
+        settings.show_grid = true;
+        assert!(!editor_grid_visible(ViewKind::Scene, &settings, true));
     }
 
     #[test]

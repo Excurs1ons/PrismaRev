@@ -203,6 +203,11 @@ pub struct OrbitCamera {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
+    /// 2D 视图（#641）：正交投影 + 视角锁在 XY 平面（`yaw = pitch = 0`，
+    /// 看向 −Z，+X 右 / +Y 上），只允许平移与缩放。
+    ///
+    /// `distance` 在 2D 里同时充当正交半高，所以滚轮缩放的手感不变。
+    pub orthographic: bool,
 }
 
 impl Default for OrbitCamera {
@@ -212,11 +217,30 @@ impl Default for OrbitCamera {
             yaw: 0.0,
             pitch: 0.0,
             distance: 12.0,
+            orthographic: false,
         }
     }
 }
 
 impl OrbitCamera {
+    /// 切换 2D 视图。进入时把视角锁到 XY 正视，退出时保留当前平移/缩放。
+    pub fn set_2d(&mut self, on: bool) {
+        self.orthographic = on;
+        if on {
+            self.yaw = 0.0;
+            self.pitch = 0.0;
+        }
+    }
+
+    pub fn toggle_2d(&mut self) {
+        self.set_2d(!self.orthographic);
+    }
+
+    /// 正交投影的半高（世界单位）。透视相机没有这个概念。
+    pub fn ortho_half_height(&self) -> Option<f32> {
+        self.orthographic.then_some(self.distance.max(0.05))
+    }
+
     pub fn eye(&self) -> [f32; 3] {
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
@@ -227,8 +251,11 @@ impl OrbitCamera {
         ]
     }
 
-    /// 拖动轨道（像素 → 弧度）。
+    /// 拖动轨道（像素 → 弧度）。2D 视图锁定视角，直接忽略。
     pub fn orbit(&mut self, dx: f32, dy: f32) {
+        if self.orthographic {
+            return;
+        }
         self.yaw -= dx * 0.01;
         self.pitch = (self.pitch + dy * 0.01).clamp(-1.5, 1.5);
     }
@@ -271,6 +298,11 @@ impl OrbitCamera {
 
     pub fn focus(&mut self, point: [f32; 3], radius: f32) {
         self.target = point;
+        if self.orthographic {
+            // 正交半高直接等于缩放半径，留 20% 余量。
+            self.distance = (radius * 1.2).max(0.5);
+            return;
+        }
         // 垂直 fov 60°：距离 = 半径 / sin(fov/2) 留 20% 余量。
         self.distance = (radius / (30.0f32.to_radians().sin()) * 1.2).max(0.5);
     }
@@ -4227,6 +4259,41 @@ mod tests {
         camera.orbit(10.0, -20.0);
         assert!((camera.yaw - (yaw - 0.1)).abs() < 1e-6);
         assert!((camera.pitch - (pitch - 0.2)).abs() < 1e-6);
+    }
+
+    /// #641：2D 视图锁视角 —— 进入时归零，之后轨道/飞行观察都不再改变朝向。
+    #[test]
+    fn the_2d_view_locks_the_camera_to_the_xy_plane() {
+        let mut camera = OrbitCamera::default();
+        camera.orbit(30.0, 20.0);
+        assert!(camera.yaw.abs() > 1e-6 || camera.pitch.abs() > 1e-6);
+
+        camera.set_2d(true);
+        assert!(camera.orthographic);
+        assert_eq!((camera.yaw, camera.pitch), (0.0, 0.0));
+
+        camera.orbit(50.0, 50.0);
+        camera.look_in_place(50.0, 50.0);
+        assert_eq!((camera.yaw, camera.pitch), (0.0, 0.0), "2D 视图不该被旋转");
+        // 正视：eye 在 target 的 +Z 上，看 −Z，+X 右 / +Y 上。
+        let eye = camera.eye();
+        assert!((eye[2] - camera.distance).abs() < 1e-5);
+        assert!(camera.ortho_half_height().unwrap() > 0.0);
+
+        camera.toggle_2d();
+        assert!(!camera.orthographic);
+        assert!(camera.ortho_half_height().is_none());
+        camera.orbit(50.0, 0.0);
+        assert!(camera.yaw.abs() > 1e-6, "退出 2D 后轨道恢复");
+    }
+
+    #[test]
+    fn focus_fits_the_radius_in_the_ortho_size() {
+        let mut camera = OrbitCamera::default();
+        camera.set_2d(true);
+        camera.focus([1.0, 2.0, 0.0], 5.0);
+        assert_eq!(camera.target, [1.0, 2.0, 0.0]);
+        assert!((camera.distance - 6.0).abs() < 1e-4);
     }
 
     #[test]
