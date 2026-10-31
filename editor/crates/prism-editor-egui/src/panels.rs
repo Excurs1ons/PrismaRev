@@ -510,6 +510,8 @@ enum TreeAction {
     PreviewRename(usize, String),
     /// Esc：把预览还原回开始编辑前的状态。
     CancelRename,
+    /// 右键空白处：清空选择。
+    ClearSelection,
 }
 
 /// 层级搜索命中项及其祖先（`path_of` 已包含自身）。
@@ -596,11 +598,14 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     // 资产拖到实体上 = 实例化预制体（引擎的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
     let mut hovered_drop_target = false;
+    // 这一帧有没有右键命中某一行（决定「右键空白清空选择」要不要生效，#524）。
+    let mut row_context_open = false;
 
-    egui::ScrollArea::vertical()
+    let area_rect = egui::ScrollArea::vertical()
         .id_salt("hierarchy-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            let area_rect = ui.max_rect();
             for (index, _id) in rows {
                 let doc = &workspace.document().doc;
                 let Some(entity) = doc.entities.get(index) else {
@@ -835,6 +840,13 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     }
                 }
 
+                // 右键目标 = 菜单动作 + 检查器的共同目标（#524）。必须**在**打开菜单
+                // 之前改选择：`Parent to Selection` 在同一帧就读 `primary_selection()`。
+                if row.secondary_clicked() {
+                    row_context_open = true;
+                    workspace.select_for_context(index);
+                }
+
                 row.context_menu(|ui| {
                     if ui.button("Rename").clicked() {
                         action = Some(TreeAction::BeginRename(index, name.clone()));
@@ -874,10 +886,22 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     }
                 });
             }
-        });
+            area_rect
+        })
+        .inner;
 
     if state.dragging.is_some() && !hovered_drop_target {
         state.drop_target = None;
+    }
+
+    // 右键空白处清空选择（Unity 的 `deselectOnUnhandledMouseDown`）。
+    if !row_context_open
+        && ui.input(|input| input.pointer.secondary_clicked())
+        && ui
+            .input(|input| input.pointer.interact_pos())
+            .is_some_and(|pos| area_rect.contains(pos))
+    {
+        action = Some(TreeAction::ClearSelection);
     }
 
     // Hierarchy keeps a lightweight ghost under the pointer while dragging.
@@ -1039,6 +1063,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 workspace.select(index, false);
                 workspace.frame_selection();
             }
+            TreeAction::ClearSelection => workspace.select_many(&[], false),
             TreeAction::CommitRename(index, name) => {
                 let name = name.trim().to_string();
                 match state.rename_base.take() {
