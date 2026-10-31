@@ -25,7 +25,10 @@ use thiserror::Error;
 const GET_API_SYMBOL: &[u8] = b"prism_project_get_api\0";
 
 /// ABI 载荷类型，供宿主侧直接使用（无需再依赖 `prism-project-api`）。
-pub use prism_project_api::{EntityHandle, InputSnapshot, UiQuad};
+pub use prism_project_api::{
+    EntityHandle, InputSnapshot, TouchSnapshot, UiQuad, TOUCH_PHASE_CANCELLED, TOUCH_PHASE_ENDED,
+    TOUCH_PHASE_MOVED, TOUCH_PHASE_STARTED,
+};
 
 #[derive(Debug, Error)]
 pub enum ProjectModuleError {

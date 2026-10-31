@@ -1182,7 +1182,8 @@ impl App {
             PlatformEvent::MouseWheel { delta } => self.input.handle_scroll(delta),
             PlatformEvent::Touch { id, x, y, phase } => {
                 // 触摸不走鼠标按钮模拟：多点触控必须保留触点 id 与 phase，
-                // 由游戏逻辑经 `InputManager::touches()` 自行解释。
+                // 项目模块经 `InputSnapshot::touches`（宿主填表，最多
+                // `InputSnapshot::MAX_TOUCHES` 点）自行解释，而不是被压成左键。
                 self.input
                     .handle_touch(id, engine_touch_phase(phase), [x, y]);
             }

@@ -24,7 +24,8 @@ use prism_engine::input::{InputManager, MouseButton};
 
 use crate::diagnostics::{diagnostics_from_cargo, Diagnostic};
 use prism_runtime_host::{
-    AssetIo, InputSnapshot, ProjectModule, ProjectSession, UiQuad as HostUiQuad, WorldCommands,
+    AssetIo, InputSnapshot, ProjectModule, ProjectSession, TouchSnapshot, UiQuad as HostUiQuad,
+    WorldCommands,
 };
 use prism_scene::ComponentRegistry;
 
@@ -545,6 +546,9 @@ impl ProjectModuleDriver {
 ///
 /// `keys` 用**按住**语义（`InputManager::held_keys`），不是「本帧刚按下」：
 /// gameplay 代码用 `input.key(SPACE)` 检测持续按住（fishing 的收线）。
+/// 「刚按下 / 刚松开」走 `key_edges`（`InputSnapshot::key_pressed/key_released`），
+/// 右键 / 中键 / 滚轮 / 鼠标位移 / 触摸同理——类型本身由 `prism-project-api`
+/// 定义，这里只负责填表（#485）。
 fn input_snapshot(input: &InputManager, screen: [f32; 2]) -> InputSnapshot {
     let mut snapshot = InputSnapshot::default();
     let cursor = input.mouse_position();
@@ -552,10 +556,51 @@ fn input_snapshot(input: &InputManager, screen: [f32; 2]) -> InputSnapshot {
     snapshot.screen = screen;
     snapshot.left_clicked = input.mouse_just_pressed(MouseButton::Left);
     snapshot.left_held = input.mouse_held(MouseButton::Left);
+    snapshot.right_clicked = input.mouse_just_pressed(MouseButton::Right);
+    snapshot.right_held = input.mouse_held(MouseButton::Right);
+    snapshot.middle_clicked = input.mouse_just_pressed(MouseButton::Middle);
+    snapshot.middle_held = input.mouse_held(MouseButton::Middle);
+    let delta = input.mouse_delta();
+    snapshot.mouse_delta = [delta[0] as f32, delta[1] as f32];
+    snapshot.scroll = input.scroll_delta() as f32;
+    snapshot.pointer_locked = input.pointer_locked;
+
     for key in input.held_keys() {
         snapshot.set_key(key.bit_index(), true);
     }
+    for key in input.pressed_keys() {
+        snapshot.set_key_edge(key.bit_index(), true);
+    }
+    for key in input.released_keys() {
+        snapshot.set_key_edge(key.bit_index(), false);
+    }
+
+    let touches = input.touches();
+    let count = touches.len().min(InputSnapshot::MAX_TOUCHES);
+    snapshot.touch_count = count as u32;
+    for (slot, touch) in snapshot.touches.iter_mut().zip(touches.iter()).take(count) {
+        *slot = TouchSnapshot {
+            id: touch.id,
+            position: [touch.position[0] as f32, touch.position[1] as f32],
+            phase: touch_phase_code(touch.phase),
+            _reserved: 0,
+        };
+    }
     snapshot
+}
+
+/// 引擎触点阶段 → ABI 常量。
+fn touch_phase_code(phase: prism_engine::input::TouchPhase) -> u32 {
+    use prism_engine::input::TouchPhase;
+    use prism_runtime_host::{
+        TOUCH_PHASE_CANCELLED, TOUCH_PHASE_ENDED, TOUCH_PHASE_MOVED, TOUCH_PHASE_STARTED,
+    };
+    match phase {
+        TouchPhase::Started => TOUCH_PHASE_STARTED,
+        TouchPhase::Moved => TOUCH_PHASE_MOVED,
+        TouchPhase::Ended => TOUCH_PHASE_ENDED,
+        TouchPhase::Cancelled => TOUCH_PHASE_CANCELLED,
+    }
 }
 
 /// 项目模块提交的四边形 → 引擎的 `ExternalUiQuads`。
@@ -904,6 +949,77 @@ mod tests {
         let snapshot = input_snapshot(&input, [100.0, 50.0]);
         assert!(snapshot.left_clicked);
         assert!(snapshot.left_held);
+    }
+
+    #[test]
+    fn right_and_middle_buttons_reach_the_snapshot() {
+        let mut input = InputManager::new();
+        input.handle_mouse_button(MouseButton::Right, ElementState::Pressed);
+        let snapshot = input_snapshot(&input, [800.0, 600.0]);
+        assert!(snapshot.right_clicked, "右键边沿必须能看见");
+        assert!(snapshot.right_held);
+        assert!(!snapshot.middle_held);
+
+        let mut input = InputManager::new();
+        input.handle_mouse_button(MouseButton::Middle, ElementState::Pressed);
+        let snapshot = input_snapshot(&input, [800.0, 600.0]);
+        assert!(snapshot.middle_clicked);
+        assert!(snapshot.middle_held);
+        assert!(!snapshot.right_held);
+    }
+
+    #[test]
+    fn key_edges_are_reported_separately_from_held_keys() {
+        let mut input = InputManager::new();
+        input.handle_keyboard(KeyCode::Space, ElementState::Pressed);
+        let snapshot = input_snapshot(&input, [1.0, 1.0]);
+        assert!(snapshot.key(KeyCode::Space.bit_index()), "按住位图");
+        assert!(snapshot.key_pressed(KeyCode::Space.bit_index()), "按下边沿");
+        assert!(!snapshot.key_released(KeyCode::Space.bit_index()));
+
+        // 松开的那一帧：按住位图清掉，释放边沿置位。
+        // 宿主每帧开头会 `begin_frame`，这里照做，否则上一帧的按下边沿还留着。
+        input.begin_frame();
+        input.handle_keyboard(KeyCode::Space, ElementState::Released);
+        let snapshot = input_snapshot(&input, [1.0, 1.0]);
+        assert!(!snapshot.key(KeyCode::Space.bit_index()));
+        assert!(!snapshot.key_pressed(KeyCode::Space.bit_index()));
+        assert!(snapshot.key_released(KeyCode::Space.bit_index()));
+    }
+
+    #[test]
+    fn scroll_and_pointer_lock_are_forwarded() {
+        let mut input = InputManager::new();
+        input.handle_scroll(2.0);
+        input.pointer_locked = true;
+        let snapshot = input_snapshot(&input, [1.0, 1.0]);
+        assert!((snapshot.scroll - 2.0).abs() < 1e-6);
+        assert!(snapshot.pointer_locked);
+    }
+
+    #[test]
+    fn touches_keep_their_id_and_phase() {
+        use prism_engine::input::TouchPhase;
+        let mut input = InputManager::new();
+        input.handle_touch(7, TouchPhase::Started, [10.0, 20.0]);
+        input.handle_touch(9, TouchPhase::Moved, [30.0, 40.0]);
+        let snapshot = input_snapshot(&input, [100.0, 100.0]);
+
+        assert_eq!(snapshot.touch_count, 2);
+        let touches = snapshot.touch_slice();
+        assert_eq!(touches.len(), 2);
+        assert_eq!(touches[0].id, 7);
+        assert_eq!(touches[0].position, [10.0, 20.0]);
+        assert_eq!(touches[0].phase, prism_runtime_host::TOUCH_PHASE_STARTED);
+        assert_eq!(touches[1].id, 9);
+        assert_eq!(touches[1].phase, prism_runtime_host::TOUCH_PHASE_MOVED);
+        assert!(snapshot.any_touch());
+
+        // 全是「已结束」时不再算有触点按下。
+        input.begin_frame();
+        input.handle_touch(7, TouchPhase::Ended, [10.0, 20.0]);
+        let snapshot = input_snapshot(&input, [100.0, 100.0]);
+        assert!(!snapshot.any_touch());
     }
 
     #[test]
