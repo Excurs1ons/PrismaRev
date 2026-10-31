@@ -27,6 +27,22 @@ fn key_press_adds_held_and_just_pressed() {
 }
 
 #[test]
+fn held_keys_lists_pressed_keys_until_release() {
+    let mut s = InputManager::new();
+    s.handle_keyboard(KeyCode::KeyW, ElementState::Pressed);
+    s.handle_keyboard(KeyCode::Space, ElementState::Pressed);
+    s.begin_frame();
+    let held: Vec<KeyCode> = s.held_keys().collect();
+    assert!(held.contains(&KeyCode::KeyW));
+    assert!(held.contains(&KeyCode::Space));
+
+    s.handle_keyboard(KeyCode::KeyW, ElementState::Released);
+    let held: Vec<KeyCode> = s.held_keys().collect();
+    assert!(!held.contains(&KeyCode::KeyW));
+    assert!(held.contains(&KeyCode::Space));
+}
+
+#[test]
 fn key_held_survives_begin_frame() {
     let mut s = InputManager::new();
     s.handle_keyboard(key_w(), ElementState::Pressed);

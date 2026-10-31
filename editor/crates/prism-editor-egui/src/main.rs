@@ -14,6 +14,7 @@ mod engine_host;
 mod gpu;
 mod logging;
 mod panels;
+mod project_module;
 mod screenshot;
 mod theme;
 mod ui_tree;

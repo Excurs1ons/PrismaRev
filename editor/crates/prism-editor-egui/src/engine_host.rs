@@ -28,6 +28,8 @@ use prism_engine::Engine;
 use prism_render::descriptor::FrameUBOData;
 use prism_render::{FrameInput, GraphRenderer, VulkanContext};
 
+use crate::project_module::{ProjectEvent, ProjectModuleDriver, ProjectModuleStatus};
+
 /// 视口种类：Scene view 用编辑器轨道相机，Game view 用文档相机。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewKind {
@@ -48,6 +50,13 @@ impl ViewKind {
 /// 一个视口背后的引擎实例。
 pub struct EngineHost {
     kind: ViewKind,
+    /// 用户项目模块（只有 Game view 会挂）。
+    ///
+    /// **必须声明在 `engine` 之前**：项目 session 的回调指针指向宿主世界，
+    /// 卸载顺序必须是「先停项目代码，再拆引擎」。
+    project: Option<ProjectModuleDriver>,
+    /// 场景重建代数：项目模块用它判断实体句柄是否失效。
+    scene_generation: u64,
     engine: Engine,
     asset_resolver: GpuAssetResolver,
     renderer: GraphRenderer,
@@ -92,6 +101,8 @@ impl EngineHost {
 
         Ok(Self {
             kind,
+            project: None,
+            scene_generation: 0,
             engine,
             asset_resolver,
             renderer,
@@ -111,6 +122,51 @@ impl EngineHost {
             last_tick: Instant::now(),
             scene_loaded: false,
         })
+    }
+
+    /// 给 Game view 挂上用户项目模块的驱动器（Scene view 不跑项目代码）。
+    pub fn attach_project_module(&mut self, root: &Path) {
+        if self.kind != ViewKind::Game || self.project.is_some() {
+            return;
+        }
+        self.project = Some(ProjectModuleDriver::new(root));
+    }
+
+    pub fn project_module_status(&self) -> Option<ProjectModuleStatus> {
+        self.project.as_ref().map(ProjectModuleDriver::status)
+    }
+
+    /// 每帧轮询：收编译结果 / 按需编译。不阻塞 UI 线程。
+    pub fn poll_project_module(&mut self, playing: bool) {
+        if let Some(project) = self.project.as_mut() {
+            project.poll(playing);
+        }
+    }
+
+    pub fn drain_project_events(&mut self) -> Vec<ProjectEvent> {
+        self.project
+            .as_mut()
+            .map(ProjectModuleDriver::drain_events)
+            .unwrap_or_default()
+    }
+
+    pub fn refresh_project_module(&mut self) {
+        if let Some(project) = self.project.as_mut() {
+            project.request_refresh();
+        }
+    }
+
+    pub fn set_project_auto_refresh(&mut self, enabled: bool) {
+        if let Some(project) = self.project.as_mut() {
+            project.set_auto_refresh(enabled);
+        }
+    }
+
+    pub fn project_auto_refresh(&self) -> bool {
+        self.project
+            .as_ref()
+            .map(ProjectModuleDriver::auto_refresh)
+            .unwrap_or(true)
     }
 
     pub fn kind(&self) -> ViewKind {
@@ -147,6 +203,8 @@ impl EngineHost {
 
     /// 从 `.scene.json` 重建世界（与 Tauri / GPUI 编辑器同一条路径）。
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, String> {
+        // 旧世界的实体句柄全部失效：项目模块按这个代数丢弃缓存的句柄。
+        self.scene_generation = self.scene_generation.wrapping_add(1).max(1);
         // 旧世界的实体句柄全部失效，helper 实体要重新创建。
         self.editor_camera = None;
         self.engine = Engine::empty();
@@ -273,6 +331,11 @@ impl EngineHost {
             self.last_tick = Instant::now();
             self.paused = false;
             self.step_pending = false;
+            if !simulate {
+                // 停止 Play 时丢弃按键 / 鼠标的瞬时状态：否则下一次 Play
+                // 会继承上一次的「刚按下」。
+                self.input = InputManager::new();
+            }
         }
         self.simulate = simulate;
     }
@@ -345,6 +408,17 @@ impl EngineHost {
                 elapsed.as_secs_f32()
             };
             self.step_pending = false;
+            // 用户项目的 gameplay 代码先于引擎 system 执行：它写入的组件
+            // 和 UI 四边形在同一帧被 hierarchy / ui::render 看到。
+            if let Some(project) = self.project.as_mut() {
+                project.tick(
+                    self.engine.world_mut(),
+                    &self.input,
+                    dt,
+                    self.scene_generation,
+                    [self.width as f32, self.height as f32],
+                );
+            }
             self.engine.update(dt, &self.input);
             self.engine.late_update();
         } else {
@@ -482,6 +556,8 @@ impl EngineHost {
     }
 
     pub fn shutdown(&mut self) {
+        // 项目 session 必须先于引擎销毁：模块回调借用了宿主世界。
+        self.project = None;
         self.engine.pre_shutdown();
         self.engine.post_shutdown();
     }

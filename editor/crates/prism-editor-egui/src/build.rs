@@ -42,7 +42,7 @@ pub enum BuildKind {
     CleanEngine,
 }
 
-fn game_manifest_path(root: &Path) -> PathBuf {
+pub(crate) fn game_manifest_path(root: &Path) -> PathBuf {
     let nested = root.join("projects/prisma/Cargo.toml");
     if nested.is_file() {
         nested

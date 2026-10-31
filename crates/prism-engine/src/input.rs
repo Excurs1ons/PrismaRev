@@ -185,6 +185,14 @@ impl InputManager {
     pub fn pressed_keys(&self) -> &[KeyCode] {
         &self.keys_just_pressed
     }
+
+    /// 当前按住的所有按键（包含本帧刚按下的）。
+    ///
+    /// 宿主下发给项目模块的 `InputSnapshot` 用按住语义：gameplay 代码的
+    /// `input.key(...)` 检测的是持续按住，而不是只在按下那一帧为真。
+    pub fn held_keys(&self) -> impl Iterator<Item = KeyCode> + '_ {
+        self.keys_held.iter().copied()
+    }
     pub fn key_just_released(&self, key: KeyCode) -> bool {
         self.keys_just_released.contains(&key)
     }

@@ -26,6 +26,8 @@ serde_json = { workspace = true }
 prism-render = { path = "../../../crates/prism-render" }
 prism-engine = { path = "../../../crates/prism-engine" }
 prism-scene = { path = "../../../crates/prism-scene" }
+# Game View 的 Play 执行用户项目 gameplay 代码：同构建 ABI 的动态模块宿主。
+prism-runtime-host = { path = "../../../crates/prism-runtime-host" }
 # 数据层（UI 框架无关）：dock 布局、文档模型、schema、
 # 撤销栈、日志缓冲、i18n、项目读写。
 prism-editor-core = { package = "prism-editor-gpui-core", path = "../prism-editor-gpui-core" }

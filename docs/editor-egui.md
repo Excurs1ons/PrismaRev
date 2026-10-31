@@ -76,6 +76,29 @@ instance / device 并返回 `AshRenderState`，因此可以做到引擎的模型
   就是普通文本字形，因此传输控件 / 层级眼睛 / 资产文件夹 / 关闭按钮都不再依赖
   Unicode 符号（`▶ ⏸ ✕ ⧉` 这类在多数 UI 字体里缺字形，会显示成方块）。
 
+## 3.2 用户项目代码（Game View Play）
+
+Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只跑引擎内置 system：
+
+- 编辑器把项目 manifest 的 `preview-module` feature 编译成 cdylib
+  （`cargo build --no-default-features --features preview-module --target-dir
+  <项目>/target/preview-module`），由 `prism-runtime-host` 用同构建 ABI 加载。
+  项目模块**不链接引擎**：`prism-game-api` 只开 `plugin` 后端。
+- 源码改动落定 **350 ms** 后自动重编；Play 期间不自动换模块（避免打断试玩），
+  `Ctrl+R` / File → Compile Project Module 强制重编。编译失败保留上一次成功的
+  模块继续跑，错误进 Console。
+- Play 每帧先 `ProjectSession::tick(WorldCommands)`，再跑引擎 system：项目写入的
+  组件和 `draw_quad` 提交的 UI 四边形在同一帧被 hierarchy / `ui::render` 看到。
+- 项目模块通过 `AssetIo` 读**项目自己的** `assets/`（不是仓库根的引擎资产）。
+- 输入：Play 时 Game view 把键鼠转发给引擎 `InputManager`，`InputSnapshot.keys`
+  是**按住**语义（fishing 的 `input.key(SPACE)` 需要持续收线）。
+- 没有 `preview-module` feature 的项目（例如 `projects/fishing`）只跑引擎，并在
+  Console 说明原因；`PRISMREV_PROJECT_MODULE=/path/libgame.so` 可直接加载
+  预构建模块（测试 / 非 Cargo 项目）。
+- `projects/prisma` 的 `preview-module` 必须显式打开 `prism-scene` 的三组组件
+  （3D / 2D / UI）：模块是独立 workspace，拿不到引擎侧的 feature 统一，少一组
+  就会在 `ProjectModule::load` 的 schema fingerprint 校验处被拒绝。
+
 ## 4. 交互
 
 - 轨道：左键/右键拖拽 → `OrbitCamera::orbit`；滚轮 → `zoom`；
@@ -102,7 +125,7 @@ instance / device 并返回 `AshRenderState`，因此可以做到引擎的模型
 
 | 菜单 | 二级 / 三级 |
 |---|---|
-| File | New Scene / New Scene From Template ▸ / New Prefab / Open / Recent Scenes ▸ / Save / Save As / Save Project / Reload / Build Settings / Build Scene Pack / Cook Active Scene / Build Player / Build And Run / Clean Build / Exit |
+| File | New Scene / New Scene From Template ▸ / New Prefab / Open / Recent Scenes ▸ / Save / Save As / Save Project / Reload / Build Settings / Build Scene Pack / Cook Active Scene / Build Player / Build And Run / Compile Project Module / Auto Refresh Project Module / Clean Build / Exit |
 | Edit | Undo / Redo / Cut / Copy / Paste / Duplicate / Delete / Select All / Deselect All / Invert Selection / Select Children / Select Prefab Root / Next·Previous Selection / Copy·Paste Transform ▸ / Paste Component / Play / Pause / Step / Project Settings / Preferences / Theme |
 | Assets | Create ▸ (Scene / Prefab / **Prefab Variant…** / Folder…) / Open / Show in Explorer / Copy Path / Duplicate / Delete / Instantiate In Scene / Find References In Scene / Find References In Project / Refresh |
 | GameObject | Create Empty / Create Empty Child / Create Empty Parent / Create Other ▸ (Rendering ▸ Mesh Renderer·Skybox / Light ▸ Directional·Point·Spot / Camera / UI) / Move To View / Align View to Selected / Snap to Ground |
@@ -114,7 +137,8 @@ instance / device 并返回 `AshRenderState`，因此可以做到引擎的模型
 或 `cargo`（编辑器仍然不链接 cooker），输出进 Console。
 
 快捷键（常用习惯）：`Ctrl+1..5` = Scene / Game / Inspector / Hierarchy / Project，
-`Ctrl+Shift+C` = Console，`Ctrl+B` = Build And Run，`Ctrl+I` = 反选，
+`Ctrl+Shift+C` = Console，`Ctrl+B` = Build And Run，`Ctrl+R` = 重编并加载用户项目模块，
+`Ctrl+I` = 反选，
 `W/E/R` = 移动 / 旋转 / 缩放，`X` 世界/局部，`G` 网格，`S` 天空盒，`F` 框住全部，`Del` 删除。
 
 命名布局存在 `target/editor-egui/layouts.json`（`{name: {version,dock,floating}}`），
