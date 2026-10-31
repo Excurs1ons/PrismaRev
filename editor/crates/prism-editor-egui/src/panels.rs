@@ -271,8 +271,12 @@ pub struct UiState {
     pub about_open: bool,
     /// 当前打开的输入框（保存 / 新建目录 / 预制体命名…），None = 关闭。
     pub prompt: Option<Prompt>,
-    /// 资产面板里当前选中的资产（引擎的 Project 选择）。
-    pub asset_selection: Option<String>,
+    /// 资产面板里当前选中的资产（引擎的 Project 选择，支持多选）。
+    ///
+    /// 最后一项是「主项」（Inspector / 详情 / 单路径操作看它）。
+    pub asset_selection: Vec<String>,
+    /// 区间选择的锚点：Shift+单击从它选到目标（#486）。
+    pub asset_anchor: Option<String>,
     /// 资产面板当前目录（`assets` 开头）、后退栈与游标。
     pub asset_folder: String,
     pub asset_history: Vec<String>,
@@ -322,8 +326,8 @@ pub struct UiState {
     pub lights_total: usize,
     /// 被 `LIGHT_MAX` 挤掉的局部光实体 id。
     pub dropped_light_ids: Vec<u32>,
-    /// 等待确认删除的资产路径。
-    pub pending_asset_delete: Option<String>,
+    /// 等待确认删除的资产路径（批量删除时有多项）。
+    pub pending_asset_delete: Option<Vec<String>>,
     /// 等待用户回答的关闭请求（有未保存改动时才会出现）。
     pub pending_close: Option<CloseTarget>,
 }
@@ -406,6 +410,66 @@ pub enum DropZone {
 }
 
 impl UiState {
+    /// 选中的多个资产里的「主项」（最后点击的那个）。
+    pub fn asset_primary(&self) -> Option<&String> {
+        self.asset_selection.last()
+    }
+
+    pub fn asset_selected(&self, path: &str) -> bool {
+        self.asset_selection.iter().any(|item| item == path)
+    }
+
+    /// 普通单击：只选这一个，并把它记成区间锚点。
+    pub fn select_asset_only(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        self.asset_anchor = Some(path.clone());
+        self.asset_selection = vec![path];
+    }
+
+    /// Ctrl/Cmd+单击：切换单个条目（做法同 Unity 的 `GetNewSelection`）。
+    pub fn toggle_asset(&mut self, path: &str) {
+        if let Some(index) = self.asset_selection.iter().position(|item| item == path) {
+            self.asset_selection.remove(index);
+        } else {
+            self.asset_selection.push(path.to_string());
+        }
+        self.asset_anchor = Some(path.to_string());
+    }
+
+    /// Shift+单击：从锚点到目标整段选中（按面板里可见的顺序）。
+    ///
+    /// 锚点不在可见列表里（切过目录 / 被删掉）时退化成普通单击。
+    pub fn select_asset_range(&mut self, ordered: &[String], path: &str) {
+        let Some(target) = ordered.iter().position(|item| item == path) else {
+            self.select_asset_only(path);
+            return;
+        };
+        let anchor = self
+            .asset_anchor
+            .as_ref()
+            .and_then(|anchor| ordered.iter().position(|item| item == anchor))
+            .unwrap_or(target);
+        let (start, end) = if anchor <= target {
+            (anchor, target)
+        } else {
+            (target, anchor)
+        };
+        self.asset_selection = ordered[start..=end].to_vec();
+    }
+
+    pub fn clear_asset_selection(&mut self) {
+        self.asset_selection.clear();
+        self.asset_anchor = None;
+    }
+
+    /// 删掉一个路径后同步选中状态（保留其它项与锚点）。
+    pub fn forget_asset(&mut self, path: &str) {
+        self.asset_selection.retain(|item| item != path);
+        if self.asset_anchor.as_deref() == Some(path) {
+            self.asset_anchor = None;
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             log_autoscroll: true,
@@ -1970,8 +2034,12 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     folders.sort();
     sort_assets(&mut files, state.asset_sort, state.asset_sort_desc);
 
+    // 多选（#486）：区间选择按「面板里看到的顺序」算。
+    let visible_paths: Vec<String> = files.iter().map(|(path, _, _)| path.clone()).collect();
+
     let mut open: Option<String> = None;
-    let mut delete: Option<String> = None;
+    let mut delete: Option<Vec<String>> = None;
+    let mut duplicate: Option<Vec<String>> = None;
     let mut rename: Option<String> = None;
     let mut instantiate: Option<String> = None;
     let mut commit_rename: Option<(String, String)> = None;
@@ -1979,6 +2047,28 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut move_to_folder: Option<(String, String)> = None;
     // 目录右键 → New Subfolder（#478）。
     let mut create_subfolder: Option<String> = None;
+
+    // Ctrl/Cmd+A 选中当前目录里的所有资产；Esc 清空（#486）。
+    //
+    // `handle_shortcuts` 里 `SelectAll` 会按焦点面板分派，这里再做一次是为了
+    // 「面板刚打开、焦点还没落在它上面」时也能用。
+    // 有文本框在编辑时（重命名 / 搜索框）不能抢这两个键。
+    let typing = ui.ctx().memory(|memory| memory.focused()).is_some();
+    let (select_all, escape) = ui.input(|input| {
+        (
+            !typing
+                && (input.modifiers.ctrl || input.modifiers.command)
+                && input.key_pressed(egui::Key::A),
+            !typing && input.key_pressed(egui::Key::Escape),
+        )
+    });
+    if select_all {
+        state.asset_selection = visible_paths.clone();
+        state.asset_anchor = visible_paths.first().cloned();
+    }
+    if escape && !state.asset_selection.is_empty() {
+        state.clear_asset_selection();
+    }
 
     egui::ScrollArea::vertical()
         .id_salt("asset-scroll")
@@ -1997,7 +2087,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
             let colors = workspace.colors();
             for path in &folders {
-                let selected = state.asset_selection.as_deref() == Some(path.as_str());
+                let selected = state.asset_selected(path);
                 let renaming = matches!(&state.asset_rename, Some((target, _)) if target == path);
                 if renaming {
                     // 目录也走同一个就地重命名输入框（#478）。
@@ -2050,7 +2140,13 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     // 单击 = 选中，双击 = 进入（#478）。
                     navigate_assets(state, path);
                 } else if row.clicked() {
-                    state.asset_selection = Some(path.clone());
+                    // 目录不参与区间选择（它们不在文件列表里），修饰键同语义。
+                    let modifiers = ui.input(|input| input.modifiers);
+                    if modifiers.ctrl || modifiers.command {
+                        state.toggle_asset(path);
+                    } else {
+                        state.select_asset_only(path.clone());
+                    }
                 }
                 row.context_menu(|ui| {
                     if ui.button("Open").clicked() {
@@ -2079,13 +2175,13 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     }
                     ui.separator();
                     if ui.button("Delete").clicked() {
-                        delete = Some(path.clone());
+                        delete = Some(vec![path.clone()]);
                         ui.close();
                     }
                 });
             }
             for (path, kind, _size) in &files {
-                let selected = state.asset_selection.as_deref() == Some(path.as_str());
+                let selected = state.asset_selected(path);
                 let renaming = matches!(&state.asset_rename, Some((target, _)) if target == path);
                 if renaming {
                     ui.horizontal(|ui| {
@@ -2123,6 +2219,13 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     asset_kind_icon(*kind),
                     path.rsplit('/').next().unwrap_or(path)
                 );
+                // 右键菜单作用于整个选中集合（点在已选中项上时）。
+                let targets: Vec<String> =
+                    if state.asset_selected(path) && state.asset_selection.len() > 1 {
+                        state.asset_selection.clone()
+                    } else {
+                        vec![path.clone()]
+                    };
                 let drag_id = egui::Id::new(("asset-drag", path.as_str()));
                 let payload = widgets::AssetDrag { path: path.clone() };
                 let response = ui
@@ -2131,7 +2234,15 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     })
                     .inner;
                 if response.clicked() {
-                    state.asset_selection = Some(path.clone());
+                    // Ctrl/Cmd = 切换，Shift = 从锚点区间选择，普通单击 = 替换（#486）。
+                    let modifiers = ui.input(|input| input.modifiers);
+                    if modifiers.shift {
+                        state.select_asset_range(&visible_paths, path);
+                    } else if modifiers.ctrl || modifiers.command {
+                        state.toggle_asset(path);
+                    } else {
+                        state.select_asset_only(path.clone());
+                    }
                 }
                 if response.double_clicked() {
                     open = Some(path.clone());
@@ -2150,16 +2261,25 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                         rename = Some(path.clone());
                         ui.close();
                     }
-                    if ui.button("Duplicate").clicked() {
-                        match workspace.duplicate_asset(path) {
-                            Ok(copy) => state.status = format!("duplicated → {copy}"),
-                            Err(error) => state.status = format!("duplicate failed: {error}"),
-                        }
+                    if ui
+                        .button(if targets.len() > 1 {
+                            format!("Duplicate {} items", targets.len())
+                        } else {
+                            "Duplicate".to_string()
+                        })
+                        .clicked()
+                    {
+                        duplicate = Some(targets.clone());
                         ui.close();
                     }
                     if ui.button("Copy Path").clicked() {
-                        ui.ctx().copy_text(path.clone());
-                        state.status = format!("copied {path}");
+                        let text = targets.join("\n");
+                        ui.ctx().copy_text(text);
+                        state.status = if targets.len() > 1 {
+                            format!("copied {} path(s)", targets.len())
+                        } else {
+                            format!("copied {path}")
+                        };
                         ui.close();
                     }
                     ui.separator();
@@ -2179,14 +2299,37 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                         };
                         ui.close();
                     }
-                    if ui.button("Delete").clicked() {
-                        delete = Some(path.clone());
+                    if ui
+                        .button(if targets.len() > 1 {
+                            format!("Delete {} items", targets.len())
+                        } else {
+                            "Delete".to_string()
+                        })
+                        .clicked()
+                    {
+                        delete = Some(targets.clone());
                         ui.close();
                     }
                 });
+                // 右键点到未选中的行时，先把它变成唯一选中项（与 Unity 一致）。
+                if response.secondary_clicked() && !state.asset_selected(path) {
+                    state.select_asset_only(path.clone());
+                }
             }
             if files.is_empty() && folders.is_empty() {
                 ui.label(RichText::new("empty folder").weak().size(11.0));
+            }
+            // 点列表空白处 = 清空选择（Unity 的 Project 窗口同样行为）。
+            let rest = ui.available_rect_before_wrap();
+            if rest.height() > 0.0 || rest.width() > 0.0 {
+                let blank = ui.interact(
+                    rest,
+                    egui::Id::new(("asset-blank", folder.as_str())),
+                    egui::Sense::click(),
+                );
+                if blank.clicked() {
+                    state.clear_asset_selection();
+                }
             }
         });
 
@@ -2195,7 +2338,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             // 已经在同一个目录里：不写状态栏，避免「拖了一下什么都没变」的噪音。
             Ok(to) if to == from => {}
             Ok(to) => {
-                state.asset_selection = Some(to.clone());
+                state.select_asset_only(to.clone());
                 state.status = format!("moved → {to}");
             }
             Err(error) => state.status = format!("move failed: {error}"),
@@ -2215,7 +2358,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         }
     }
     if let Some(path) = rename {
-        state.asset_selection = Some(path.clone());
+        state.select_asset_only(path.clone());
         let name = path.rsplit('/').next().unwrap_or(&path).to_string();
         state.asset_rename = Some((path, name));
         state.asset_rename_focus = true;
@@ -2236,7 +2379,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 };
                 match result {
                     Ok(count) => {
-                        state.asset_selection = Some(to.clone());
+                        state.select_asset_only(to.clone());
                         state.status = format!("renamed → {to} ({count} references updated)");
                     }
                     Err(error) => state.status = format!("rename failed: {error}"),
@@ -2254,12 +2397,42 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             format!("{folder}/"),
         ));
     }
-    if let Some(path) = delete {
-        if is_document_path(&path) {
-            // 场景 / 预制体走文档确认框（`Workspace::delete_asset` 会拒绝它们）。
-            state.pending_doc_delete = Some(path);
+    if let Some(paths) = delete {
+        // 场景 / 预制体走各自的文档确认框（`Workspace::delete_asset` 会拒绝它们），
+        // 其余资产合并成一个确认框（#486）。
+        let mut assets = Vec::new();
+        for path in paths {
+            if is_document_path(&path) {
+                if state.pending_doc_delete.is_none() {
+                    state.pending_doc_delete = Some(path);
+                }
+            } else {
+                assets.push(path);
+            }
+        }
+        if !assets.is_empty() {
+            request_delete_assets(workspace, state, assets);
+        }
+    }
+    if let Some(paths) = duplicate {
+        let mut created = Vec::new();
+        let mut failures = Vec::new();
+        for path in &paths {
+            match workspace.duplicate_asset(path) {
+                Ok(copy) => created.push(copy),
+                Err(error) => failures.push(format!("{path}: {error}")),
+            }
+        }
+        state.status = if failures.is_empty() {
+            match created.as_slice() {
+                [one] => format!("duplicated → {one}"),
+                _ => format!("duplicated {} asset(s)", created.len()),
+            }
         } else {
-            request_delete_asset(workspace, state, &path);
+            format!("duplicate failed: {}", failures.join("; "))
+        };
+        if let Some(last) = created.pop() {
+            state.select_asset_only(last);
         }
     }
     asset_delete_confirm(ui, workspace, state);
@@ -2267,10 +2440,15 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
 
 /// 删除资产：按首选项决定是否先弹确认框。
 pub fn request_delete_asset(workspace: &mut Workspace, state: &mut UiState, path: &str) {
-    if state.pending_asset_delete.is_some() {
+    request_delete_assets(workspace, state, vec![path.to_string()]);
+}
+
+/// 批量删除资产（一个确认框、逐项删除）。
+pub fn request_delete_assets(workspace: &mut Workspace, state: &mut UiState, paths: Vec<String>) {
+    if state.pending_asset_delete.is_some() || paths.is_empty() {
         return;
     }
-    state.pending_asset_delete = Some(path.to_string());
+    state.pending_asset_delete = Some(paths);
     let _ = workspace;
 }
 
@@ -2288,9 +2466,7 @@ pub fn delete_asset_now(workspace: &mut Workspace, state: &mut UiState, path: &s
     };
     match result {
         Ok(()) => {
-            if state.asset_selection.as_deref() == Some(path) {
-                state.asset_selection = None;
-            }
+            state.forget_asset(path);
             state.status = format!("deleted {path}");
         }
         Err(error) => state.status = format!("delete failed: {error}"),
@@ -2299,7 +2475,7 @@ pub fn delete_asset_now(workspace: &mut Workspace, state: &mut UiState, path: &s
 
 /// 资产删除确认框（绘制在资产面板内，使用全局 `ctx`）。
 pub fn asset_delete_confirm(ui: &Ui, workspace: &mut Workspace, state: &mut UiState) {
-    let Some(path) = state.pending_asset_delete.clone() else {
+    let Some(paths) = state.pending_asset_delete.clone() else {
         return;
     };
     let mut confirmed = false;
@@ -2308,7 +2484,20 @@ pub fn asset_delete_confirm(ui: &Ui, workspace: &mut Workspace, state: &mut UiSt
         .collapsible(false)
         .resizable(false)
         .show(ui.ctx(), |ui| {
-            ui.label(format!("删除 {path}？此操作不可撤销。"));
+            match paths.as_slice() {
+                [one] => {
+                    ui.label(format!("删除 {one}？此操作不可撤销。"));
+                }
+                many => {
+                    ui.label(format!("删除 {} 项资产？此操作不可撤销。", many.len()));
+                    for path in many.iter().take(10) {
+                        ui.label(RichText::new(path).monospace().size(11.0));
+                    }
+                    if many.len() > 10 {
+                        ui.label(RichText::new(format!("… 还有 {} 项", many.len() - 10)).weak());
+                    }
+                }
+            }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui.button("Delete").clicked() {
@@ -2321,7 +2510,22 @@ pub fn asset_delete_confirm(ui: &Ui, workspace: &mut Workspace, state: &mut UiSt
         });
     if confirmed {
         state.pending_asset_delete = None;
-        delete_asset_now(workspace, state, &path);
+        let mut deleted = 0usize;
+        let mut failures = Vec::new();
+        for path in &paths {
+            let before = state.status.clone();
+            delete_asset_now(workspace, state, path);
+            if state.status.starts_with("deleted ") {
+                deleted += 1;
+            } else if state.status != before {
+                failures.push(state.status.clone());
+            }
+        }
+        state.status = if failures.is_empty() {
+            format!("deleted {deleted} asset(s)")
+        } else {
+            format!("deleted {deleted}, failed: {}", failures.join("; "))
+        };
     } else if cancelled {
         state.pending_asset_delete = None;
     }
@@ -2362,9 +2566,7 @@ pub fn doc_delete_confirm(ctx: &egui::Context, workspace: &mut Workspace, state:
         Some(true) => {
             match workspace.delete_document(&path) {
                 Ok(()) => {
-                    if state.asset_selection.as_deref() == Some(path.as_str()) {
-                        state.asset_selection = None;
-                    }
+                    state.forget_asset(&path);
                     state.status = format!("deleted {path}");
                 }
                 Err(error) => state.status = format!("delete failed: {error}"),
@@ -3919,6 +4121,68 @@ mod asset_browser_tests {
             ["assets/b.png", "assets/c.png", "assets/a.json"],
             "Texture(1) 在 Data(7) 之前，同 kind 内按文件名"
         );
+    }
+
+    fn paths(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn clicking_without_modifiers_replaces_the_selection() {
+        let mut state = UiState::new();
+        state.select_asset_only("assets/a.png");
+        state.select_asset_only("assets/b.png");
+        assert_eq!(state.asset_selection, paths(&["assets/b.png"]));
+        assert_eq!(
+            state.asset_primary().map(String::as_str),
+            Some("assets/b.png")
+        );
+        assert_eq!(state.asset_anchor.as_deref(), Some("assets/b.png"));
+    }
+
+    #[test]
+    fn ctrl_click_toggles_a_single_item() {
+        let mut state = UiState::new();
+        state.select_asset_only("assets/a.png");
+        state.toggle_asset("assets/b.png");
+        assert_eq!(
+            state.asset_selection,
+            paths(&["assets/a.png", "assets/b.png"])
+        );
+        state.toggle_asset("assets/a.png");
+        assert_eq!(state.asset_selection, paths(&["assets/b.png"]));
+        assert!(state.asset_selected("assets/b.png"));
+    }
+
+    #[test]
+    fn shift_click_selects_the_range_from_the_anchor() {
+        let visible = paths(&["a", "b", "c", "d", "e"]);
+        let mut state = UiState::new();
+        state.select_asset_only("b");
+        state.select_asset_range(&visible, "d");
+        assert_eq!(state.asset_selection, paths(&["b", "c", "d"]));
+        // 反向拖拽也是同一段。
+        state.select_asset_range(&visible, "a");
+        assert_eq!(state.asset_selection, paths(&["a", "b"]));
+
+        // 锚点不在当前列表里（切过目录）：退化成普通单选。
+        let mut state = UiState::new();
+        state.select_asset_only("elsewhere/x");
+        state.select_asset_range(&visible, "c");
+        assert_eq!(state.asset_selection, paths(&["c"]));
+    }
+
+    #[test]
+    fn forgetting_a_deleted_asset_keeps_the_rest_selected() {
+        let mut state = UiState::new();
+        state.asset_selection = paths(&["a", "b", "c"]);
+        state.asset_anchor = Some("b".to_string());
+        state.forget_asset("b");
+        assert_eq!(state.asset_selection, paths(&["a", "c"]));
+        assert_eq!(state.asset_anchor, None);
+        state.clear_asset_selection();
+        assert!(state.asset_selection.is_empty());
+        assert!(state.asset_anchor.is_none());
     }
 
     #[test]

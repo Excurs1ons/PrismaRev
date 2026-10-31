@@ -802,7 +802,7 @@ impl EditorApp {
             return Ok(format!("select entity {id}"));
         }
         if let Some(path) = node.strip_prefix("asset:") {
-            self.state.asset_selection = Some(path.to_owned());
+            self.state.select_asset_only(path.to_owned());
             return Ok(format!("select asset {path}"));
         }
         if let Some(tab) = node.strip_prefix("panel:") {
@@ -891,7 +891,7 @@ impl EditorApp {
                         self.workspace.expanded_assets.insert(prefix.clone());
                     }
                 }
-                self.state.asset_selection = Some(path.clone());
+                self.state.select_asset_only(path.clone());
                 self.state.status = format!("selected asset {path}");
             }
         }
@@ -1369,41 +1369,59 @@ impl EditorApp {
         }
     }
 
-    /// 资产面板的 Delete：按首选项决定是否先确认。
+    /// 资产面板的 Delete：作用于整个选中集合，按首选项决定是否先确认。
     fn request_asset_delete(&mut self) {
-        let Some(path) = self.state.asset_selection.clone() else {
+        if self.state.asset_selection.is_empty() {
             self.state.status = "no asset selected".to_string();
             return;
-        };
+        }
+        let paths = self.state.asset_selection.clone();
         if self.preferences.confirm_delete {
-            panels::request_delete_asset(&mut self.workspace, &mut self.state, &path);
+            panels::request_delete_assets(&mut self.workspace, &mut self.state, paths);
         } else {
-            panels::delete_asset_now(&mut self.workspace, &mut self.state, &path);
+            let mut deleted = 0usize;
+            for path in &paths {
+                panels::delete_asset_now(&mut self.workspace, &mut self.state, path);
+                deleted += 1;
+            }
+            self.state.status = format!("deleted {deleted} asset(s)");
         }
     }
 
-    /// 资产面板的 Ctrl+D。
+    /// 资产面板的 Ctrl+D：批量复制整个选中集合。
     fn duplicate_selected_asset(&mut self) {
-        let Some(path) = self.state.asset_selection.clone() else {
+        if self.state.asset_selection.is_empty() {
             self.state.status = "no asset selected".to_string();
             return;
-        };
-        match self.workspace.duplicate_asset(&path) {
-            Ok(created) => {
-                self.state.asset_selection = Some(created.clone());
-                self.state.status = format!("duplicated {path} → {created}");
+        }
+        let mut created = Vec::new();
+        let mut failures = Vec::new();
+        for path in self.state.asset_selection.clone() {
+            match self.workspace.duplicate_asset(&path) {
+                Ok(copy) => created.push(copy),
+                Err(error) => failures.push(format!("{path}: {error}")),
             }
-            Err(error) => self.state.status = format!("duplicate failed: {error}"),
+        }
+        self.state.status = if failures.is_empty() {
+            format!("duplicated {} asset(s)", created.len())
+        } else {
+            format!("duplicate failed: {}", failures.join("; "))
+        };
+        if let Some(last) = created.last() {
+            self.state.select_asset_only(last.clone());
         }
     }
 
     /// 资产面板的 F2。
     /// F2 / 右键 Rename：在资产行上就地改名（不再弹模态框）。
     fn rename_selected_asset_prompt(&mut self) {
-        let Some(path) = self.state.asset_selection.clone() else {
+        let Some(path) = self.state.asset_primary().cloned() else {
             self.state.status = "no asset selected".to_string();
             return;
         };
+        if self.state.asset_selection.len() > 1 {
+            self.state.status = "renaming one asset at a time".to_string();
+        }
         if path.ends_with(".scene.json") || path.ends_with(".prefab.json") {
             self.state.status =
                 "scenes and prefabs rename through Save As / the document panel".to_string();
@@ -2011,7 +2029,7 @@ impl EditorApp {
                         )
                     });
                 });
-                let selected = self.state.asset_selection.clone();
+                let selected = self.state.asset_primary().cloned();
                 if let Some(path) = selected.as_deref() {
                     self.menu_do(ui, "Open", |app| {
                         if let Err(error) = app.workspace.open_project_file(path) {
@@ -2040,7 +2058,7 @@ impl EditorApp {
                     });
                     self.menu_do(ui, "Delete", |app| match app.workspace.delete_asset(path) {
                         Ok(()) => {
-                            app.state.asset_selection = None;
+                            app.state.forget_asset(path);
                             app.state.status = format!("deleted {path}");
                         }
                         Err(error) => app.state.status = format!("delete failed: {error}"),
@@ -2066,12 +2084,12 @@ impl EditorApp {
                 }
                 ui.separator();
                 self.menu_do(ui, "Find References In Scene", |app| {
-                    if let Some(path) = app.state.asset_selection.clone() {
+                    if let Some(path) = app.state.asset_primary().cloned() {
                         app.find_references(&path, false);
                     }
                 });
                 self.menu_do(ui, "Find References In Project", |app| {
-                    if let Some(path) = app.state.asset_selection.clone() {
+                    if let Some(path) = app.state.asset_primary().cloned() {
                         app.find_references(&path, true);
                     }
                 });
