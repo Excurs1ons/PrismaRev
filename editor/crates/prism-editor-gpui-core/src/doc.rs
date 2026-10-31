@@ -628,16 +628,29 @@ impl SceneDoc {
         }
     }
 
-    /// 把组件里精确等于 `from` 的路径字符串替换成 `to`（资产重命名 / 移动用）。
-    /// 返回替换次数。
-    pub fn rewrite_reference(&mut self, from: &str, to: &str) -> usize {
-        let mut count = 0;
+    /// 资产重命名 / 移动时改写本文档里的引用（#465）。
+    ///
+    /// 与旧的「任何字符串精确相等就改」不同，这里只碰**资产路径字段**（
+    /// [`crate::assets::is_asset_path_field`]：`*_path` 后缀 + `env_map` /
+    /// `volume` / `prefab`，外加 `materials` / `textures` 这类路径数组），
+    /// 所以实体名、`Text::content` 里恰好写着同一段路径的字符串保持原样。
+    ///
+    /// `doc_dir` 是**本文档所在的目录**（`assets/scenes` 这种），用来解析
+    /// `../textures/wood.png` 这种相对写法；改写后仍按作者原来的风格写回，
+    /// 不会把相对的 `../` 变成绝对的 `assets/...`。
+    pub fn rewrite_asset_references(
+        &mut self,
+        doc_dir: &str,
+        from: &str,
+        to: &str,
+    ) -> ReferenceRewrite {
+        let mut out = ReferenceRewrite::default();
         for entity in &mut self.entities {
-            for value in entity.components.values_mut() {
-                rewrite_value(value, from, to, &mut count);
+            for (component, value) in entity.components.iter_mut() {
+                rewrite_references_in(value, "", component, doc_dir, from, to, &mut out);
             }
         }
-        count
+        out
     }
 
     pub fn prefab_links(&self) -> Vec<(usize, String)> {
@@ -666,24 +679,181 @@ impl SceneDoc {
     }
 }
 
-fn rewrite_value(value: &mut Value, from: &str, to: &str, count: &mut usize) {
+/// 资产重命名 / 移动时改写了多少处引用，以及哪些写法解析不出来。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ReferenceRewrite {
+    /// 被改写的引用数量。
+    pub rewritten: usize,
+    /// 文件名与旧路径相同、但解析不出完整路径的写法（绝对路径、URL 等）。
+    ///
+    /// 这些引用会**留着旧的路径**，所以要报出来，而不是假装一切正常。
+    pub ambiguous: Vec<String>,
+}
+
+/// 这个字段是不是「资产路径」。
+///
+/// 取路径的第一段（去掉数组下标）判断，`materials[0]` / `materials[1]` 都算。
+fn is_reference_path(component: &str, path: &str) -> bool {
+    let leaf = path.split('.').next().unwrap_or(path);
+    let leaf = leaf.split('[').next().unwrap_or(leaf);
+    crate::assets::is_asset_path_field(component, leaf)
+        || matches!(leaf, "materials" | "textures" | "material_paths")
+}
+
+fn rewrite_references_in(
+    value: &mut Value,
+    path: &str,
+    component: &str,
+    doc_dir: &str,
+    from: &str,
+    to: &str,
+    out: &mut ReferenceRewrite,
+) {
     match value {
-        Value::String(text) if text == from => {
-            *text = to.to_string();
-            *count += 1;
+        Value::String(text) => {
+            if !is_reference_path(component, path) {
+                return;
+            }
+            match rewrite_reference_string(text, doc_dir, from, to) {
+                RewriteOutcome::Unchanged => {}
+                RewriteOutcome::Rewritten(next) => {
+                    *text = next;
+                    out.rewritten += 1;
+                }
+                RewriteOutcome::Ambiguous => out.ambiguous.push(text.clone()),
+            }
         }
         Value::Array(items) => {
-            for item in items {
-                rewrite_value(item, from, to, count);
+            for (index, item) in items.iter_mut().enumerate() {
+                rewrite_references_in(
+                    item,
+                    &format!("{path}[{index}]"),
+                    component,
+                    doc_dir,
+                    from,
+                    to,
+                    out,
+                );
             }
         }
         Value::Object(map) => {
-            for item in map.values_mut() {
-                rewrite_value(item, from, to, count);
+            for (key, item) in map.iter_mut() {
+                let next = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                rewrite_references_in(item, &next, component, doc_dir, from, to, out);
             }
         }
         _ => {}
     }
+}
+
+enum RewriteOutcome {
+    Unchanged,
+    Rewritten(String),
+    Ambiguous,
+}
+
+/// 把一个引用字符串按「它自己那种写法」改到 `to`。
+fn rewrite_reference_string(text: &str, doc_dir: &str, from: &str, to: &str) -> RewriteOutcome {
+    if text.trim().is_empty() {
+        return RewriteOutcome::Unchanged;
+    }
+    // 纯文件名：和旧文件的文件名比对，改完仍是纯文件名。
+    if !text.contains('/') {
+        return if text == file_name(from) {
+            RewriteOutcome::Rewritten(file_name(to).to_string())
+        } else {
+            RewriteOutcome::Unchanged
+        };
+    }
+    let Some(resolved) = resolve_asset_reference(text, doc_dir) else {
+        // 解析不出来：只有「看起来就是这个文件」才值得提醒。
+        return if file_name(text) == file_name(from) {
+            RewriteOutcome::Ambiguous
+        } else {
+            RewriteOutcome::Unchanged
+        };
+    };
+    if resolved != from {
+        return RewriteOutcome::Unchanged;
+    }
+    // 按作者原来的风格写回：`assets/...` 保持绝对写法，`../` 保持相对写法。
+    if text.starts_with("assets/") {
+        return RewriteOutcome::Rewritten(to.to_string());
+    }
+    match relative_from(doc_dir, to) {
+        Some(relative) if text.starts_with("./") && !relative.starts_with("../") => {
+            RewriteOutcome::Rewritten(format!("./{relative}"))
+        }
+        Some(relative) => RewriteOutcome::Rewritten(relative),
+        None => RewriteOutcome::Rewritten(to.to_string()),
+    }
+}
+
+/// 把引用解析成「相对项目根」的路径（`assets/...`）。
+///
+/// 纯文件名（不含 `/`）与绝对路径返回 `None` —— 前者由调用方按文件名处理，
+/// 后者没法安全改写。
+fn resolve_asset_reference(text: &str, doc_dir: &str) -> Option<String> {
+    if text.contains(':') || text.starts_with('/') {
+        return None;
+    }
+    if text.starts_with("assets/") {
+        return normalize_relative(text);
+    }
+    if text.starts_with("./") || text.starts_with("../") {
+        return normalize_relative(&format!("{doc_dir}/{text}"));
+    }
+    None
+}
+
+/// 消解 `.` / `..`；越过项目根（`..` 多于已有的段）返回 `None`。
+fn normalize_relative(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+/// `doc_dir` 里的文档该怎样写 `target`（相对写法，如 `../../textures/a.png`）。
+///
+/// 两者没有公共前缀（不同根 / 不同盘）时返回 `None`。
+fn relative_from(doc_dir: &str, target: &str) -> Option<String> {
+    let from: Vec<&str> = doc_dir.split('/').filter(|part| !part.is_empty()).collect();
+    let to: Vec<&str> = target.split('/').filter(|part| !part.is_empty()).collect();
+    let common = from
+        .iter()
+        .zip(to.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if common == 0 {
+        return None;
+    }
+    let mut parts: Vec<String> = from[common..].iter().map(|_| "..".to_string()).collect();
+    parts.extend(to[common..].iter().map(|part| part.to_string()));
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 fn collect_references(value: &Value, needle: &str, out: &mut impl FnMut(String, &str)) {
@@ -964,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_reference_replaces_exact_paths() {
+    fn rewrite_asset_references_replaces_exact_paths() {
         let mut doc = SceneDoc::default();
         let index = doc.add_named_child(None, "Mesh");
         doc.add_component(
@@ -975,14 +1145,126 @@ mod tests {
                 "materials": ["assets/materials/m.rtex", "assets/materials/a.rmes.extra"]
             }),
         );
-        let count = doc.rewrite_reference("assets/meshes/a.rmes", "assets/meshes/b.rmes");
-        assert_eq!(count, 1, "只替换精确匹配，不做子串替换");
+        let rewrite = doc.rewrite_asset_references(
+            "assets/scenes",
+            "assets/meshes/a.rmes",
+            "assets/meshes/b.rmes",
+        );
+        assert_eq!(rewrite.rewritten, 1, "只替换精确匹配，不做子串替换");
+        assert!(rewrite.ambiguous.is_empty());
         assert_eq!(
             doc.entities[0].components["prism_engine::scene::MeshRenderer"]["mesh_path"],
             serde_json::json!("assets/meshes/b.rmes")
         );
-        let count = doc.rewrite_reference("assets/materials/m.rtex", "assets/materials/n.rtex");
-        assert_eq!(count, 1);
+        let rewrite = doc.rewrite_asset_references(
+            "assets/scenes",
+            "assets/materials/m.rtex",
+            "assets/materials/n.rtex",
+        );
+        assert_eq!(rewrite.rewritten, 1);
+    }
+
+    #[test]
+    fn renaming_only_touches_asset_path_fields() {
+        // #465：实体名和 UI 文本里恰好写着同一段路径时不能跟着改。
+        let mut doc = SceneDoc::default();
+        let mesh = doc.add_named_child(None, "assets/textures/wood.png");
+        doc.add_component(
+            mesh,
+            "prism_engine::scene::SpriteRenderer",
+            serde_json::json!({ "sprite_path": "assets/textures/wood.png" }),
+        );
+        doc.add_component(
+            mesh,
+            "prism_engine::ui::Text",
+            serde_json::json!({ "content": "assets/textures/wood.png" }),
+        );
+
+        let rewrite = doc.rewrite_asset_references(
+            "assets/scenes",
+            "assets/textures/wood.png",
+            "assets/textures/oak.png",
+        );
+
+        assert_eq!(rewrite.rewritten, 1);
+        assert_eq!(
+            doc.entities[mesh].name.as_deref(),
+            Some("assets/textures/wood.png"),
+            "实体名不是资产引用"
+        );
+        assert_eq!(
+            doc.entities[mesh].components["prism_engine::ui::Text"]["content"],
+            serde_json::json!("assets/textures/wood.png"),
+            "UI 文本不是资产引用"
+        );
+        assert_eq!(
+            doc.entities[mesh].components["prism_engine::scene::SpriteRenderer"]["sprite_path"],
+            serde_json::json!("assets/textures/oak.png")
+        );
+    }
+
+    #[test]
+    fn relative_and_bare_references_keep_their_own_style() {
+        let mut doc = SceneDoc::default();
+        let deep = doc.add_named_child(None, "Deep");
+        doc.add_component(
+            deep,
+            "prism_engine::scene::MeshRenderer",
+            serde_json::json!({
+                "mesh_path": "../../../textures/wood.png",
+                "materials": ["wood.png", "assets/textures/wood.png"]
+            }),
+        );
+
+        let rewrite = doc.rewrite_asset_references(
+            "assets/scenes/deep/nested",
+            "assets/textures/wood.png",
+            "assets/textures/oak.png",
+        );
+
+        assert_eq!(rewrite.rewritten, 3);
+        let component = &doc.entities[deep].components["prism_engine::scene::MeshRenderer"];
+        // 相对写法按**本文档目录**算回去，仍是相对的。
+        assert_eq!(
+            component["mesh_path"],
+            serde_json::json!("../../../textures/oak.png")
+        );
+        assert_eq!(component["materials"][0], serde_json::json!("oak.png"));
+        assert_eq!(
+            component["materials"][1],
+            serde_json::json!("assets/textures/oak.png")
+        );
+    }
+
+    #[test]
+    fn an_unparseable_reference_is_reported_not_ignored() {
+        let mut doc = SceneDoc::default();
+        let entity = doc.add_named_child(None, "Sprite");
+        doc.add_component(
+            entity,
+            "prism_engine::scene::SpriteRenderer",
+            serde_json::json!({
+                "sprite_path": "C:/art/textures/wood.png",
+                "atlas_path": "assets/textures/other.png"
+            }),
+        );
+
+        let rewrite = doc.rewrite_asset_references(
+            "assets/scenes",
+            "assets/textures/wood.png",
+            "assets/textures/oak.png",
+        );
+
+        assert_eq!(rewrite.rewritten, 0);
+        assert_eq!(
+            rewrite.ambiguous,
+            vec!["C:/art/textures/wood.png".to_string()]
+        );
+        assert_eq!(
+            doc.entities[entity].components["prism_engine::scene::SpriteRenderer"]["sprite_path"],
+            serde_json::json!("C:/art/textures/wood.png"),
+            "改写不了就不要动它"
+        );
     }
 
     #[test]
