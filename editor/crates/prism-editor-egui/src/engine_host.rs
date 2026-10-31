@@ -22,7 +22,7 @@ use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::ecs::{Entity, World};
 use prism_engine::input::InputManager;
 use prism_engine::render_settings::RenderSettings;
-use prism_engine::render_system::{extract_frame_packet_into, FramePacket};
+use prism_engine::render_system::{extract_frame_packet_into_with_shadow, FramePacket};
 use prism_engine::scene::components::{Camera, LocalToWorld, LocalTransform};
 use prism_engine::Engine;
 use prism_render::descriptor::FrameUBOData;
@@ -599,10 +599,11 @@ impl EngineHost {
     /// `SHADER_READ_ONLY_OPTIMAL`。返回 `(image_view, extent)`。
     pub fn render(&mut self) -> anyhow::Result<Option<(ash::vk::ImageView, ash::vk::Extent2D)>> {
         let aspect = self.width as f32 / self.height.max(1) as f32;
-        extract_frame_packet_into(
+        extract_frame_packet_into_with_shadow(
             self.engine.world_mut(),
             aspect,
             &Mat4::IDENTITY,
+            self.settings.shadow_distance,
             &mut self.packet,
         );
         self.packet.settings = self.settings.clone();

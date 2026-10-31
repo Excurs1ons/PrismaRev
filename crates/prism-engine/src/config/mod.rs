@@ -44,6 +44,8 @@ pub struct RenderConfig {
     pub aa_mode: Option<u32>,
     /// 显示空间对比度（`1.0` = 不变，#502）。
     pub contrast: Option<f32>,
+    /// 主方向光阴影覆盖距离（米，见 `RenderSettings::shadow_distance`）。
+    pub shadow_distance: Option<f32>,
     /// 显示空间饱和度（`1.0` = 不变，`0.0` = 灰度）。
     pub saturation: Option<f32>,
     /// 暗角强度（`0.0` = 关，`1.0` = 四角全黑）。
@@ -78,6 +80,14 @@ impl RenderConfig {
         if let Some(mode) = self.aa_mode {
             settings.aa_mode = mode;
         }
+        if let Some(distance) = self.shadow_distance {
+            // 0 或负数的盒子没有任何意义，挡住并留个日志。
+            if distance.is_finite() && distance > 0.0 {
+                settings.shadow_distance = distance;
+            } else {
+                log::warn!("settings: shadow_distance must be positive, got {distance}");
+            }
+        }
         if let Some(value) = self.contrast {
             // 负对比度会把画面翻负，这里挡在 0。
             settings.contrast = value.max(0.0);
@@ -109,6 +119,7 @@ impl RenderConfig {
             tonemap_mode: ini.get_u32("render", "tonemap_mode"),
             aa_mode: ini.get_u32("render", "aa_mode"),
             contrast: ini.get_f32("render", "contrast"),
+            shadow_distance: ini.get_f32("render", "shadow_distance"),
             saturation: ini.get_f32("render", "saturation"),
             vignette: ini.get_f32("render", "vignette"),
             debug_rt: ini.get_u32("render", "debug_rt"),
@@ -312,6 +323,7 @@ const KNOWN_KEYS: &[(&str, &[&str])] = &[
             "tonemap_mode",
             "aa_mode",
             "contrast",
+            "shadow_distance",
             "saturation",
             "vignette",
             "debug_rt",
@@ -431,7 +443,7 @@ mod tests {
         use crate::render_settings::{RenderMode, RenderSettings};
 
         let cfg = AppConfig::from_ini(
-            "[render]\nrender_mode = \"path_trace\"\ntonemap_mode = 1\naa_mode = 1\ncontrast = 1.4\nsaturation = 0.6\nvignette = 0.3\npt_max_bounces = 7\n",
+            "[render]\nrender_mode = \"path_trace\"\ntonemap_mode = 1\naa_mode = 1\ncontrast = 1.4\nsaturation = 0.6\nvignette = 0.3\nshadow_distance = 120.0\npt_max_bounces = 7\n",
         );
         let mut settings = RenderSettings::default();
         cfg.render.apply(&mut settings);
@@ -443,6 +455,8 @@ mod tests {
         assert_eq!(settings.saturation, 0.6);
         assert_eq!(settings.vignette, 0.3);
         assert_eq!(settings.pt_max_bounces, 7);
+        // #526：阴影覆盖距离是可配置的质量旋钮。
+        assert_eq!(settings.shadow_distance, 120.0);
         // Unspecified fields keep their defaults.
         assert_eq!(settings.pt_max_iterations, 0);
     }

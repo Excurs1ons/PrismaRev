@@ -39,6 +39,9 @@ pub fn pbr_flag_label(flags: u32) -> &'static str {
         .unwrap_or("(custom flags)")
 }
 
+/// 默认阴影覆盖距离（米）：2048² 阴影贴图下单 texel ≈ 2.9 cm（#526）。
+pub const DEFAULT_SHADOW_DISTANCE: f32 = 60.0;
+
 /// Aggregate of all per-frame 渲染 knobs.
 ///
 /// `App` owns one 实例 mutates it in response to keyboard/UI 输入 and
@@ -82,6 +85,12 @@ pub struct RenderSettings {
     pub saturation: f32,
     /// 暗角强度（`0.0` = 关闭，`1.0` = 四角全黑）。
     pub vignette: f32,
+    /// 主方向光的阴影覆盖距离（世界单位，米）。
+    ///
+    /// 阴影正交盒子以**相机前方 `distance * 0.5` 处**为中心、边长 `distance`；
+    /// 这个值越大覆盖越远、每 texel 越粗（2048² 时 60 米 ≈ 2.9 cm/texel）。
+    /// 没有级联（见 #526），所以它同时是「阴影能投多远」和「精度」的取舍旋钮。
+    pub shadow_distance: f32,
 }
 
 /// 默认 PBR 众数 法线 full-PBR 渲染 Reinhard 色调映射 光栅化
@@ -118,6 +127,7 @@ impl Default for RenderSettings {
             contrast: 1.0,
             saturation: 1.0,
             vignette: 0.0,
+            shadow_distance: DEFAULT_SHADOW_DISTANCE,
         }
     }
 }
