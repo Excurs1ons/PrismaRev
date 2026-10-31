@@ -1329,9 +1329,14 @@ impl Workspace {
             .map(|template| template.doc.clone())
             .unwrap_or_default();
         hydrate_doc(&self.schema, &mut doc);
-        let path = template
-            .as_ref()
-            .map(|template| format!("{}/{}{}", kind.folder(), template.id, kind.suffix()));
+        // 模板 id 只是**建议标题**，落点要找不冲突的名字：以前直接拼成
+        // `assets/scenes/<模板 id>.scene.json`，第二次用同一个模板新建就会在
+        // 保存时静默覆盖上一个场景，或者两个标签页抢同一个路径（#449）。
+        let path = template.as_ref().map(|template| {
+            self.unique_document_path(kind, &template.id)
+                // 没有项目根时落不了盘，保留建议名字让标签页有个标题。
+                .unwrap_or_else(|| format!("{}/{}{}", kind.folder(), template.id, kind.suffix()))
+        });
         self.docs.push(Document::new(kind, path, doc));
         self.active = self.docs.len() - 1;
         self.selection.clear();
@@ -1341,6 +1346,19 @@ impl Workspace {
             LogLevel::Info,
             format!("新建{}", kind.folder()),
         );
+    }
+
+    /// 新文档的落点：磁盘上没有同名文件，也没有被当前会话里的其它文档占用。
+    ///
+    /// 没有绑定项目根时返回 `None`（文档先不落盘，保存时会报「没有绑定项目根」）。
+    fn unique_document_path(&self, kind: DocKind, title: &str) -> Option<String> {
+        let root = self.project_root.as_ref()?;
+        let taken: Vec<String> = self
+            .docs
+            .iter()
+            .filter_map(|doc| doc.path.clone())
+            .collect();
+        Some(project::unique_save_path(root, kind, title, &taken))
     }
 
     pub fn close_document(&mut self, index: usize) {
@@ -5696,6 +5714,48 @@ mod tests {
             .as_deref()
             .unwrap()
             .ends_with("camera.prefab.json"));
+    }
+
+    #[test]
+    fn two_documents_from_the_same_template_never_share_a_path() {
+        let project = TempProject::new("template-paths");
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        workspace.new_document(DocKind::Prefab, Some("camera"));
+        workspace.new_document(DocKind::Prefab, Some("camera"));
+
+        let first = workspace.docs[workspace.docs.len() - 2]
+            .path
+            .clone()
+            .unwrap();
+        let second = workspace.docs[workspace.docs.len() - 1]
+            .path
+            .clone()
+            .unwrap();
+        assert_eq!(first, "assets/prefabs/camera.prefab.json");
+        assert_eq!(second, "assets/prefabs/camera-2.prefab.json");
+    }
+
+    #[test]
+    fn a_template_document_never_lands_on_an_existing_file() {
+        let project = TempProject::new("template-existing");
+        std::fs::write(
+            project.root.join("assets/prefabs/camera.prefab.json"),
+            r#"{"version":3,"entities":[]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        workspace.new_document(DocKind::Prefab, Some("camera"));
+
+        assert_eq!(
+            workspace.document().path.as_deref(),
+            Some("assets/prefabs/camera-2.prefab.json")
+        );
+        // 原文件没被读进来当模板产物，内容也没被碰过。
+        let saved = std::fs::read_to_string(project.root.join("assets/prefabs/camera.prefab.json"))
+            .unwrap();
+        assert!(saved.contains("\"entities\""));
     }
 
     #[test]
