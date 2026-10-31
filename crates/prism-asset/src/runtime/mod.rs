@@ -15,7 +15,11 @@
 //! - 大资源流式读取（阶段 3，特性 `streaming`）。
 
 use crate::core::{AnyHandle, AssetId, AssetType, Handle};
+#[cfg(feature = "streaming")]
+use crate::package::PackageError;
 use crate::package::PackageReader;
+#[cfg(feature = "streaming")]
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -803,38 +807,49 @@ impl ResourceManager {
             if let Some(data) = slot.data.as_ref() {
                 slot.last_access.set(Instant::now());
                 return Some(StreamIter::Slice(SliceStreamIter {
-                    data: data.as_slice(),
+                    data: Cow::Borrowed(data.as_slice()),
                     pos: 0,
                     chunk_size,
                 }));
             }
         }
 
-        // 2. Otherwise stream directly from package.
+        // 2. Otherwise stream from the package. A file-backed reader (#509) has no
+        //    slice to borrow, so the stored block is read into memory once and the
+        //    iterator owns it — still bounded by one asset, not by the whole `.pak`.
         for package in &self.packages {
             if let Some(record) = package.reader.find_record(id) {
-                if let Ok(slice) = package.reader.asset_record_raw_slice(record) {
-                    if let Some(slot_index) = self.slot_index(id) {
-                        self.slots[slot_index as usize]
-                            .last_access
-                            .set(Instant::now());
-                    }
-                    if record.is_compressed() {
-                        if let Ok(decoder) = zstd::Decoder::new(std::io::Cursor::new(slice)) {
-                            return Some(StreamIter::Compressed(CompressedStreamIter {
-                                decoder,
-                                chunk_size,
-                                total_size: record.size as usize,
-                                read_so_far: 0,
-                            }));
+                let raw = match package.reader.asset_record_raw_slice(record) {
+                    Ok(slice) => Cow::Borrowed(slice),
+                    Err(PackageError::NotInMemory) => {
+                        match package.reader.asset_record_raw_bytes(record) {
+                            Ok(bytes) => Cow::Owned(bytes),
+                            Err(_) => continue,
                         }
-                    } else {
-                        return Some(StreamIter::Slice(SliceStreamIter {
-                            data: slice,
-                            pos: 0,
+                    }
+                    Err(_) => continue,
+                };
+                if let Some(slot_index) = self.slot_index(id) {
+                    self.slots[slot_index as usize]
+                        .last_access
+                        .set(Instant::now());
+                }
+                if record.is_compressed() {
+                    let source: Box<dyn std::io::Read + '_> = Box::new(std::io::Cursor::new(raw));
+                    if let Ok(decoder) = zstd::Decoder::new(source) {
+                        return Some(StreamIter::Compressed(CompressedStreamIter {
+                            decoder,
                             chunk_size,
+                            total_size: record.size as usize,
+                            read_so_far: 0,
                         }));
                     }
+                } else {
+                    return Some(StreamIter::Slice(SliceStreamIter {
+                        data: raw,
+                        pos: 0,
+                        chunk_size,
+                    }));
                 }
             }
         }
@@ -1203,7 +1218,8 @@ enum StreamIter<'a> {
 
 #[cfg(feature = "streaming")]
 struct SliceStreamIter<'a> {
-    data: &'a [u8],
+    /// Borrowed for in-memory packages, owned when the bytes came from disk.
+    data: Cow<'a, [u8]>,
     pos: usize,
     chunk_size: usize,
 }
@@ -1231,7 +1247,9 @@ impl<'a> Iterator for SliceStreamIter<'a> {
 
 #[cfg(feature = "streaming")]
 struct CompressedStreamIter<'a> {
-    decoder: zstd::Decoder<'a, std::io::BufReader<std::io::Cursor<&'a [u8]>>>,
+    /// Boxed so the decoder can read either a borrowed slice or an owned
+    /// buffer read from disk, without making the struct self-referential.
+    decoder: zstd::Decoder<'static, std::io::BufReader<Box<dyn std::io::Read + 'a>>>,
     chunk_size: usize,
     total_size: usize,
     read_so_far: usize,

@@ -22,6 +22,7 @@
 //!   field through the 结束 of the file (i.e. header[12..] + registry + deps + data).
 
 use crate::core::{AssetId, AssetType};
+use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -62,6 +63,15 @@ pub enum PackageError {
 
     #[error("decompression error: {0}")]
     Decompress(String),
+
+    /// The requested operation needs the whole `.pak` in memory, but the
+    /// package was opened from a file and streams its payload on demand.
+    ///
+    /// Borrowed slices ([`PackageReader::asset_record_raw_slice`]) cannot be
+    /// produced from a file-backed reader; use
+    /// [`PackageReader::asset_record_raw_bytes`] instead.
+    #[error("asset data is not held in memory (package was opened from a file)")]
+    NotInMemory,
 
     #[error("compression error: {0}")]
     Compress(String),
@@ -516,23 +526,164 @@ impl PackageBuilder {
 
 /// A loaded `.pak` 包 ready for 资源 lookup and extraction.
 ///
-/// The reader materialises the file bytes **once** at 打开 时间 (the buffer is
-/// owned by the reader and shared via `Arc`), then serves 资源 data on demand.
+/// The reader parses the header, the 资源 registry and the dependency array at
+/// 打开 时间, then serves 资源 payloads on demand:
+///
+/// - [`PackageReader::open`] keeps an open [`File`] and `pread`s the ranges it
+///   needs, so a 1 GB `.pak` costs a few kilobytes of RAM (#509);
+/// - [`PackageReader::from_bytes`] keeps the buffer it was handed (Android
+///   `assets/`, editor previews, tests) and hands out borrowed slices.
+///
+/// Both backings share the same layout checks, so neither can slice past the
+/// end of the file.
 #[derive(Debug, Clone)]
 pub struct PackageReader {
     header: PackageHeader,
     records: Vec<RuntimeAssetRecord>,
     dependency_array: Vec<u64>,
-    data: Arc<Vec<u8>>,
+    backing: Backing,
 }
 
+/// Where the `.pak` bytes live.
+///
+/// The format has always been random-access (header offsets + per-record
+/// offset/length); this enum is what finally lets the reader use that instead
+/// of demanding one contiguous `Vec<u8>` of the whole archive.
+#[derive(Debug, Clone)]
+enum Backing {
+    /// The whole archive, already in RAM.
+    Bytes(Arc<Vec<u8>>),
+    /// An open file handle; payload bytes are read on demand.
+    File { file: Arc<File>, len: u64 },
+}
+
+impl Backing {
+    fn len(&self) -> u64 {
+        match self {
+            Backing::Bytes(bytes) => bytes.len() as u64,
+            Backing::File { len, .. } => *len,
+        }
+    }
+
+    /// The in-memory buffer, when the package has one.
+    fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            Backing::Bytes(bytes) => Some(bytes.as_slice()),
+            Backing::File { .. } => None,
+        }
+    }
+
+    /// 读取 `len` 字节 at `offset`.
+    fn read_range(&self, offset: u64, len: u64) -> Result<Vec<u8>, PackageError> {
+        match self {
+            Backing::Bytes(bytes) => {
+                let start = usize::try_from(offset)
+                    .map_err(|_| PackageError::Truncated("offset does not fit usize".into()))?;
+                let end = usize::try_from(
+                    offset
+                        .checked_add(len)
+                        .ok_or_else(|| PackageError::Truncated("range overflows u64".into()))?,
+                )
+                .map_err(|_| PackageError::Truncated("range end does not fit usize".into()))?;
+                let slice = bytes.get(start..end).ok_or_else(|| {
+                    PackageError::Truncated(format!(
+                        "range {start}..{end} extends past file: {}",
+                        bytes.len()
+                    ))
+                })?;
+                Ok(slice.to_vec())
+            }
+            Backing::File {
+                file,
+                len: file_len,
+            } => {
+                let end = offset
+                    .checked_add(len)
+                    .ok_or_else(|| PackageError::Truncated("range overflows u64".into()))?;
+                if end > *file_len {
+                    return Err(PackageError::Truncated(format!(
+                        "range {offset}..{end} extends past file: {file_len}"
+                    )));
+                }
+                let mut buf = vec![0u8; len as usize];
+                read_exact_at(file, &mut buf, offset)?;
+                Ok(buf)
+            }
+        }
+    }
+}
+
+/// `pread`: 读取 `buf.len()` 字节 at `offset` without touching the file cursor.
+///
+/// A `&File` is shared by every thread that holds the reader, so this must not
+/// `seek` (that would race); Windows and Unix both expose positioned reads.
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        file.read_exact_at(buf, offset)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileExt;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let read = file.seek_read(&mut buf[done..], offset + done as u64)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "file ended before the requested range",
+                ));
+            }
+            done += read;
+        }
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut handle = file.try_clone()?;
+        handle.seek(SeekFrom::Start(offset))?;
+        handle.read_exact(buf)
+    }
+}
+
+/// 打开 a `.pak` file from disk without reading the whole archive into RAM.
+///
+/// Only the header, the 资源 registry and the dependency array are read up
+/// front; payload bytes are `pread` per asset. The 校验和 is verified in
+/// bounded chunks (1 MiB at a time), so opening still costs one sequential
+/// pass over the file but no per-file allocation.
 impl PackageReader {
     /// 打开 a `.pak` file from disk and 验证 its 完整性
     ///
-    /// The bytes read from disk are moved into the reader, so the file is only
-    /// materialised once.
+    /// The file stays on disk: only the metadata regions are read here, payload
+    /// bytes are fetched per asset with positioned reads (#509).
+    ///
+    /// The reader keeps the handle open, so deleting or replacing the `.pak`
+    /// while it lives is safe on both Unix and Windows (Rust opens with
+    /// `FILE_SHARE_DELETE`): this reader keeps serving the version it opened and
+    /// the next [`Self::open`] picks up the new file — which is exactly what the
+    /// hot-reload path in `ResourceManager::on_pak_changed` relies on.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, PackageError> {
-        Self::from_owned_bytes(std::fs::read(path.as_ref())?)
+        let path = path.as_ref();
+        let file = File::open(path)?;
+        let len = file.metadata()?.len();
+
+        let mut head = [0u8; PackageHeader::SERIALIZED_SIZE as usize];
+        read_exact_at(&file, &mut head, 0)?;
+        let header = PackageHeader::from_bytes(&head)?;
+
+        // 完整性先于一切结构性判断，理由见 `from_owned_bytes`（#89）。
+        verify_checksum_file(&file, len, &header)?;
+
+        Self::parse(
+            header,
+            Backing::File {
+                file: Arc::new(file),
+                len,
+            },
+        )
     }
 
     /// 异步 打开 via tokio.
@@ -548,8 +699,8 @@ impl PackageReader {
 
     /// Parse from an owned buffer, taking ownership instead of copying it.
     ///
-    /// [`Self::open`] / [`Self::open_async`] go through this so opening a
-    /// `.pak` allocates the file buffer exactly once.
+    /// [`Self::from_bytes`] / [`Self::open_async`] go through this so opening
+    /// an in-memory `.pak` allocates the buffer exactly once.
     fn from_owned_bytes(bytes: Vec<u8>) -> Result<Self, PackageError> {
         let header = PackageHeader::from_bytes(&bytes)?;
 
@@ -559,10 +710,13 @@ impl PackageReader {
         // registry 解析在错误数据上继续跑（#89）。
         verify_checksum(&bytes, &header)?;
 
-        // 由 header 派生的偏移/长度全部走 checked 算术：`.pak` 是运行时从磁盘读入的
-        // 格式，损坏或不可信的文件必须返回 Err，而不是在 debug 下整数溢出 panic、
-        // release 下回绕成巨大值再切片 panic（校验和检查根本走不到）。
-        let file_len = bytes.len() as u64;
+        Self::parse(header, Backing::Bytes(Arc::new(bytes)))
+    }
+
+    /// Validate the layout described by an already-checksummed header and load
+    /// the metadata regions from `backing`.
+    fn parse(header: PackageHeader, backing: Backing) -> Result<Self, PackageError> {
+        let file_len = backing.len();
 
         if header.registry_offset != PackageHeader::SERIALIZED_SIZE {
             return Err(PackageError::Truncated(format!(
@@ -583,7 +737,6 @@ impl PackageReader {
             )));
         }
 
-        let reg_start = header.registry_offset as usize;
         let reg_end = header
             .registry_offset
             .checked_add(header.registry_size)
@@ -619,7 +772,8 @@ impl PackageReader {
         }
 
         // 读取 registry.
-        let reg_bytes = &bytes[reg_start..reg_end as usize];
+        let reg_len = reg_end - header.registry_offset;
+        let reg_bytes = backing.read_range(header.registry_offset, reg_len)?;
         let mut records = Vec::with_capacity(header.asset_count as usize);
         let mut off = 0usize;
         for _ in 0..header.asset_count {
@@ -629,7 +783,7 @@ impl PackageReader {
         }
 
         // 读取 dependency 数组
-        let deps_bytes = &bytes[deps_start as usize..header.data_offset as usize];
+        let deps_bytes = backing.read_range(deps_start, deps_size)?;
         let dep_count = deps_bytes.len() / 8;
         let mut dependency_array = Vec::with_capacity(dep_count);
         for &chunk in deps_bytes.as_chunks::<8>().0 {
@@ -671,7 +825,7 @@ impl PackageReader {
             header,
             records,
             dependency_array,
-            data: Arc::new(bytes),
+            backing,
         })
     }
 
@@ -708,14 +862,8 @@ impl PackageReader {
         &self.dependency_array[start..end]
     }
 
-    /// Return the raw byte slice of the package payload for a specific record.
-    ///
-    /// For uncompressed or streamed assets, this slice is the actual asset bytes.
-    /// For compressed assets, this slice contains the compressed zstd frame.
-    pub fn asset_record_raw_slice(
-        &self,
-        record: &RuntimeAssetRecord,
-    ) -> Result<&[u8], PackageError> {
+    /// Byte range of the stored payload for `record`, validated against the file.
+    fn stored_range(&self, record: &RuntimeAssetRecord) -> Result<(u64, u64), PackageError> {
         let stored_len = if record.is_compressed() {
             record.compressed_size
         } else {
@@ -725,15 +873,44 @@ impl PackageReader {
             .offset
             .checked_add(stored_len)
             .ok_or_else(|| PackageError::Truncated("asset range overflows u64".into()))?;
-        let file_len = self.data.len() as u64;
+        let file_len = self.backing.len();
         if end > file_len {
             return Err(PackageError::Truncated(format!(
                 "asset data extends past file: {end} > {file_len}"
             )));
         }
+        Ok((record.offset, end))
+    }
 
-        let range = record.offset as usize..end as usize;
-        Ok(&self.data[range])
+    /// Return the raw byte slice of the package payload for a specific record.
+    ///
+    /// For uncompressed or streamed assets, this slice is the actual asset bytes.
+    /// For compressed assets, this slice contains the compressed zstd frame.
+    ///
+    /// Only packages opened from memory ([`Self::from_bytes`]) can hand out a
+    /// borrowed slice; a file-backed reader returns
+    /// [`PackageError::NotInMemory`] — use [`Self::asset_record_raw_bytes`].
+    pub fn asset_record_raw_slice(
+        &self,
+        record: &RuntimeAssetRecord,
+    ) -> Result<&[u8], PackageError> {
+        let (start, end) = self.stored_range(record)?;
+        let bytes = self.backing.bytes().ok_or(PackageError::NotInMemory)?;
+        let range = start as usize..end as usize;
+        Ok(&bytes[range])
+    }
+
+    /// Return the raw payload bytes for a specific record, reading them from
+    /// disk when the package is file-backed.
+    ///
+    /// This allocates only the one asset (or its compressed frame), never the
+    /// whole archive.
+    pub fn asset_record_raw_bytes(
+        &self,
+        record: &RuntimeAssetRecord,
+    ) -> Result<Vec<u8>, PackageError> {
+        let (start, end) = self.stored_range(record)?;
+        self.backing.read_range(start, end - start)
     }
 
     /// Return the raw byte slice of the package payload for a given asset ID.
@@ -767,20 +944,22 @@ impl PackageReader {
         &self,
         record: &RuntimeAssetRecord,
     ) -> Result<Vec<u8>, PackageError> {
-        let slice = self.asset_record_raw_slice(record)?;
+        let raw = self.asset_record_raw_bytes(record)?;
         if record.is_compressed() {
-            let decompressed = zstd::decode_all(std::io::Cursor::new(slice))
+            let decompressed = zstd::decode_all(std::io::Cursor::new(&raw))
                 .map_err(|e| PackageError::Decompress(e.to_string()))?;
             Ok(decompressed)
         } else {
-            Ok(slice.to_vec())
+            Ok(raw)
         }
     }
 
     /// Check 完整性 of the 包 (re-checksums the entire file body).
     pub fn verify_integrity(&self) -> Result<(), PackageError> {
-        // Re-open from 字节 to 触发器 完整 校验和 验证
-        Self::from_bytes(&self.data).map(|_| ())
+        match &self.backing {
+            Backing::Bytes(bytes) => verify_checksum(bytes, &self.header),
+            Backing::File { file, len } => verify_checksum_file(file, *len, &self.header),
+        }
     }
 }
 
@@ -803,6 +982,53 @@ fn verify_checksum(bytes: &[u8], header: &PackageHeader) -> Result<(), PackageEr
         .unwrap_or(&[]);
 
     let computed = PackageHeader::compute_checksum(header_prefix, &[], &[], payload);
+    if computed != header.checksum {
+        return Err(PackageError::ChecksumMismatch {
+            computed,
+            stored: header.checksum,
+        });
+    }
+    Ok(())
+}
+
+/// 校验 `.pak` 的 xxh3-64 校验和，文件后端流式读取。
+///
+/// 语义与 [`verify_checksum`] 完全一致（`header[4..44]` + 其后全部字节），只是按
+/// 1 MiB 块读磁盘，所以打开大包不再需要先在内存里放一份完整映像（#509）。
+fn verify_checksum_file(
+    file: &File,
+    file_len: u64,
+    header: &PackageHeader,
+) -> Result<(), PackageError> {
+    let prefix_len = PackageHeader::CHECKSUM_FIELD_OFFSET - PackageHeader::CHECKSUM_HEADER_START;
+    let mut prefix =
+        [0u8; PackageHeader::CHECKSUM_FIELD_OFFSET - PackageHeader::CHECKSUM_HEADER_START];
+    if file_len < PackageHeader::CHECKSUM_FIELD_OFFSET as u64 {
+        return Err(PackageError::Truncated(format!(
+            "file is {file_len} bytes, shorter than the checksummed header"
+        )));
+    }
+    read_exact_at(
+        file,
+        &mut prefix[..prefix_len],
+        PackageHeader::CHECKSUM_HEADER_START as u64,
+    )?;
+
+    let mut hasher = Xxh3::default();
+    hasher.update(&prefix[..prefix_len]);
+
+    // 从 header 末尾开始，按块喂给 hasher；不读 header 里那些尚未验证的偏移。
+    const CHUNK: usize = 1 << 20;
+    let mut buf = vec![0u8; CHUNK];
+    let mut offset = PackageHeader::SERIALIZED_SIZE;
+    while offset < file_len {
+        let len = (file_len - offset).min(CHUNK as u64) as usize;
+        read_exact_at(file, &mut buf[..len], offset)?;
+        hasher.update(&buf[..len]);
+        offset += len as u64;
+    }
+
+    let computed = hasher.digest();
     if computed != header.checksum {
         return Err(PackageError::ChecksumMismatch {
             computed,
