@@ -9,8 +9,9 @@
 // Sets (must match `PostPass::ensure_pipeline`):
 //   set 0, binding 0 - HDR color texture (combined Sampler2D)
 //
-// Push constants: PostPush (4 bytes) - `tonemapMode` (0 = Reinhard, 1 = ACES,
-// 2 = passthrough for 2D scenes so the sprite palette survives untouched).
+// Push constants: PostPush - `tonemapMode` (0 = Reinhard, 1 = ACES,
+// 2 = passthrough for 2D scenes so the sprite palette survives untouched),
+// `aaMode` (FXAA), `invTexelSize`, and the color-grading knobs (#502).
 //
 // Compile:
 //   slangc post.slang -profile spirv_1_5 -target spirv \
@@ -36,6 +37,11 @@ public struct PostPush
     public uint tonemapMode;
     public uint aaMode;
     public float2 invTexelSize;
+    // Display-referred color grading (#502). Defaults keep the pre-#502 image:
+    // contrast 1, saturation 1, vignette 0.
+    public float contrast;
+    public float saturation;
+    public float vignette;
 };
 [[vk::push_constant]]
 PostPush pc;
@@ -78,13 +84,24 @@ float3 tonemap(float3 hdr)
     return aces(hdr);                              // ACES Narkowicz
 }
 
-// Sample + tonemap. FXAA runs entirely in this display-referred space so the
-// edge-luma it compares is perceptually uniform (the hardware sRGB encode to the
-// swapchain happens after this shader, so the values written back are still
-// linear).
+// Display-referred color grading (contrast around mid-grey + Rec.709 luma
+// saturation). Applied *after* tonemapping so the knobs behave like a photo
+// editor: contrast 1 / saturation 1 is an exact no-op.
+float3 grade(float3 c)
+{
+    c = (c - 0.5) * pc.contrast + 0.5;
+    float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+    c = lerp(float3(luma, luma, luma), c, pc.saturation);
+    return saturate(c);
+}
+
+// Sample + tonemap + grade. FXAA runs entirely in this display-referred space
+// so the edge-luma it compares is perceptually uniform (the hardware sRGB
+// encode to the swapchain happens after this shader, so the values written
+// back are still linear).
 float3 shade(float2 uv)
 {
-    return saturate(tonemap(hdrTex.Sample(uv).rgb));
+    return grade(saturate(tonemap(hdrTex.Sample(uv).rgb)));
 }
 
 // Perceptual luma for edge detection. Gamma 2.0 (sqrt) is used instead of the
@@ -150,5 +167,15 @@ public void fragmentMain(
 )
 {
     float3 color = (pc.aaMode == 1u) ? fxaa(uv) : shade(uv);
+
+    // Vignette: darken towards the frame corners. `vignette == 0` skips the
+    // multiply entirely so the default path is bit-identical to pre-#502.
+    if (pc.vignette > 0.0)
+    {
+        float2 d = uv * 2.0 - 1.0;
+        float r = saturate(length(d) * 0.70710678);
+        color *= 1.0 - pc.vignette * smoothstep(0.35, 1.0, r);
+    }
+
     outColor = float4(color, 1.0);
 }

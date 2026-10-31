@@ -106,6 +106,9 @@ pub struct FrameInput<'a> {
     /// the swapchain and offscreen (editor viewport) paths.
     pub aa_mode: u32,
     pub debug_rt: u32,
+    /// Display-referred color grading (#502). `PostPass` applies it after
+    /// tonemapping; [`crate::PostGrade::default`] is an exact no-op.
+    pub grade: crate::render_graph::PostGrade,
     pub proj22: f32,
     pub proj32: f32,
     pub lights: &'a [GpuLight],
@@ -1738,6 +1741,7 @@ impl GraphRenderer {
             tonemap_mode,
             aa_mode,
             debug_rt,
+            grade,
             proj22,
             proj32,
             lights,
@@ -1804,6 +1808,7 @@ impl GraphRenderer {
                     ShadowMode::None
                 },
                 debug_flags,
+                grade: grade.sanitized(),
                 inv_view_rot: {
                     let v = &frame_data.view;
                     let mut m = [[0.0f32; 4]; 4];
@@ -2128,6 +2133,7 @@ impl GraphRenderer {
         pt_max_iterations: u32,
         exposure: f32,
         pt_lights: &[PtAnalyticLight],
+        grade: crate::render_graph::PostGrade,
     ) -> anyhow::Result<bool> {
         let ctx = match self.begin_frame()? {
             Some(c) => c,
@@ -2146,6 +2152,7 @@ impl GraphRenderer {
             tonemap_mode,
             aa_mode,
             debug_rt,
+            grade,
             proj22,
             proj32,
             lights,

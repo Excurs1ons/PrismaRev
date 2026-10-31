@@ -611,6 +611,9 @@ impl RenderPassNode for PostPass {
         let push = shader_bindings::post::PostPush {
             tonemapMode: ctx.frame.tonemap_mode,
             aaMode: effective_aa_mode(ctx.frame.debug_rt, ctx.frame.aa_mode),
+            contrast: ctx.frame.grade.contrast,
+            saturation: ctx.frame.grade.saturation,
+            vignette: ctx.frame.grade.vignette,
             invTexelSize: [
                 if self.extent.width > 0 {
                     1.0 / self.extent.width as f32
@@ -820,8 +823,12 @@ mod tests {
         assert_eq!(std::mem::offset_of!(PostPush, tonemapMode), 0);
         assert_eq!(std::mem::offset_of!(PostPush, aaMode), 4);
         assert_eq!(std::mem::offset_of!(PostPush, invTexelSize), 8);
-        assert_eq!(std::mem::size_of::<PostPush>(), 16);
-        assert_eq!(PUSH_CONSTANT_SIZE, 16);
+        // #502 color grading rides in the same push-constant block.
+        assert_eq!(std::mem::offset_of!(PostPush, contrast), 16);
+        assert_eq!(std::mem::offset_of!(PostPush, saturation), 20);
+        assert_eq!(std::mem::offset_of!(PostPush, vignette), 24);
+        assert_eq!(std::mem::size_of::<PostPush>(), 28);
+        assert_eq!(PUSH_CONSTANT_SIZE, 28);
     }
 
     #[test]

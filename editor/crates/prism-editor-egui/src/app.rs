@@ -4285,6 +4285,9 @@ fn render_settings_json(
         "debugFlags": settings.debug_flags,
         "tonemapMode": settings.tonemap_mode,
         "aaMode": settings.aa_mode,
+        "contrast": settings.contrast,
+        "saturation": settings.saturation,
+        "vignette": settings.vignette,
         "debugRt": settings.debug_rt,
         "pathTrace": settings.render_mode == RenderMode::PathTrace,
         "ptMaxBounces": settings.pt_max_bounces,
@@ -4323,6 +4326,9 @@ fn render_settings_from_json(
         debug_flags: u32_field("debugFlags", base.debug_flags),
         tonemap_mode: u32_field("tonemapMode", base.tonemap_mode),
         aa_mode: u32_field("aaMode", base.aa_mode),
+        contrast: f32_field("contrast", base.contrast),
+        saturation: f32_field("saturation", base.saturation),
+        vignette: f32_field("vignette", base.vignette),
         debug_rt: u32_field("debugRt", base.debug_rt),
         render_mode: if path_trace {
             RenderMode::PathTrace
@@ -4504,11 +4510,18 @@ mod tests {
         settings.show_grid = true;
         settings.pt_max_bounces = 7;
         settings.pt_ray_max_distance = 123.5;
+        // #502 调色参数也要能存进项目文件。
+        settings.contrast = 1.4;
+        settings.saturation = 0.6;
+        settings.vignette = 0.3;
         let value = render_settings_json(&settings);
         let loaded = render_settings_from_json(&value, false);
         assert_eq!(loaded.show_grid, true);
         assert_eq!(loaded.pt_max_bounces, 7);
         assert_eq!(loaded.pt_ray_max_distance, 123.5);
+        assert_eq!(loaded.contrast, 1.4);
+        assert_eq!(loaded.saturation, 0.6);
+        assert_eq!(loaded.vignette, 0.3);
         assert_eq!(
             render_settings_from_json(&serde_json::json!({}), true).show_grid,
             true

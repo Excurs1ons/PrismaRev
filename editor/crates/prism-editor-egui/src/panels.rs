@@ -3594,6 +3594,24 @@ pub fn render_graph(
                 });
             ui.end_row();
 
+            ui.label("Contrast");
+            changed |= ui
+                .add(egui::Slider::new(&mut settings.contrast, 0.0..=3.0))
+                .changed();
+            ui.end_row();
+
+            ui.label("Saturation");
+            changed |= ui
+                .add(egui::Slider::new(&mut settings.saturation, 0.0..=3.0))
+                .changed();
+            ui.end_row();
+
+            ui.label("Vignette");
+            changed |= ui
+                .add(egui::Slider::new(&mut settings.vignette, 0.0..=1.0))
+                .changed();
+            ui.end_row();
+
             ui.label("Anti-aliasing");
             egui::ComboBox::from_id_salt("aa-mode")
                 .selected_text(match settings.aa_mode {
