@@ -3,14 +3,14 @@
 //! 数据与命令全部走 `prism-editor-core`（与 Web 编辑器、GPUI 编辑器同一份
 //! 文档模型 / schema / 撤销栈），这里只负责画 egui 控件。
 
-use egui::{Align, Layout, RichText, Ui, Vec2};
+use egui::{Align, Color32, Layout, RichText, Sense, Ui, Vec2};
 use prism_editor_core::{
     AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, SceneDoc, Workspace,
     THEME_PRESETS,
 };
 use serde_json::{json, Value};
 
-use crate::{theme, widgets};
+use crate::{project_module::Diagnostic, theme, widgets};
 use egui_phosphor::regular as icons;
 
 /// 在系统文件管理器里定位一个项目内资产（引擎的 `Reveal in Finder` / `Show in Explorer`）。
@@ -1876,6 +1876,142 @@ pub fn log(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 );
             }
         });
+}
+
+/// Problems 面板：项目模块编译的 error / warning，点一行跳到源码位置。
+///
+/// 这是“编译控制”的可观测部分：状态栏只回答“编没编 / 成没成”，
+/// 这里回答“哪个文件哪一行”。诊断由 `cargo --message-format=json` 提供。
+pub fn problems(ui: &mut Ui, diagnostics: &[Diagnostic], state: &mut UiState) {
+    let errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.level == LogLevel::Error)
+        .count();
+    let warnings = diagnostics.len() - errors;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{errors} errors · {warnings} warnings")).size(11.0));
+        ui.label(
+            RichText::new("project module build · Ctrl+R recompiles")
+                .weak()
+                .size(10.5),
+        );
+    });
+    ui.separator();
+    if diagnostics.is_empty() {
+        ui.label(
+            RichText::new(
+                "No problems. Errors and warnings from the project module build appear here.",
+            )
+            .weak()
+            .size(11.0),
+        );
+        return;
+    }
+
+    egui::ScrollArea::vertical()
+        .id_salt("problems-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for diagnostic in diagnostics {
+                let (icon, color) = match diagnostic.level {
+                    LogLevel::Error => (icons::X_CIRCLE, Color32::from_rgb(232, 96, 96)),
+                    _ => (icons::WARNING, Color32::from_rgb(224, 176, 80)),
+                };
+                let location = diagnostic.location();
+                let mut response = ui
+                    .horizontal(|ui| {
+                        ui.label(RichText::new(icon).size(12.0).color(color));
+                        ui.label(RichText::new(&diagnostic.message).size(11.0));
+                        if let Some(location) = &location {
+                            ui.label(RichText::new(location).weak().size(10.0));
+                        }
+                    })
+                    .response;
+                if location.is_some() {
+                    response = response
+                        .interact(Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Open this location in the default editor");
+                    if response.clicked() {
+                        if let Some(file) = diagnostic.file.as_deref() {
+                            state.status = match open_source_location(
+                                file,
+                                diagnostic.line,
+                                diagnostic.column,
+                            ) {
+                                Ok(()) => format!("opened {}", file.display()),
+                                Err(error) => error,
+                            };
+                        }
+                    }
+                }
+            }
+        });
+}
+
+/// 在默认编辑器里打开源码位置（best effort）：先试 VS Code 的 `-g file:line:col`，
+/// 没有 `code` 就退回系统默认处理程序（只能到文件，不能到行）。
+pub fn open_source_location(
+    path: &std::path::Path,
+    line: Option<usize>,
+    column: Option<usize>,
+) -> Result<(), String> {
+    let file = path.display().to_string();
+    let target = match line {
+        Some(line) => match column {
+            Some(column) => format!("{file}:{line}:{column}"),
+            None => format!("{file}:{line}"),
+        },
+        None => file.clone(),
+    };
+    // Windows 上 `code` 是 `code.cmd`，`Command::new("code")` 不会按 PATHEXT 找它，
+    // 所以先确认它在 PATH 里，再经 `cmd /C` 启动。
+    #[cfg(target_os = "windows")]
+    let code_ready = on_path("code.cmd");
+    #[cfg(not(target_os = "windows"))]
+    let code_ready = on_path("code");
+    if code_ready {
+        let opened = if cfg!(target_os = "windows") {
+            spawn_detached("cmd", &["/C", "code", "-g", &target])
+        } else {
+            spawn_detached("code", &["-g", &target])
+        };
+        if opened {
+            return Ok(());
+        }
+    }
+    let fallback = if cfg!(target_os = "windows") {
+        // `start` 的第一个参数是窗口标题，必须给空串，否则路径会被当成标题。
+        spawn_detached("cmd", &["/C", "start", "", &file])
+    } else if cfg!(target_os = "macos") {
+        spawn_detached("open", &[&file])
+    } else {
+        spawn_detached("xdg-open", &[&file])
+    };
+    if fallback {
+        Ok(())
+    } else {
+        Err(format!("cannot open {file}"))
+    }
+}
+
+/// `name` 是否是 PATH 上的可执行文件（不启动进程，避免“找不到 code”时静默吞掉）。
+fn on_path(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| directory.join(name).is_file())
+    })
+}
+
+/// 起一个**不等待**的进程（打开编辑器不该卡住 UI 线程）。
+fn spawn_detached(program: &str, args: &[&str]) -> bool {
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command.spawn().is_ok()
 }
 
 // ---------------------------------------------------------------------------

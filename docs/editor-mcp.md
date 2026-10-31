@@ -92,8 +92,9 @@ MCP 工具        → 读端口文件 → TCP 一行 JSON 请求 / 一行 JSON �
 | `editor_quit` | — | 走正常退出路径（会写 `state.json`） |
 
 `editor_status` 里的 `project_module` 汇报 Game View 的用户项目模块：
-`available` / `loaded` / `building` / `auto_refresh` / `manifest` / `error`。
-模块的编译和热重载由编辑器自己完成（见 `docs/editor-egui.md` §3.2）。
+`available` / `loaded` / `building` / `auto_refresh` / `state`（`ready` / `pending` /
+`compiling` / `failed` / `unavailable`）/ `dirty` / `problems` / `manifest` / `error`。
+模块的编译和重载由编辑器自己完成（见 `docs/editor-egui.md` §3.2）。
 
 ### UI 节点树（`editor_ui`）
 

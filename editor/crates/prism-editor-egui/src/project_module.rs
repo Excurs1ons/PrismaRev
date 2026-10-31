@@ -1,4 +1,4 @@
-//! Game View 的用户项目模块：编译、热重载、每帧 tick。
+//! Game View 的用户项目模块：编译、重载、每帧 tick。
 //!
 //! 编辑器本身只链接引擎；用户项目的 gameplay 代码编译成**独立的 cdylib**
 //! （`projects/<p>/Cargo.toml` 的 `preview-module` feature），由
@@ -6,11 +6,12 @@
 //! 所以不会出现第二份 `World` / `renderer`。
 //!
 //! 编译在后台线程，加载/卸载必须在 UI 线程（`ProjectSession` 的回调指针
-//! 不能跨线程）。这里的节奏与引擎的脚本编译一致：
+//! 不能跨线程）。节奏按**模块编译**来做（没有脚本层，所以也没有 domain reload）：
 //!
 //! - 源码改动**落定** 350ms 后才编译，连续保存不会触发多次 cargo；
 //! - Play 期间不自动换模块，避免打断试玩；`Ctrl+R` 显式刷新例外；
-//! - 编译失败保留上一次成功的模块继续跑，只把错误送进 Console；
+//! - 换模块是**整模块重载**：旧 session 释放、`create` 重跑，项目静态状态归零；
+//! - 编译失败保留上一次成功的模块继续跑，诊断进 Console 与 Problems 面板；
 //! - 构建产物先复制成唯一名字再加载（Windows 上已加载的 dll 不能覆盖）。
 
 use std::io;
@@ -37,21 +38,99 @@ pub struct ProjectEvent {
     pub text: String,
 }
 
-/// 可轮询的状态（状态栏 / MCP `editor_status` 用）。
+/// 模块编译状态。状态栏、Problems 面板与 MCP `editor_status` 共用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModuleState {
+    /// 项目没有 `preview-module`（Play 只跑引擎 system）。
+    Unavailable,
+    /// 已加载，源码没有未编译的改动。
+    Ready,
+    /// 源码有改动，还没编（debounce 中，或 Auto Refresh 关掉了）。
+    Pending,
+    /// cargo 正在跑。
+    Compiling,
+    /// 上一次编译 / 加载失败（源码没再改就不会自动重试）。
+    Failed,
+}
+
+impl ModuleState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModuleState::Unavailable => "unavailable",
+            ModuleState::Ready => "ready",
+            ModuleState::Pending => "pending",
+            ModuleState::Compiling => "compiling",
+            ModuleState::Failed => "failed",
+        }
+    }
+
+    /// 状态栏文案（UE 的 Compile 按钮那种一眼能看懂的状态）。
+    pub fn label(self) -> &'static str {
+        match self {
+            ModuleState::Unavailable => "Module: off",
+            ModuleState::Ready => "Module: ready",
+            ModuleState::Pending => "Module: changes not compiled",
+            ModuleState::Compiling => "Module: compiling…",
+            ModuleState::Failed => "Module: compile failed",
+        }
+    }
+}
+
+/// 一条编译器诊断。只保留 error / warning，位置是 `file:line:col`。
+#[derive(Clone, Debug)]
+pub struct Diagnostic {
+    pub level: LogLevel,
+    pub message: String,
+    pub file: Option<PathBuf>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+}
+
+impl Diagnostic {
+    pub fn location(&self) -> Option<String> {
+        let file = self.file.as_deref()?;
+        let mut text = file.display().to_string();
+        if let Some(line) = self.line {
+            text.push_str(&format!(":{line}"));
+            if let Some(column) = self.column {
+                text.push_str(&format!(":{column}"));
+            }
+        }
+        Some(text)
+    }
+}
+
+/// 可轮询的状态（状态栏 / Problems / MCP `editor_status` 用）。
 #[derive(Clone, Debug)]
 pub struct ProjectModuleStatus {
     pub available: bool,
     pub loaded: bool,
     pub building: bool,
     pub auto_refresh: bool,
+    pub state: ModuleState,
+    /// 源码时间戳晚于上一次编译尝试：有未编译的改动。
+    pub dirty: bool,
     pub manifest: Option<PathBuf>,
     pub error: Option<String>,
+    /// 最近一次 build 的诊断条数（明细走 `ProjectModuleDriver::diagnostics`）。
+    pub problems: usize,
 }
 
 enum BuildOutcome {
-    Built(PathBuf),
-    Failed(String),
+    Built {
+        path: PathBuf,
+        diagnostics: Vec<Diagnostic>,
+    },
+    Failed {
+        message: String,
+        diagnostics: Vec<Diagnostic>,
+    },
 }
+
+/// 一次最多保留多少条诊断，避免一个坏文件把面板刷爆。
+const MAX_DIAGNOSTICS: usize = 100;
+/// 只在没有编译任务时扫源码时间戳；和 350ms 的 debounce 错开，别每帧 stat。
+const DIRTY_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 
 /// 项目模块的宿主侧驱动器。
 pub struct ProjectModuleDriver {
@@ -64,6 +143,12 @@ pub struct ProjectModuleDriver {
     staged: Option<PathBuf>,
     /// 源码最近一次编译尝试时的时间戳（成功/失败都记，失败不重试到改动为止）。
     compiled_stamp: Option<SystemTime>,
+    /// `compiled_stamp` 之后源码又变过：状态栏显示「有改动未编译」。
+    dirty: bool,
+    /// `dirty` 的扫描节流（`DIRTY_SCAN_INTERVAL`）。
+    last_scan: Option<Instant>,
+    /// 最近一次 build 的编译器诊断（成功时只有 warning）。
+    diagnostics: Vec<Diagnostic>,
     /// 首次观察到改动的时刻，用于 debounce。
     pending_since: Option<Instant>,
     build: Option<Receiver<BuildOutcome>>,
@@ -108,6 +193,9 @@ impl ProjectModuleDriver {
             session: None,
             staged: None,
             compiled_stamp: None,
+            dirty: available,
+            last_scan: None,
+            diagnostics: Vec::new(),
             pending_since: None,
             build: None,
             building: false,
@@ -149,9 +237,35 @@ impl ProjectModuleDriver {
             loaded: self.session.is_some(),
             building: self.building,
             auto_refresh: self.auto_refresh,
+            state: self.state(),
+            dirty: self.dirty,
             manifest: self.manifest.clone(),
             error: self.last_error.clone(),
+            problems: self.diagnostics.len(),
         }
+    }
+
+    /// Problems 面板读这里（不随 `status()` 每帧克隆）。
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    fn state(&self) -> ModuleState {
+        if !self.available() {
+            return ModuleState::Unavailable;
+        }
+        if self.building {
+            return ModuleState::Compiling;
+        }
+        // 改过源码但还没编（Auto Refresh 关掉时靠这个提示用户按 Ctrl+R）；
+        // 失败后源码没再改才是稳定的 Failed。
+        if self.dirty {
+            return ModuleState::Pending;
+        }
+        if self.last_error.is_some() {
+            return ModuleState::Failed;
+        }
+        ModuleState::Ready
     }
 
     pub fn available(&self) -> bool {
@@ -192,7 +306,27 @@ impl ProjectModuleDriver {
     /// `playing` = Game view 正在模拟；自动编译会等 Play 结束后再做。
     pub fn poll(&mut self, playing: bool) {
         self.poll_build();
+        self.scan_sources();
         self.maybe_compile(playing);
+    }
+
+    /// 源码有没有未编译的改动（节流扫描，Auto Refresh 关掉时也要能显示）。
+    fn scan_sources(&mut self) {
+        if self.manifest.is_none() || self.prebuilt.is_some() {
+            self.dirty = false;
+            return;
+        }
+        let now = Instant::now();
+        if let Some(last) = self.last_scan {
+            if now.duration_since(last) < DIRTY_SCAN_INTERVAL {
+                return;
+            }
+        }
+        self.last_scan = Some(now);
+        let Some(stamp) = self.source_stamp() else {
+            return;
+        };
+        self.dirty = self.compiled_stamp.is_none_or(|compiled| compiled < stamp);
     }
 
     /// Game View 的 Play 每帧调用：在引擎 system 之前推进项目代码。
@@ -241,7 +375,7 @@ impl ProjectModuleDriver {
 
         // 预构建模块优先：只尝试装一次，失败就停在错误状态（Ctrl+R 也不重装）。
         if let Some(path) = self.prebuilt.take() {
-            match self.install(&path) {
+            match self.install(&path, Vec::new()) {
                 Ok(()) => self.push(
                     LogLevel::Info,
                     format!(
@@ -249,7 +383,7 @@ impl ProjectModuleDriver {
                         path.display()
                     ),
                 ),
-                Err(error) => self.fail(error),
+                Err(error) => self.fail(error, Vec::new()),
             }
             return;
         }
@@ -258,7 +392,7 @@ impl ProjectModuleDriver {
         if !manual && !self.auto_refresh {
             return;
         }
-        // Play 期间不自动换模块：和引擎的 domain reload 一样会丢掉项目状态。
+        // Play 期间不自动换模块：整模块重载会丢掉项目状态（没有脚本层可迁移）。
         // 放在扫描源码之前，避免每帧遍历 `src/`。
         if !manual && playing {
             return;
@@ -315,26 +449,44 @@ impl ProjectModuleDriver {
                 self.build = None;
                 self.building = false;
                 match outcome {
-                    BuildOutcome::Built(path) => match self.install(&path) {
-                        Ok(()) => self.push(
-                            LogLevel::Info,
-                            format!("project module loaded: {}", path.display()),
-                        ),
-                        Err(error) => self.fail(error),
-                    },
-                    BuildOutcome::Failed(error) => self.fail(error),
+                    BuildOutcome::Built { path, diagnostics } => {
+                        let warnings = diagnostics.len();
+                        match self.install(&path, diagnostics) {
+                            Ok(()) => {
+                                self.push(
+                                    LogLevel::Info,
+                                    if warnings == 0 {
+                                        format!("project module loaded: {}", path.display())
+                                    } else {
+                                        format!(
+                                            "project module loaded: {} ({warnings} warnings, see Problems)",
+                                            path.display()
+                                        )
+                                    },
+                                );
+                            }
+                            Err(error) => self.fail(error, Vec::new()),
+                        }
+                    }
+                    BuildOutcome::Failed {
+                        message,
+                        diagnostics,
+                    } => self.fail(message, diagnostics),
                 }
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 self.build = None;
                 self.building = false;
-                self.fail("project module build thread exited without a result".to_string());
+                self.fail(
+                    "project module build thread exited without a result".to_string(),
+                    Vec::new(),
+                );
             }
         }
     }
 
-    fn install(&mut self, built: &Path) -> Result<(), String> {
+    fn install(&mut self, built: &Path, diagnostics: Vec<Diagnostic>) -> Result<(), String> {
         let staged = stage_module(built)?;
         let session = match ProjectModule::load(&staged)
             .map_err(|error| error.to_string())
@@ -355,12 +507,24 @@ impl ProjectModuleDriver {
         }
         self.last_error = None;
         self.last_tick_error = None;
+        self.diagnostics = diagnostics;
+        // 让下一帧立刻重扫：编译期间改过的源码不能因为“刚好编完”被当成已编译。
+        self.last_scan = None;
         Ok(())
     }
 
-    fn fail(&mut self, error: String) {
+    fn fail(&mut self, error: String, diagnostics: Vec<Diagnostic>) {
+        let count = diagnostics.len();
+        self.diagnostics = diagnostics;
+        self.last_scan = None;
         self.last_error = Some(error.clone());
         self.push(LogLevel::Error, error);
+        if count > 0 {
+            self.push(
+                LogLevel::Warn,
+                format!("project module: {count} problem(s) — see the Problems panel"),
+            );
+        }
     }
 
     fn build_paths(&self) -> Option<(PathBuf, PathBuf)> {
@@ -482,7 +646,9 @@ fn build_module(manifest: &Path, target_dir: &Path) -> BuildOutcome {
         .arg(manifest)
         .args(["--no-default-features", "--features", "preview-module"])
         .arg("--target-dir")
-        .arg(target_dir);
+        .arg(target_dir)
+        // 结构化诊断：Problems 面板要 file:line:col，不是一段彩色 stderr。
+        .args(["--message-format", "json-render-diagnostics"]);
     if let Some(dir) = manifest.parent() {
         command.current_dir(dir);
     }
@@ -495,33 +661,123 @@ fn build_module(manifest: &Path, target_dir: &Path) -> BuildOutcome {
     let output = match command.output() {
         Ok(output) => output,
         Err(error) => {
-            return BuildOutcome::Failed(format!("project module: cannot spawn cargo: {error}"))
+            return BuildOutcome::Failed {
+                message: format!("project module: cannot spawn cargo: {error}"),
+                diagnostics: Vec::new(),
+            }
         }
     };
+    let root = manifest.parent().unwrap_or_else(|| Path::new("."));
+    let diagnostics = diagnostics_from_cargo(&String::from_utf8_lossy(&output.stdout), root);
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let details = if stderr.trim().is_empty() {
-            stdout
-        } else {
-            stderr
+        // 第一条 error 就是用户要修的东西；没有编译诊断（链接错误等）才退回 stderr。
+        let summary = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.level == LogLevel::Error)
+            .map(|diagnostic| match diagnostic.location() {
+                Some(location) => format!("{location}: {}", diagnostic.message),
+                None => diagnostic.message.clone(),
+            })
+            .unwrap_or_else(|| tail_lines(stderr.trim(), 12));
+        return BuildOutcome::Failed {
+            message: format!("project module compile failed: {summary}"),
+            diagnostics,
         };
-        return BuildOutcome::Failed(format!(
-            "project module compile failed:\n{}",
-            tail_lines(&details, 30)
-        ));
     }
 
     let package = package_name(manifest).unwrap_or_else(|| "game".to_string());
     let library = target_dir.join("debug").join(library_file_name(&package));
     if library.is_file() {
-        BuildOutcome::Built(library)
+        BuildOutcome::Built {
+            path: library,
+            diagnostics,
+        }
     } else {
-        BuildOutcome::Failed(format!(
-            "project module compile succeeded but `{}` is missing",
-            library.display()
-        ))
+        BuildOutcome::Failed {
+            message: format!(
+                "project module compile succeeded but `{}` is missing",
+                library.display()
+            ),
+            diagnostics,
+        }
     }
+}
+
+/// 解析 `cargo --message-format=json-render-diagnostics` 的 stdout。
+///
+/// 只收 error / warning：note / help / build-script 事件要么是附注，要么不是给用户看的。
+/// 路径统一成项目根下的绝对路径，Problems 面板点开时不用再拼一次。
+fn diagnostics_from_cargo(stdout: &str, root: &Path) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for line in stdout.lines() {
+        if diagnostics.len() >= MAX_DIAGNOSTICS {
+            break;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+            continue;
+        };
+        if value.get("reason").and_then(|reason| reason.as_str()) != Some("compiler-message") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        let level = match message.get("level").and_then(|level| level.as_str()) {
+            Some("error") => LogLevel::Error,
+            Some("warning") => LogLevel::Warn,
+            _ => continue,
+        };
+        let mut text = message
+            .get("message")
+            .and_then(|text| text.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if let Some(code) = message
+            .get("code")
+            .and_then(|code| code.get("code"))
+            .and_then(|code| code.as_str())
+        {
+            text = format!("{code}: {text}");
+        }
+        let span = message
+            .get("spans")
+            .and_then(|spans| spans.as_array())
+            .and_then(|spans| {
+                spans
+                    .iter()
+                    .find(|span| {
+                        span.get("is_primary").and_then(|primary| primary.as_bool()) == Some(true)
+                    })
+                    .or_else(|| spans.first())
+            });
+        let file = span
+            .and_then(|span| span.get("file_name"))
+            .and_then(|name| name.as_str())
+            .map(|name| {
+                let path = Path::new(name);
+                if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    root.join(path)
+                }
+            });
+        diagnostics.push(Diagnostic {
+            level,
+            message: text,
+            file,
+            line: span
+                .and_then(|span| span.get("line_start"))
+                .and_then(|line| line.as_u64())
+                .map(|line| line as usize),
+            column: span
+                .and_then(|span| span.get("column_start"))
+                .and_then(|column| column.as_u64())
+                .map(|column| column as usize),
+        });
+    }
+    diagnostics
 }
 
 /// 构建产物先复制成唯一名字：下一次 cargo 会覆盖原文件，而 Windows 上
@@ -781,13 +1037,13 @@ mod tests {
         let mut driver = ProjectModuleDriver::new(&repo.join("projects/prisma"));
         assert!(driver.available());
         driver
-            .install(Path::new(&module_path))
+            .install(Path::new(&module_path), Vec::new())
             .expect("prebuilt module should install");
         assert!(driver.status().loaded);
         let first = driver.staged.clone().expect("first staged copy");
 
         driver
-            .install(Path::new(&module_path))
+            .install(Path::new(&module_path), Vec::new())
             .expect("prebuilt module should reload");
         let second = driver.staged.clone().expect("second staged copy");
         assert_ne!(first, second, "each load gets a unique file name");
@@ -802,5 +1058,81 @@ mod tests {
         let driver = ProjectModuleDriver::new(&dir);
         assert!(!driver.available());
         assert!(!driver.status().loaded);
+        assert_eq!(driver.status().state, ModuleState::Unavailable);
+    }
+
+    /// cargo 的 JSON 诊断 → Problems 面板要的 file:line:col。
+    #[test]
+    fn cargo_diagnostics_carry_a_source_location() {
+        let stdout = concat!(
+            r#"{"reason":"compiler-message","message":{"level":"error","message":"mismatched types","code":{"code":"E0308"},"spans":[{"file_name":"src/game/world.rs","line_start":42,"column_start":9,"is_primary":true}]}}"#,
+            "\n",
+            r#"{"reason":"compiler-message","message":{"level":"note","message":"expected `f32`","spans":[]}}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":false}"#,
+            "\n",
+            "not json at all",
+        );
+        let diagnostics = diagnostics_from_cargo(stdout, Path::new("/project"));
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "notes and cargo events are not problems"
+        );
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.level, LogLevel::Error);
+        assert_eq!(diagnostic.message, "E0308: mismatched types");
+        assert_eq!(diagnostic.line, Some(42));
+        assert_eq!(diagnostic.column, Some(9));
+        assert!(
+            diagnostic
+                .file
+                .as_deref()
+                .is_some_and(|file| file.ends_with(Path::new("src/game/world.rs"))),
+            "relative span paths are resolved against the project root"
+        );
+    }
+
+    /// 编译成功时 warning 也要留下来：面板不能只有失败才有内容。
+    #[test]
+    fn warnings_survive_a_successful_build() {
+        let stdout = r#"{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `state`","code":null,"spans":[{"file_name":"/abs/src/lib.rs","line_start":7,"column_start":13,"is_primary":true}]}}"#;
+        let diagnostics = diagnostics_from_cargo(stdout, Path::new("/project"));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].level, LogLevel::Warn);
+        assert_eq!(
+            diagnostics[0].file.as_deref(),
+            Some(Path::new("/abs/src/lib.rs"))
+        );
+        assert_eq!(diagnostics[0].message, "unused variable: `state`");
+    }
+
+    /// 状态机：有改动未编 = Pending，出错 = Failed，成功 = Ready。
+    #[test]
+    fn module_state_reports_pending_and_failed() {
+        let dir = temp_dir("state");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"game\"\n\n[features]\npreview-module = []\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn create() {}\n").unwrap();
+        let mut driver = ProjectModuleDriver::new(&dir);
+        driver.scan_sources();
+        assert_eq!(driver.status().state, ModuleState::Pending);
+        assert!(driver.status().dirty);
+
+        // 失败也会记下编译时间戳：源码没再改就不该每 350 ms 重跑 cargo。
+        driver.compiled_stamp = driver.source_stamp();
+        driver.last_scan = None;
+        driver.scan_sources();
+        driver.fail("boom".to_string(), Vec::new());
+        assert_eq!(driver.status().state, ModuleState::Failed);
+        assert!(!driver.status().dirty);
+
+        // 改回源码（或用户手动重编）后，下一个编译周期重新开始。
+        driver.last_error = None;
+        assert_eq!(driver.status().state, ModuleState::Ready);
     }
 }

@@ -275,6 +275,7 @@ pub fn panel_title(tab: &str) -> &'static str {
         "history" => "History",
         "renderGraph" => "Render Graph",
         "build" => "Build Settings",
+        "problems" => "Problems",
         "tools" => "Offline Tools",
         "settings" => "Project Settings",
         "preferences" => "Preferences",
