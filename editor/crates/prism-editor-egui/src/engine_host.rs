@@ -215,6 +215,24 @@ impl EngineHost {
         &self.renderer
     }
 
+    /// 把当前渲染图导出成 `target/prism-render-graph.json`（分析面板读它）。
+    ///
+    /// 编辑器以前只会**读**这个文件，写端在 `prism-app` 里（游戏进程），所以面板
+    /// 永远是空的（#451）。现在视口自己写：图和设置都在手上，不需要环境变量。
+    pub fn write_render_graph_report(
+        &self,
+        path: &std::path::Path,
+        frame: u64,
+    ) -> anyhow::Result<()> {
+        let report = prism_render::render_graph_report::RenderGraphReport::from_snapshot(
+            &self.renderer.graph().snapshot(),
+            self.settings.to_report_settings(),
+            frame,
+        );
+        report.write_json(path)?;
+        Ok(())
+    }
+
     pub fn settings_mut(&mut self) -> &mut RenderSettings {
         &mut self.settings
     }

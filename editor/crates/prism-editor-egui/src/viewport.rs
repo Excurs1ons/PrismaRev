@@ -155,6 +155,8 @@ pub struct ViewportState {
     forwarded_keys: HashSet<KeyCode>,
     /// Game view 是否已经把左键当成按住转发（离开视口也能收到 release）。
     forwarded_left_down: bool,
+    /// 渲染图报告的输出路径（只有 Scene view 设；`None` = 不写）。
+    pub report_path: Option<std::path::PathBuf>,
 }
 
 pub struct ViewportResponse {
@@ -190,6 +192,7 @@ impl ViewportState {
             box_current: None,
             forwarded_keys: HashSet::new(),
             forwarded_left_down: false,
+            report_path: None,
         })
     }
 
@@ -324,6 +327,7 @@ impl ViewportState {
                 }
                 self.dirty = false;
                 self.error = None;
+                self.maybe_write_render_graph_report();
                 true
             }
             Ok(None) => false,
@@ -331,6 +335,22 @@ impl ViewportState {
                 self.error = Some(format!("{error:#}"));
                 false
             }
+        }
+    }
+
+    /// 首帧 + 每 `REFRESH_INTERVAL_FRAMES` 帧把渲染图写盘，分析面板据此画图。
+    ///
+    /// 节流与 `prism-app` 的报告写入器一致（Play 时视口会连续出帧）。
+    fn maybe_write_render_graph_report(&mut self) {
+        let Some(path) = self.report_path.clone() else {
+            return;
+        };
+        let interval = prism_render::render_graph_report::REFRESH_INTERVAL_FRAMES;
+        if self.frames != 1 && self.frames % interval != 0 {
+            return;
+        }
+        if let Err(error) = self.host.write_render_graph_report(&path, self.frames) {
+            self.error = Some(format!("渲染图报告写入失败: {error:#}"));
         }
     }
 
