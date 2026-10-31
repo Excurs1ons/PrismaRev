@@ -115,10 +115,10 @@ fn unloading_an_empty_world_is_a_no_op() {
     let mut world = World::new();
     let keep = SceneAssetId::generate();
 
-    assert_eq!(unload_other_scenes(&mut world, keep), 0);
+    assert_eq!(unload_scene_members(&mut world, Some(keep)), 0);
 
     let entity = spawn_scene_entity(&mut world, keep);
-    assert_eq!(unload_other_scenes(&mut world, keep), 0);
+    assert_eq!(unload_scene_members(&mut world, Some(keep)), 0);
     assert!(world.is_alive(entity));
 }
 
@@ -163,4 +163,145 @@ fn falls_back_to_the_legacy_toml_manifest() {
 fn garbage_manifest_is_reported_instead_of_silently_empty() {
     assert!(SceneManifest::parse("scenes = 3\n").is_err());
     assert!(SceneManifest::parse("{ not json").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// 场景卸载（#482）
+// ---------------------------------------------------------------------------
+
+/// `Persistent` 实体 + 它的整棵子树都活过一次换场。
+#[test]
+fn unloading_a_scene_keeps_persistent_subtrees() {
+    use crate::scene::components::{Child, Persistent};
+    use prism_scene::HierarchyHelper;
+
+    let mut world = World::new();
+    let mut manager = SceneManager::new();
+    let scene = SceneAssetId::generate();
+
+    let level_entity = spawn_scene_entity(&mut world, scene);
+    let persistent_root = spawn_scene_entity(&mut world, scene);
+    world.insert(persistent_root, Persistent);
+    let child = spawn_scene_entity(&mut world, scene);
+    let grandchild = spawn_scene_entity(&mut world, scene);
+    HierarchyHelper::reparent(&mut world, child, Some(persistent_root));
+    HierarchyHelper::reparent(&mut world, grandchild, Some(child));
+
+    // 场景里一个普通的中间节点，用来确认树结构没被整体保留。
+    assert!(world.get::<Child>(persistent_root).is_some());
+
+    let unloaded = manager.unload_scene(&mut world);
+
+    assert_eq!(unloaded, 1, "只有不在 Persistent 子树里的那个实体被删");
+    assert!(!world.is_alive(level_entity));
+    assert!(world.is_alive(persistent_root));
+    assert!(world.is_alive(child), "Persistent 的后代跟着一起留下");
+    assert!(world.is_alive(grandchild));
+    assert_eq!(manager.current_scene_name(), None);
+    assert!(manager.generation() >= 1, "卸载必须递增场景代数");
+}
+
+/// 卸载之后场景代数要变：项目模块靠它丢弃陈旧句柄。
+#[test]
+fn every_scene_switch_bumps_the_generation() {
+    let mut world = World::new();
+    let mut manager = SceneManager::new();
+    assert_eq!(manager.generation(), 0);
+
+    let first = SceneAssetId::generate();
+    let first_entities: Vec<Entity> = (0..2)
+        .map(|_| spawn_scene_entity(&mut world, first))
+        .collect();
+    manager.adopt_scene(
+        &mut world,
+        "first",
+        "scenes/first.rscn",
+        &instance(first, first_entities),
+    );
+    let after_first = manager.generation();
+    assert_eq!(after_first, 1);
+
+    let second = SceneAssetId::generate();
+    let second_entities: Vec<Entity> = (0..1)
+        .map(|_| spawn_scene_entity(&mut world, second))
+        .collect();
+    manager.adopt_scene(
+        &mut world,
+        "second",
+        "scenes/second.rscn",
+        &instance(second, second_entities),
+    );
+    assert_eq!(manager.generation(), after_first + 1);
+}
+
+/// 作者格式（`.scene.json`）的 `Single` 接管：旧场景被卸载而不是叠加。
+#[test]
+fn adopting_an_author_scene_switches_instead_of_stacking() {
+    let mut world = World::new();
+    let mut manager = SceneManager::new();
+    let old = SceneAssetId::generate();
+    let old_entities: Vec<Entity> = (0..3)
+        .map(|_| spawn_scene_entity(&mut world, old))
+        .collect();
+
+    let new = SceneAssetId::generate();
+    let new_entities: Vec<Entity> = (0..2)
+        .map(|_| spawn_scene_entity(&mut world, new))
+        .collect();
+
+    let unloaded =
+        manager.adopt_author_scene(&mut world, &instance(new, new_entities.clone()), false);
+
+    assert_eq!(unloaded, old_entities.len());
+    assert!(old_entities.iter().all(|entity| !world.is_alive(*entity)));
+    assert!(new_entities.iter().all(|entity| world.is_alive(*entity)));
+    assert_eq!(
+        manager.current_scene_name(),
+        None,
+        "作者格式没有 manifest 名字，不能留着上一个场景的名字"
+    );
+    assert_eq!(manager.generation(), 1);
+}
+
+/// `Additive`：两边都留着，代数不变（旧句柄仍然有效）。
+#[test]
+fn additive_loads_keep_both_scenes() {
+    let mut world = World::new();
+    let mut manager = SceneManager::new();
+    let first = SceneAssetId::generate();
+    let first_entities: Vec<Entity> = (0..2)
+        .map(|_| spawn_scene_entity(&mut world, first))
+        .collect();
+    let second = SceneAssetId::generate();
+    let second_entities: Vec<Entity> = (0..2)
+        .map(|_| spawn_scene_entity(&mut world, second))
+        .collect();
+
+    let unloaded =
+        manager.adopt_author_scene(&mut world, &instance(second, second_entities.clone()), true);
+
+    assert_eq!(unloaded, 0);
+    assert!(first_entities.iter().all(|entity| world.is_alive(*entity)));
+    assert!(second_entities.iter().all(|entity| world.is_alive(*entity)));
+    assert_eq!(manager.generation(), 0);
+}
+
+/// 父级属于旧场景被删、子级是 `Persistent`：子级留下，父级断链（只警告）。
+#[test]
+fn a_persistent_child_survives_a_dead_parent() {
+    use crate::scene::components::Persistent;
+    use prism_scene::HierarchyHelper;
+
+    let mut world = World::new();
+    let mut manager = SceneManager::new();
+    let scene = SceneAssetId::generate();
+    let parent = spawn_scene_entity(&mut world, scene);
+    let child = spawn_scene_entity(&mut world, scene);
+    world.insert(child, Persistent);
+    HierarchyHelper::reparent(&mut world, child, Some(parent));
+
+    manager.unload_scene(&mut world);
+
+    assert!(!world.is_alive(parent));
+    assert!(world.is_alive(child));
 }

@@ -35,6 +35,9 @@ pub struct SceneManager {
     /// 用于把作者相对路径解析成包内路径。
     current_scene_path: Option<String>,
     environment_bytes: Option<Vec<u8>>,
+    /// 场景代数：每次成功切换 / 卸载都递增。项目模块靠它判断缓存的实体句柄
+    /// 是否已经失效（`prism-project-api` 的 `scene_generation`）。
+    generation: u64,
 }
 
 /// 当前场景环境资源的中性读取接口。
@@ -185,12 +188,78 @@ impl SceneManager {
             current_scene_name: None,
             current_scene_path: None,
             environment_bytes: None,
+            generation: 0,
         }
     }
 
     /// 当前场景名；尚未从 manifest 加载任何场景时为 `None`。
     pub fn current_scene_name(&self) -> Option<&str> {
         self.current_scene_name.as_deref()
+    }
+
+    /// 场景代数（从 0 开始，每次切换 / 卸载 +1）。
+    ///
+    /// 宿主（编辑器 / 玩家）把它传给项目模块，模块据此丢弃缓存的实体句柄：
+    /// 换场景之后旧句柄指向的实体已经不存在了。
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// 递增代数并返回新值。
+    pub fn bump_generation(&mut self) -> u64 {
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.generation
+    }
+
+    /// 接管刚刚 spawn 完的**作者格式**场景（`Engine::load_scene_json_file`）。
+    ///
+    /// `additive = false`（`LoadSceneMode::Single`）：卸载旧场景实体、清空
+    /// current_scene / 环境缓存并递增代数 —— 再加载一次不会让实体翻倍。
+    /// `additive = true`：只加载不卸载，`Persistent` 与旧场景都留着。
+    ///
+    /// 必须在新场景 spawn **成功之后**调用：失败时保持旧场景不动。
+    pub fn adopt_author_scene(
+        &mut self,
+        world: &mut World,
+        inst: &SceneInstance,
+        additive: bool,
+    ) -> usize {
+        if additive {
+            log::info!(
+                "scene: additive load kept {} existing scene entity(ies)",
+                world.query::<super::components::SceneMember>().count()
+            );
+            return 0;
+        }
+        let unloaded = unload_scene_members(world, Some(inst.scene_id));
+        // 作者格式没有 manifest 名字：清掉上一次 manifest 场景的身份，
+        // 否则 `current_scene_name()` 会指向一个已经被卸掉的场景。
+        self.current_scene_name = None;
+        self.current_scene_path = None;
+        self.environment_bytes = None;
+        self.bump_generation();
+        unloaded
+    }
+
+    /// 卸载当前场景（`Persistent` 子树除外），返回被卸载的实体数。
+    ///
+    /// 与 [`Self::adopt_scene`] 的区别：这里不加载任何新场景，用于
+    /// 「回主菜单」「重开一局」这类只需要清场的场合。引擎自有实体
+    /// （没有 `SceneMember`，例如 `runtime_initialize` 的回退相机）不会被删。
+    pub fn unload_scene(&mut self, world: &mut World) -> usize {
+        let unloaded = unload_scene_members(world, None);
+        let had_scene = self.current_scene_name.is_some();
+        self.current_scene_name = None;
+        self.current_scene_path = None;
+        self.environment_bytes = None;
+        self.bump_generation();
+        if had_scene || unloaded > 0 {
+            log::info!(
+                "scene unloaded: {unloaded} entity(ies) removed (generation {})",
+                self.generation
+            );
+        }
+        unloaded
     }
 
     /// 注入当前场景的环境贴图字节。字节由运行时资源服务提供，场景系统
@@ -447,12 +516,13 @@ impl SceneManager {
         path: &str,
         inst: &SceneInstance,
     ) -> usize {
-        let unloaded = unload_other_scenes(world, inst.scene_id);
+        let unloaded = unload_scene_members(world, Some(inst.scene_id));
         self.current_scene_name = Some(name.to_owned());
         self.current_scene_path = Some(path.to_owned());
         // IBL 按场景解析：切换后不能继续复用上一个场景注入的字节，
         // 否则旧 HDR 会盖住新场景的天空盒。
         self.environment_bytes = None;
+        self.bump_generation();
         unloaded
     }
 }
@@ -665,16 +735,80 @@ fn load_scene_by_id(
 ///
 /// 归属由 [`SceneMember`](super::components::SceneMember) 判定：没有该组件的
 /// 实体（引擎自有实体、用户运行时 spawn 的对象）一律保留。
-fn unload_other_scenes(world: &mut World, keep: super::components::SceneAssetId) -> usize {
-    let stale: Vec<Entity> = world
+/// 卸载所有属于「非 `keep` 场景」的实体，返回卸载数量。
+///
+/// `keep = None` 表示卸载**全部**场景实体（`Engine::unload_scene`）。
+/// 以下两类实体永远保留：
+/// - 没有 `SceneMember` 的实体（引擎自有：回退相机、宿主注入的对象）；
+/// - 带 [`super::components::Persistent`] 的实体及其整棵子树（Unity 的
+///   `DontDestroyOnLoad`）。
+fn unload_scene_members(world: &mut World, keep: Option<super::components::SceneAssetId>) -> usize {
+    let candidates: Vec<Entity> = world
         .query::<super::components::SceneMember>()
-        .filter(|(_, member)| member.0 != keep)
+        .filter(|(_, member)| Some(member.0) != keep)
         .map(|(entity, _)| entity)
         .collect();
-    for entity in &stale {
-        world.despawn(*entity);
+    if candidates.is_empty() {
+        return 0;
     }
-    stale.len()
+
+    let keep_set = persistent_subtrees(world);
+    let mut unloaded = 0;
+    for entity in candidates {
+        if keep_set.contains(&entity) {
+            continue;
+        }
+        if world.is_alive(entity) {
+            world.despawn(entity);
+            unloaded += 1;
+        }
+    }
+    warn_dangling_parents(world);
+    unloaded
+}
+
+/// 带 `Persistent` 标记的实体及其全部后代（保留清单）。
+fn persistent_subtrees(world: &World) -> std::collections::HashSet<Entity> {
+    let mut keep = std::collections::HashSet::new();
+    let roots: Vec<Entity> = world
+        .query::<super::components::Persistent>()
+        .map(|(entity, _)| entity)
+        .collect();
+    if roots.is_empty() {
+        return keep;
+    }
+    let mut stack = roots;
+    while let Some(entity) = stack.pop() {
+        if !keep.insert(entity) {
+            continue;
+        }
+        if let Some(children) = world.get::<super::components::Child>(entity) {
+            stack.extend(children.0.iter().copied());
+        }
+    }
+    keep
+}
+
+/// 卸载后检查断掉的父子关系并提示一次。
+///
+/// 典型情况：父级属于旧场景被删掉，而子级带 `Persistent` 留了下来 ——
+/// 层级上它已经没有父节点了，继续按「有父级」处理会算错世界矩阵。
+/// 这里只警告，不替用户改结构。
+fn warn_dangling_parents(world: &World) {
+    let dangling: Vec<Entity> = world
+        .query::<super::components::Parent>()
+        .filter(|(entity, parent)| world.is_alive(*entity) && !world.is_alive(parent.0))
+        .map(|(entity, _)| entity)
+        .collect();
+    if dangling.is_empty() {
+        return;
+    }
+    log::warn!(
+        "{} entity(ies) kept across the scene switch have a dead parent; \
+         reparent them or clear the hierarchy (dangling: {:?})",
+        dangling.len(),
+        dangling
+    );
 }
 
 #[cfg(test)]
