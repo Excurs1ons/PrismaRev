@@ -50,8 +50,11 @@ fn first_available<T>(
 }
 
 /// 加载第一个可用的系统字体（fontdue 只接受单字体；ttc 走 collection_index）。
+///
+/// `PRISMREV_UI_FONT` 可以显式指定字体文件：Android / 精简系统上候选路径可能都不
+/// 存在，那时游戏要能自带一份字体，而不是默默丢掉所有文字。
 fn load_system_font() -> Option<Font> {
-    let (path, font) = first_available(FONT_CANDIDATES, |path, collection_index| {
+    let load = |path: &str, collection_index: u32| {
         let data = std::fs::read(path).ok()?;
         Font::from_bytes(
             data,
@@ -61,7 +64,24 @@ fn load_system_font() -> Option<Font> {
             },
         )
         .ok()
-    })?;
+    };
+
+    if let Some(path) = std::env::var_os("PRISMREV_UI_FONT") {
+        let path = path.to_string_lossy().into_owned();
+        match load(&path, 0) {
+            Some(font) => {
+                log::info!("ui overlay: loaded font {path} (PRISMREV_UI_FONT)");
+                return Some(font);
+            }
+            // 显式指定的字体用不了就照常找候选字体，但必须说清楚，否则
+            // 「字体没换」和「字体根本没加载」在日志里长得一样。
+            None => log::warn!(
+                "ui overlay: PRISMREV_UI_FONT={path} could not be loaded — falling back to system fonts"
+            ),
+        }
+    }
+
+    let (path, font) = first_available(FONT_CANDIDATES, load)?;
     log::info!("ui overlay: loaded font {path}");
     Some(font)
 }
@@ -72,7 +92,16 @@ pub(crate) struct FontdueRasterizer {
 
 impl FontdueRasterizer {
     pub(crate) fn new() -> Option<Self> {
-        let font = load_system_font()?;
+        let Some(font) = load_system_font() else {
+            // 后端为空 = 所有文本命令被丢弃（背景 quad 照常画）。这是「画面里
+            // 只有背景、一个字都没有」的唯一原因，必须每次启动都能在日志里看到。
+            log::warn!(
+                "ui overlay: no usable UI font (tried {} system candidates) — all text is dropped; \
+                 set PRISMREV_UI_FONT to a .ttf/.otf to ship one with the game",
+                FONT_CANDIDATES.len()
+            );
+            return None;
+        };
         Some(Self { font })
     }
 }
