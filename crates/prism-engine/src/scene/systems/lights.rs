@@ -64,10 +64,9 @@ pub struct LightSample {
 /// 组件级可见性。`World::query` 已排除通过 `World::set_active` 设为未激活的实体；
 /// 此函数处理检查器和场景加载器使用的场景 `Active` 组件。
 pub(crate) fn component_is_active(world: &World, entity: prism_ecs::Entity) -> bool {
-    world
-        .get::<Active>(entity)
-        .map(|active| active.0)
-        .unwrap_or(true)
+    // `Active` 只描述自身（Unity 的 `activeSelf`）；祖先关闭时整棵子树都不参与，
+    // 派生值由 `active_hierarchy_system` 每帧写入（#433）。
+    crate::scene::systems::hierarchy::is_active_in_hierarchy(world, entity)
 }
 
 /// 实体的世界位置与旋转：优先 `LocalToWorld`，其次 `LocalTransform`。

@@ -165,6 +165,21 @@ impl Default for Active {
     }
 }
 
+/// 派生：自身 [`Active`] 与所有祖先 `Active` 的与（Unity 的
+/// `activeInHierarchy`）。
+///
+/// 由 `prism_engine::scene::systems::hierarchy::active_hierarchy_system` 每帧重写，
+/// 与 [`LocalToWorld`] 同类的运行时派生数据：**不进 `.scene.json`、不进组件注册表**。
+/// 作者 / 检查器写的永远是 [`Active`]（Unity 的 `activeSelf`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveInHierarchy(pub bool);
+
+impl Default for ActiveInHierarchy {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Authoring-time helpers
 // ---------------------------------------------------------------------------

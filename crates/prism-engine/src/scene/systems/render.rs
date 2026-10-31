@@ -55,7 +55,7 @@ pub fn scene_render_system_into(world: &World, out: &mut Vec<DrawItem>) {
     out.extend(
         world
             .query2::<LocalToWorld, MeshRef>()
-            .filter(|(e, _, _)| world.get::<Active>(*e).map(|a| a.0).unwrap_or(true))
+            .filter(|(e, _, _)| crate::scene::systems::hierarchy::is_active_in_hierarchy(world, *e))
             .map(|(entity, wt, mr)| {
                 // `MeshRenderer.shadow_casting_mode` / `cull_mode`（
                 // `shadowCastingMode` / `CullMode`）。没有该组件的运行时实体按
@@ -148,7 +148,7 @@ fn sprite_entries(world: &World) -> Vec<(SortKey, prism_render::SpriteDrawItem)>
     world
         .query3::<LocalToWorld, SpriteRenderer, SpriteRef>()
         .filter(|(entity, _, sprite, sref)| {
-            let active = world.get::<Active>(*entity).map(|a| a.0).unwrap_or(true);
+            let active = crate::scene::systems::hierarchy::is_active_in_hierarchy(world, *entity);
             active && sprite.has_sprite() && sref.generation > 0
         })
         .map(|(entity, world_transform, sprite, sref)| {
@@ -188,7 +188,7 @@ fn sprite_entries(world: &World) -> Vec<(SortKey, prism_render::SpriteDrawItem)>
 fn line_entries(world: &World) -> Vec<(SortKey, prism_render::SpriteDrawItem)> {
     let mut out = Vec::new();
     for (entity, line) in world.query::<LineRenderer>() {
-        let active = world.get::<Active>(entity).map(|a| a.0).unwrap_or(true);
+        let active = crate::scene::systems::hierarchy::is_active_in_hierarchy(world, entity);
         if !active || !line.has_line() {
             continue;
         }
