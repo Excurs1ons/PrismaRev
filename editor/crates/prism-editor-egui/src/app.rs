@@ -3070,7 +3070,12 @@ impl EditorApp {
                 panels::problems(ui, &module, &self.build_diagnostics, &mut self.state);
             }
             "prefabOverrides" => panels::prefab_overrides(ui, &mut self.workspace, &mut self.state),
-            "tools" => panels::tools(ui, &mut self.state),
+            "tools" => {
+                panels::tools(ui, &mut self.workspace, &mut self.state);
+                if let Some(kind) = self.state.pending_build.take() {
+                    self.start_build(kind);
+                }
+            }
             "shortcuts" => panels::shortcuts(ui),
             "about" => panels::about(ui),
             other => {
