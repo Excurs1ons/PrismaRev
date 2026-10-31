@@ -13,6 +13,7 @@
 //! | `editor_ui` | UI 节点树快照 / 按节点点击 / 按节点设值（类似浏览器 MCP 的 DOM 操作） |
 //! | `editor_play` | Play / Stop / Pause（Play 会编译并加载工程模块） |
 //! | `editor_logs` | 读 Console 缓冲（含工程模块日志与 panic 调用栈） |
+//! | `editor_input` | 给 Play 注入键鼠（每帧一个事件），自动化才能真的玩游戏 |
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -45,6 +46,7 @@ impl EditorHost {
             "editor_ui" => ui(root, args),
             "editor_play" => play(root, args),
             "editor_logs" => logs(root, args),
+            "editor_input" => input(root, args),
             other => Err(format!("未知的编辑器工具 '{other}'")),
         }
     }
@@ -186,6 +188,19 @@ pub fn definitions() -> Vec<ToolDef> {
             }),
         },
         ToolDef {
+            name: "editor_input",
+            description: "给正在 Play 的 Game View 注入输入：key=space/w/a/s/d/... 或 mouse=left/right/middle，state=press|release；click=true 等价于左键按下+松开。事件按帧排队，按下/松开不会被同一帧吞掉。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "按键名：w/a/s/d/q/e/space/shift/ctrl/alt/escape/tab/enter/up/down/left/right/0-9" },
+                    "mouse": { "type": "string", "enum": ["left", "right", "middle"] },
+                    "state": { "type": "string", "enum": ["press", "release"], "default": "press" },
+                    "click": { "type": "boolean", "description": "左键点一下（按下 + 松开）" }
+                }
+            }),
+        },
+        ToolDef {
             name: "editor_quit",
             description: "让编辑器走正常退出路径（会落盘 state.json）。",
             input_schema: json!({ "type": "object", "properties": {} }),
@@ -211,6 +226,20 @@ fn logs(root: &Path, args: &Value) -> Result<String, String> {
     let reply = request(
         root,
         json!({ "cmd": "logs", "since": since, "limit": limit }),
+    )?;
+    Ok(reply.to_string())
+}
+
+fn input(root: &Path, args: &Value) -> Result<String, String> {
+    let reply = request(
+        root,
+        json!({
+            "cmd": "input",
+            "key": args.get("key").cloned().unwrap_or(Value::Null),
+            "mouse": args.get("mouse").cloned().unwrap_or(Value::Null),
+            "state": args.get("state").cloned().unwrap_or(Value::Null),
+            "click": args.get("click").cloned().unwrap_or(Value::Null),
+        }),
     )?;
     Ok(reply.to_string())
 }

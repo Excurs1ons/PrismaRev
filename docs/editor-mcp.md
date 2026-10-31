@@ -91,6 +91,7 @@ MCP 工具        → 读端口文件 → TCP 一行 JSON 请求 / 一行 JSON �
 | `editor_ui` | `action`(`snapshot`/`click`/`set`) `node?` `value?` | UI 节点树：快照 / 按节点点击 / 按节点设值 |
 | `editor_play` | `action`(`play`/`stop`/`pause`) | 控制 Play（Play 会触发工程模块编译 + 加载） |
 | `editor_logs` | `since?` `limit?` | 读 Console 缓冲：引擎日志 + 工程模块 `project:` 日志 + panic 调用栈 |
+| `editor_input` | `key?` `mouse?` `state?` `click?` | 给 Play 注入输入（每帧一个事件），`click=true` 点一下左键 |
 | `editor_quit` | — | 走正常退出路径（会写 `state.json`） |
 
 `editor_status` 里的 `project_module` 汇报 Game View 的用户项目模块：

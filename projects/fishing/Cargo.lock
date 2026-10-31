@@ -585,6 +585,7 @@ dependencies = [
  "glam",
  "log",
  "prism-app",
+ "prism-ecs",
  "prism-engine",
  "prism-game-api",
  "prism-project-api",

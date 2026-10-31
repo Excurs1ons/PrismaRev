@@ -218,9 +218,15 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
 
 控制通道（`src/control.rs`）：启动时在 `127.0.0.1:0` 上监听并把端口写进
 `<项目根>/target/editor-egui/control.port`，一行 JSON 一问一答：
-`ping` / `status` / `play` / `stop` / `pause` / `logs` / `capture` / `ui.snapshot` /
-`ui.click` / `ui.set` / `quit`。`logs` 读 Console 的同一份缓冲（`since` 增量、
-`limit` 条数），自动化因此能拿到引擎日志、工程模块的 `project:` 日志和 panic 栈。请求经 `mpsc` 排进 UI 线程，所以截图和
+`ping` / `status` / `play` / `stop` / `pause` / `logs` / `input` / `capture` /
+`ui.snapshot` / `ui.click` / `ui.set` / `quit`。`logs` 读 Console 的同一份缓冲（`since`
+增量、`limit` 条数），自动化因此能拿到引擎日志、工程模块的 `project:` 日志和 panic 栈。
+
+`input` 给 Play 注入键鼠（`key=space` / `mouse=left` / `click=true`，`state=press|release`）。
+事件**每帧只消费一个**：`just_pressed` 只在这一帧的 tick 里可见，下一帧就会被
+`InputManager::begin_frame` 清掉，一次塞两个等于没按。fishing 的完整一竿就是这么跑的：
+`click` → `cast` → `bobber landed` → 等到 `bite!` → 再 `click` → `hook set` →
+`landed fish #1`，全流程只用控制通道，不需要窗口焦点。请求经 `mpsc` 排进 UI 线程，所以截图和
 界面状态是同一帧的；启动前三帧内的 `capture` 会延后到画面合成后再抓（否则是白图）。
 
 ## 5. 数据层
