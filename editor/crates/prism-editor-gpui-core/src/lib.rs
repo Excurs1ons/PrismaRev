@@ -17,6 +17,7 @@
 
 pub mod assets;
 pub mod build;
+pub mod components;
 pub mod doc;
 pub mod dock;
 pub mod expr;
@@ -39,6 +40,7 @@ pub mod workspace;
 
 pub use assets::{AssetInfo, AssetKind, AssetQuery, AssetTree};
 pub use build::{copy_artifacts, plan_build, ArtifactCopy, BuildPlan, BuildStep};
+pub use components::ComponentMap;
 pub use doc::{EntityJson, SceneDoc, TransformJson};
 pub use dock::{
     DockDirection, DockEdge, DockLayout, DockNode, DockZone, FloatPanel, LAYOUT_PRESETS,

@@ -2495,6 +2495,41 @@ impl Workspace {
         });
     }
 
+    /// 在检查器里上下移动一个组件（#512）。
+    ///
+    /// 顺序是文档的一部分（会写进 `.scene.json` 的对象键序），所以这是**一次
+    /// 撤销步**；移动到头 / 到尾或组件不存在时什么都不做，也不污染撤销栈。
+    /// 返回是否真的移动过。
+    pub fn move_component_at(&mut self, index: usize, component_name: &str, delta: isize) -> bool {
+        if component_name == "Transform" || delta == 0 {
+            return false;
+        }
+        self.edit("调整组件顺序", |document| {
+            let Some(entity) = document.doc.entities.get_mut(index) else {
+                return false;
+            };
+            entity.components.move_by(component_name, delta)
+        })
+    }
+
+    /// [`Self::move_component_at`] 的主选中项包装。
+    pub fn move_component(&mut self, component_name: &str, delta: isize) -> bool {
+        let Some(index) = self.primary_selection() else {
+            return false;
+        };
+        self.move_component_at(index, component_name, delta)
+    }
+
+    /// 一个实体当前的组件顺序（检查器的显示顺序）。
+    pub fn component_order(&self, index: usize) -> Vec<String> {
+        self.document()
+            .doc
+            .entities
+            .get(index)
+            .map(|entity| entity.components.order())
+            .unwrap_or_default()
+    }
+
     pub fn copy_component(&mut self, component_name: &str) {
         let Some(index) = self.primary_selection() else {
             return;
@@ -5514,6 +5549,82 @@ mod tests {
             !workspace.document().doc.entities[1].has_component(path),
             "一次撤销就回退整批"
         );
+    }
+
+    /// `fixture()` 的 0 号实体只有一个组件；插入两个哑组件才好测顺序。
+    fn with_extra_components(workspace: &mut Workspace) {
+        for name in ["zz_extra", "mm_extra"] {
+            workspace.document_mut().doc.entities[0]
+                .components
+                .insert(name.to_string(), serde_json::json!({ "value": 0 }));
+        }
+    }
+
+    /// #512：检查器顺序 = 文档顺序，可以上下移动，一次撤销回退。
+    #[test]
+    fn components_can_be_reordered_and_the_move_is_one_undo_step() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        with_extra_components(&mut workspace);
+        let entity = 0;
+        let before = workspace.component_order(entity);
+        let camera = "prism_engine::scene::Camera";
+        let position = before
+            .iter()
+            .position(|name| name == camera)
+            .expect("fixture 的 0 号实体带 Camera");
+        assert!(position + 1 < before.len(), "需要下面还有组件才谈得上上移");
+
+        let undo_before = workspace.undo_history().len();
+        assert!(workspace.move_component_at(entity, camera, 1));
+        let mut expected = before.clone();
+        expected.swap(position, position + 1);
+        assert_eq!(workspace.component_order(entity), expected);
+        assert_eq!(
+            workspace.undo_history().len(),
+            undo_before + 1,
+            "移动组件只产生一个撤销步"
+        );
+
+        workspace.undo();
+        assert_eq!(workspace.component_order(entity), before, "撤销恢复原顺序");
+    }
+
+    #[test]
+    fn moving_a_component_past_the_edges_is_a_no_op() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        with_extra_components(&mut workspace);
+        let entity = 0;
+        let order = workspace.component_order(entity);
+        let first = order.first().cloned().expect("至少一个组件");
+        let last = order.last().cloned().expect("至少一个组件");
+        let undo_before = workspace.undo_history().len();
+
+        assert!(!workspace.move_component_at(entity, &first, -1));
+        assert!(!workspace.move_component_at(entity, &last, 1));
+        assert!(!workspace.move_component_at(entity, "not-a-component", 1));
+        assert!(!workspace.move_component_at(entity, "Transform", 1));
+
+        assert_eq!(workspace.component_order(entity), order);
+        assert_eq!(
+            workspace.undo_history().len(),
+            undo_before,
+            "没有移动就不该产生撤销步"
+        );
+    }
+
+    #[test]
+    fn the_inspector_order_survives_a_save_and_reload() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        with_extra_components(&mut workspace);
+        let entity = 0;
+        let order = workspace.component_order(entity);
+        let last = order.last().cloned().expect("至少一个组件");
+        assert!(workspace.move_component_at(entity, &last, -1));
+
+        let saved = serde_json::to_string(&workspace.document().doc).unwrap();
+        let reloaded: crate::doc::SceneDoc = serde_json::from_str(&saved).unwrap();
+        let reloaded_order: Vec<String> = reloaded.entities[entity].components.order();
+        assert_eq!(reloaded_order, workspace.component_order(entity));
     }
 
     #[test]

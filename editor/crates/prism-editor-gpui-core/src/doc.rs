@@ -4,8 +4,9 @@
 //! camelCase；`parent` 指向实体的稳定 `id`（v3 起不再用数组下标），因此层级
 //! 重排、删除、预制体实例化都不会让父子关系漂移。
 
+use crate::components::ComponentMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 /// 预制体实例链接组件名（编辑器元数据，引擎运行时不查询）。
@@ -50,8 +51,9 @@ pub struct EntityJson {
     pub parent: Option<u32>,
     #[serde(default)]
     pub transform: TransformJson,
+    /// 组件表，顺序 = 检查器里的显示顺序 = 作者添加 / 排布的顺序（#512）。
     #[serde(default)]
-    pub components: Map<String, Value>,
+    pub components: ComponentMap,
 }
 
 impl Default for EntityJson {
@@ -61,7 +63,7 @@ impl Default for EntityJson {
             name: None,
             parent: None,
             transform: TransformJson::default(),
-            components: Map::new(),
+            components: ComponentMap::new(),
         }
     }
 }
@@ -471,10 +473,15 @@ impl SceneDoc {
         let Some(entity) = self.entities.get_mut(index) else {
             return;
         };
-        let entry = entity
-            .components
-            .entry("prism_engine::scene::Active".to_string())
-            .or_insert_with(|| serde_json::json!({ "value": true }));
+        const ACTIVE: &str = "prism_engine::scene::Active";
+        if !entity.components.contains_key(ACTIVE) {
+            entity
+                .components
+                .insert(ACTIVE.to_string(), serde_json::json!({ "value": true }));
+        }
+        let Some(entry) = entity.components.get_mut(ACTIVE) else {
+            return;
+        };
         if let Value::Object(map) = entry {
             map.insert("value".to_string(), Value::Bool(active));
         }
@@ -674,7 +681,7 @@ impl SceneDoc {
     pub fn reference_values(&self) -> Vec<(usize, String, String)> {
         let mut out = Vec::new();
         for (index, entity) in self.entities.iter().enumerate() {
-            for (component, value) in &entity.components {
+            for (component, value) in entity.components.iter() {
                 collect_reference_values(value, "", component, &mut |field, text| {
                     out.push((index, format!("{component}.{field}"), text.to_string()));
                 });
@@ -686,7 +693,7 @@ impl SceneDoc {
     pub fn field_references(&self, path: &str) -> Vec<(usize, String, String)> {
         let mut out = Vec::new();
         for (index, entity) in self.entities.iter().enumerate() {
-            for (component, value) in &entity.components {
+            for (component, value) in entity.components.iter() {
                 collect_references(value, path, &mut |field, value| {
                     out.push((index, format!("{component}.{field}"), value.to_string()));
                 });

@@ -20,6 +20,9 @@ pub struct AssetDrag {
 pub enum CardAction {
     Copy(String),
     Remove(String),
+    /// 在检查器顺序里上移 / 下移一个组件（#512）。
+    MoveUp(String),
+    MoveDown(String),
 }
 
 /// 一个组件卡片：标题栏 + 字段列表 + 复制/删除按钮。
@@ -52,6 +55,21 @@ pub fn component_card_with_assets(
                         .clicked()
                     {
                         actions.push(CardAction::Remove(component.name.clone()));
+                    }
+                    // 组件顺序是文档的一部分（#512）：这两个箭头走一次撤销步。
+                    if ui
+                        .small_button(icons::CARET_DOWN)
+                        .on_hover_text("Move Down")
+                        .clicked()
+                    {
+                        actions.push(CardAction::MoveDown(component.name.clone()));
+                    }
+                    if ui
+                        .small_button(icons::CARET_UP)
+                        .on_hover_text("Move Up")
+                        .clicked()
+                    {
+                        actions.push(CardAction::MoveUp(component.name.clone()));
                     }
                     if ui
                         .small_button(icons::COPY)
