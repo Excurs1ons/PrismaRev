@@ -414,12 +414,29 @@ pub struct Workspace {
     pub project_files: Vec<ProjectFile>,
     /// `assets/scenes.json` 的场景清单（顺序 = 构建 / 启动顺序）。
     pub scene_manifest: SceneManifest,
+    /// 进入 Play 时的编辑态快照；`None` = 不在播放/没有快照（#500）。
+    play_snapshot: Option<PlaySnapshot>,
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self::sample()
     }
+}
+
+/// 进入 Play 时的编辑态快照（#500）。
+///
+/// 播放期间的编辑现在仍然直接写作者文档（运行时副本是后续条目），所以退出播放必须把
+/// 文档、撤销栈、脏标记和选中一起放回去；否则试验性改动会跟着下一次保存落到磁盘，
+/// 撤销栈里也会混进运行期的步骤。
+#[derive(Debug, Clone)]
+struct PlaySnapshot {
+    /// 播放开始时的活动文档下标。播放中用户可能切到别的文档，恢复时必须回到这一份。
+    doc: usize,
+    scene: SceneDoc,
+    undo: crate::undo::UndoStack,
+    dirty: bool,
+    selection: Vec<usize>,
 }
 
 /// 实例相对源预制体的一个字段差异（Unity 的 Prefab Override）。
@@ -486,6 +503,7 @@ impl Workspace {
             project_root: None,
             project_files: Vec::new(),
             scene_manifest: SceneManifest::default(),
+            play_snapshot: None,
         };
         workspace.log(
             LogSource::Editor,
@@ -3389,6 +3407,11 @@ impl Workspace {
     }
 
     pub fn play(&mut self) {
+        if self.playing {
+            return;
+        }
+        // 进入播放前先留住编辑态：Stop 要原样还回去（#500）。
+        self.play_snapshot = Some(self.take_play_snapshot());
         self.playing = true;
         self.paused = false;
         self.play_time_s = 0.0;
@@ -3396,10 +3419,54 @@ impl Workspace {
     }
 
     pub fn stop(&mut self) {
+        let restored = self.play_snapshot.take().map(|snapshot| {
+            self.restore_play_snapshot(snapshot);
+        });
         self.playing = false;
         self.paused = false;
         self.play_time_s = 0.0;
-        self.log(LogSource::Editor, LogLevel::Info, "停止 Play");
+        if restored.is_some() {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Info,
+                "停止 Play：已丢弃播放期间的编辑，恢复进入前的文档",
+            );
+        } else {
+            self.log(LogSource::Editor, LogLevel::Info, "停止 Play");
+        }
+    }
+
+    /// 播放期间的编辑是否会在 Stop 时被丢弃（UI 用它提示）。
+    pub fn has_play_snapshot(&self) -> bool {
+        self.play_snapshot.is_some()
+    }
+
+    fn take_play_snapshot(&self) -> PlaySnapshot {
+        let document = &self.docs[self.active];
+        PlaySnapshot {
+            doc: self.active,
+            scene: document.doc.clone(),
+            undo: document.undo.clone(),
+            dirty: document.dirty,
+            selection: self.selection.clone(),
+        }
+    }
+
+    /// 把文档 / 撤销栈 / 脏标记 / 选中还原成进入 Play 前的样子。
+    ///
+    /// 只碰快照记录的那份文档：播放中切到别的文档时，别的文档保持原样。
+    fn restore_play_snapshot(&mut self, snapshot: PlaySnapshot) {
+        let Some(document) = self.docs.get_mut(snapshot.doc) else {
+            return;
+        };
+        document.doc = snapshot.scene;
+        document.undo = snapshot.undo;
+        document.dirty = snapshot.dirty;
+        self.active = snapshot.doc;
+        let entity_count = document.doc.entities.len();
+        let mut selection = snapshot.selection;
+        selection.retain(|index| *index < entity_count);
+        self.selection = selection;
     }
 
     pub fn pause(&mut self) {
@@ -5360,6 +5427,73 @@ mod tests {
         workspace.stop();
         assert!(!workspace.playing);
         assert_eq!(workspace.play_time_s, 0.0);
+    }
+
+    /// #500：进入 Play 前的文档、撤销栈、脏标记和选中都要在 Stop 时原样回来。
+    #[test]
+    fn stopping_play_discards_the_edits_made_while_playing() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let index = 1; // fixture 里第二个实体：Cube
+        workspace.selection = vec![index];
+        let id = workspace.document().doc.entities[index]
+            .id
+            .expect("fixture 实体都有稳定 id");
+        let before = workspace.document().doc.entities[index].transform;
+        let entities_before = workspace.document().doc.entities.len();
+        let selection_before = workspace.selection.clone();
+
+        workspace.play();
+        assert!(workspace.has_play_snapshot());
+        // 播放期间的两类编辑：改 Transform + 删实体，都直接写作者文档。
+        workspace.set_transform_axis(id, "position", 0, 99.0);
+        workspace.selection = vec![index];
+        workspace.delete_selection();
+        assert!(workspace.document().doc.entities.len() < entities_before);
+        assert!(workspace.document().dirty);
+
+        workspace.stop();
+        assert!(!workspace.playing);
+        assert!(!workspace.has_play_snapshot());
+        assert_eq!(workspace.document().doc.entities.len(), entities_before);
+        let restored = &workspace.document().doc.entities[index];
+        assert_eq!(
+            restored.transform, before,
+            "Transform 要回到进入 Play 前的值"
+        );
+        assert!(!workspace.document().dirty, "运行期编辑不能把文档标脏");
+        assert_eq!(workspace.selection, selection_before);
+        assert!(!workspace.can_undo(), "撤销栈不能混进运行期的步骤");
+    }
+
+    /// 播放中切到别的文档再 Stop：快照只盖回被播放的那一份，别的文档不受影响。
+    #[test]
+    fn stopping_play_only_restores_the_document_that_was_playing() {
+        let mut workspace = Workspace::sample();
+        let mut other = SceneDoc::default();
+        other.add_named_child(None, "Other");
+        workspace.docs.push(Document::new(
+            DocKind::Scene,
+            Some("other.scene.json".into()),
+            other.clone(),
+        ));
+        let playing_index = workspace.active_index();
+
+        workspace.play();
+        workspace.set_active(1);
+        workspace.docs[1]
+            .doc
+            .add_named_child(None, "Added while other doc is active");
+
+        workspace.stop();
+        assert_eq!(
+            workspace.active_index(),
+            playing_index,
+            "Stop 要回到被播放的文档"
+        );
+        assert_eq!(
+            workspace.docs[1].doc.entities.len(),
+            other.entities.len() + 1
+        );
     }
 
     struct TempProject {
