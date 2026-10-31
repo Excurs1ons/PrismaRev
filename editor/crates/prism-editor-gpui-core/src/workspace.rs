@@ -943,6 +943,12 @@ impl Workspace {
             io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法新建目录")
         })?;
         let relative = relative.trim_end_matches('/');
+        if let Some(problem) = project::asset_path_problem(relative) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("目录路径不合法：{problem}"),
+            ));
+        }
         if !relative.starts_with("assets/") || relative == "assets" {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1246,7 +1252,10 @@ impl Workspace {
         let kind = self.document().kind;
         let path = project::normalize_save_path(kind, input);
         if path.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "路径为空"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "路径不合法（不能为空、不能包含 .. 或绝对路径）",
+            ));
         }
         if !path.starts_with("assets/") {
             return Err(io::Error::new(
@@ -5230,6 +5239,35 @@ mod tests {
         assert_eq!(workspace.docs[index].path.as_deref(), Some(path.as_str()));
         assert!(!workspace.docs[index].dirty);
         assert!(project.root.join(&path).exists());
+    }
+
+    /// #459：Save As 不写后缀也要落到 `assets/scenes/<name>.scene.json`，
+    /// 并且 `..` 不能再跑出 `assets/`。
+    #[test]
+    fn save_as_completes_the_suffix_and_rejects_traversal() {
+        let project = TempProject::new("saveas");
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        let saved = workspace.save_active_as("level2").unwrap();
+        assert_eq!(saved, "assets/scenes/level2.scene.json");
+        assert!(project.root.join(&saved).exists());
+        assert!(workspace
+            .project_files
+            .iter()
+            .any(|file| file.path == saved));
+
+        let saved = workspace
+            .save_active_as("assets/scenes/nested/level3.json")
+            .unwrap();
+        assert_eq!(saved, "assets/scenes/nested/level3.scene.json");
+        assert!(project.root.join(&saved).exists());
+
+        assert!(workspace.save_active_as("../evil").is_err());
+        assert!(workspace.save_active_as("assets/../evil").is_err());
+        assert!(workspace.save_active_as("/tmp/evil").is_err());
+        assert!(!project.root.join("assets/evil.scene.json").exists());
+        assert!(workspace.create_asset_folder("assets/../evil").is_err());
     }
 
     #[test]

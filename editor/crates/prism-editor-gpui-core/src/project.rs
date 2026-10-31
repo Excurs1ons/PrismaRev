@@ -384,16 +384,62 @@ pub fn unique_save_path(root: &Path, kind: DocKind, title: &str, taken: &[String
 }
 
 /// 规范化用户输入的保存路径（允许只写名字、允许反斜杠）。
+/// 相对路径（相对项目根，`assets/...` 形式）是否合法？
+///
+/// 只做字符串前缀检查是不够的：`assets/scenes/../evil.scene.json` 能通过
+/// `starts_with("assets/")`，`root.join()` 之后却写到了 `assets/` 外面；
+/// `../../x` 更是直接跑出项目根。这里按 `Path::components` 判定。
+pub fn asset_path_problem(path: &str) -> Option<&'static str> {
+    use std::path::Component;
+    if path.is_empty() {
+        return Some("路径为空");
+    }
+    // Windows 上 `assets/C:/x` 的 `C:` 只是一个普通组件，单独挡一下。
+    if path.contains(':') {
+        return Some("路径不能包含 `:`");
+    }
+    for component in std::path::Path::new(path).components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => return Some("路径不能包含 `..`"),
+            Component::RootDir | Component::Prefix(_) => return Some("路径不能是绝对路径"),
+        }
+    }
+    None
+}
+
+/// 把文件名归一到 `kind.suffix()`。
+///
+/// `level2` / `level2.scene` / `level2.json` / `level2.scene.json` 都得到
+/// `level2.scene.json`。`Save As` 对话框的默认值也走这里，于是存不出一个
+/// 没有后缀、文档面板和 Build Settings 都不认的文件（#459）。
+pub fn ensure_document_suffix(kind: DocKind, name: &str) -> String {
+    let suffix = kind.suffix();
+    if name.ends_with(suffix) {
+        return name.to_string();
+    }
+    // 半截写法：去掉尾部的 `.json` 和 `.scene` / `.prefab` 再补全。
+    let short = suffix.trim_end_matches(".json");
+    let mut stem = name.strip_suffix(".json").unwrap_or(name);
+    stem = stem.strip_suffix(short).unwrap_or(stem);
+    format!("{stem}{suffix}")
+}
+
 pub fn normalize_save_path(kind: DocKind, input: &str) -> String {
     let trimmed = input.trim().replace('\\', "/");
     let trimmed = trimmed.trim_start_matches("./");
     if trimmed.is_empty() {
         return String::new();
     }
-    if !trimmed.starts_with("assets/") {
-        return format!("{}/{trimmed}", kind.folder());
+    if asset_path_problem(&trimmed).is_some() {
+        return String::new();
     }
-    trimmed.to_string()
+    let with_folder = if trimmed.starts_with("assets/") {
+        trimmed.to_string()
+    } else {
+        format!("{}/{trimmed}", kind.folder())
+    };
+    ensure_document_suffix(kind, &with_folder)
 }
 
 #[cfg(test)]
@@ -619,6 +665,33 @@ mod tests {
             "assets/prefabs/x.prefab.json"
         );
         assert_eq!(normalize_save_path(DocKind::Scene, "   "), "");
+        // #459：没写后缀（或只写半截）也要补全。
+        assert_eq!(
+            normalize_save_path(DocKind::Scene, "level2"),
+            "assets/scenes/level2.scene.json"
+        );
+        assert_eq!(
+            normalize_save_path(DocKind::Scene, "level2.scene"),
+            "assets/scenes/level2.scene.json"
+        );
+        assert_eq!(
+            normalize_save_path(DocKind::Scene, "level2.json"),
+            "assets/scenes/level2.scene.json"
+        );
+        assert_eq!(
+            normalize_save_path(DocKind::Scene, "assets/scenes/level2"),
+            "assets/scenes/level2.scene.json"
+        );
+        assert_eq!(
+            normalize_save_path(DocKind::Prefab, "box"),
+            "assets/prefabs/box.prefab.json"
+        );
+        // 路径穿越与绝对路径一律拒绝。
+        assert_eq!(normalize_save_path(DocKind::Scene, "../evil"), "");
+        assert_eq!(normalize_save_path(DocKind::Scene, "../../evil"), "");
+        assert_eq!(normalize_save_path(DocKind::Scene, "assets/../evil"), "");
+        assert_eq!(normalize_save_path(DocKind::Scene, "/tmp/evil"), "");
+        assert_eq!(normalize_save_path(DocKind::Scene, "C:/evil"), "");
         assert_eq!(
             normalize_save_path(DocKind::Scene, "assets\\scenes\\win.scene.json"),
             "assets/scenes/win.scene.json"
