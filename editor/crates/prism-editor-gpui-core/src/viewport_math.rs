@@ -1006,6 +1006,58 @@ mod tests {
     }
 
     #[test]
+    fn scaled_boxes_report_world_space_distance() {
+        // 回归 #403：旧 Tauri 实现把 slab 参数又除以一次 |M⁻¹·dir|，
+        // 导致返回距离跟实体缩放成正比（scale 4 时距离翻 4 倍）。
+        let origin = [0.0f32, 0.0, 5.0];
+        let direction = [0.0f32, 0.0, -1.0];
+        for scale in [1.0f32, 2.0, 4.0] {
+            let entity = TransformJson {
+                position: [0.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [scale; 3],
+            };
+            let distance = ray_obb(origin, direction, &entity).expect("center ray must hit");
+            let expected = 5.0 - 0.5 * scale;
+            assert!(
+                (distance - expected).abs() < 1e-4,
+                "scale {scale}: distance {distance} != {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn pick_prefers_a_near_scaled_box_over_a_far_unit_box() {
+        // 同一个屏幕点上重叠两个盒子：近处的大盒子（scale 4，前表面 z = 2）
+        // 必须压过远处的小盒子（scale 1，前表面 z = -9.5）。
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        let entities = vec![
+            (
+                0,
+                TransformJson {
+                    position: [0.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [4.0, 4.0, 4.0],
+                },
+            ),
+            (
+                1,
+                TransformJson {
+                    position: [0.0, 0.0, -10.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0, 1.0, 1.0],
+                },
+            ),
+        ];
+        assert_eq!(
+            pick_entity((400.0, 300.0), &frame, 800.0, 600.0, &entities),
+            Some(0),
+            "近处缩放实体应该赢，而不是被放大后的距离挤到后面"
+        );
+    }
+
+    #[test]
     fn point_segment_distance_is_clamped() {
         assert!((distance_point_segment((0.0, 5.0), (0.0, 0.0), (10.0, 0.0)) - 5.0).abs() < 1e-4);
         assert!((distance_point_segment((-5.0, 0.0), (0.0, 0.0), (10.0, 0.0)) - 5.0).abs() < 1e-4);
