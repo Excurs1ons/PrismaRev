@@ -405,6 +405,73 @@ impl SceneDoc {
         Ok(moved)
     }
 
+    /// 把一组实体（含各自的子树）插到 `target` 的前/后，保持组内相对顺序（#525）。
+    ///
+    /// 与 [`SceneDoc::reparent_many`] 的区别：那个只改父级、不改兄弟顺序；层级拖拽的
+    /// 「插入到上一行 / 下一行」需要真正的顺序变化。组内每个根改挂到目标的父级，
+    /// 子树内部的父子关系不变。
+    pub fn reparent_many_at(
+        &mut self,
+        roots: &[usize],
+        target: usize,
+        before: bool,
+    ) -> Result<usize, &'static str> {
+        let mut roots: Vec<usize> = roots.to_vec();
+        roots.sort_unstable();
+        roots.dedup();
+        roots.retain(|index| *index < self.entities.len());
+        if roots.is_empty() {
+            return Ok(0);
+        }
+        if target >= self.entities.len() {
+            return Err("目标实体不存在");
+        }
+        if roots.contains(&target) {
+            return Err("不能把实体拖到它自己身上");
+        }
+        for root in &roots {
+            if self.descendants(*root).contains(&target) {
+                return Err("不能把实体拖到自己的子级里");
+            }
+        }
+
+        // 搬的是整棵子树：根 + 后代，保持数组顺序（父级先于子级）。
+        let mut moving: Vec<usize> = Vec::new();
+        for root in &roots {
+            moving.push(*root);
+            moving.extend(self.descendants(*root));
+        }
+        moving.sort_unstable();
+        moving.dedup();
+        let is_root: Vec<bool> = moving.iter().map(|index| roots.contains(index)).collect();
+
+        // 目标被搬走后会前移的格数 = 它前面有多少个被搬走的实体。
+        let shift = moving.iter().filter(|index| **index < target).count();
+        let mut insert_at = target - shift;
+        if !before {
+            insert_at += 1;
+        }
+        let parent_id = self.entities.get(target).and_then(|entity| entity.parent);
+
+        let mut pulled: Vec<(EntityJson, bool)> = Vec::with_capacity(moving.len());
+        for (position, index) in moving.iter().enumerate().rev() {
+            let entity = self.entities.remove(*index);
+            pulled.push((entity, is_root[position]));
+        }
+        pulled.reverse();
+        for (entity, is_root) in pulled.iter_mut() {
+            if *is_root {
+                entity.parent = parent_id;
+            }
+        }
+
+        let tail = self.entities.split_off(insert_at.min(self.entities.len()));
+        self.entities
+            .extend(pulled.into_iter().map(|(entity, _)| entity));
+        self.entities.extend(tail);
+        Ok(roots.len())
+    }
+
     pub fn move_entity(&mut self, from: usize, to: usize) -> Result<usize, &'static str> {
         if from >= self.entities.len() {
             return Err("实体不存在");
