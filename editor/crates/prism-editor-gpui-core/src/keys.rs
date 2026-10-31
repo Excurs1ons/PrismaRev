@@ -312,7 +312,7 @@ pub const SHORTCUTS: &[ShortcutEntry] = &[
     },
     ShortcutEntry {
         command: Command::Step,
-        keys: "Ctrl+Shift+N",
+        keys: "Ctrl+Alt+P",
     },
     ShortcutEntry {
         command: Command::ToggleLog,
@@ -329,6 +329,43 @@ pub const SHORTCUTS: &[ShortcutEntry] = &[
     ShortcutEntry {
         command: Command::ResetSceneCamera,
         keys: "Ctrl+0",
+    },
+    // 面板切换（引擎的 Ctrl+1..5）。
+    ShortcutEntry {
+        command: Command::ToggleSceneView,
+        keys: "Ctrl+1",
+    },
+    ShortcutEntry {
+        command: Command::ToggleGameView,
+        keys: "Ctrl+2",
+    },
+    ShortcutEntry {
+        command: Command::ToggleInspector,
+        keys: "Ctrl+3",
+    },
+    ShortcutEntry {
+        command: Command::ToggleHierarchy,
+        keys: "Ctrl+4",
+    },
+    ShortcutEntry {
+        command: Command::ToggleAssets,
+        keys: "Ctrl+5",
+    },
+];
+
+/// 同一张表里的**额外**绑定：面板只展示 [`SHORTCUTS`] 里的那一条，但这些组合键
+/// 同样会触发命令（#516）。
+///
+/// 放这里的都是「用户肌肉记忆里的第二条路」：`Ctrl+Y` 是 Windows 习惯的重做，
+/// `Ctrl+Shift+C` 是 Console 在早期版本里的键位。
+pub const SHORTCUT_ALIASES: &[ShortcutEntry] = &[
+    ShortcutEntry {
+        command: Command::Redo,
+        keys: "Ctrl+Y",
+    },
+    ShortcutEntry {
+        command: Command::ToggleLog,
+        keys: "Ctrl+Shift+C",
     },
 ];
 
