@@ -125,6 +125,7 @@ fn tab_title(tab: &str) -> &str {
         "theme" => "Theme",
         "build" => "Build",
         "problems" => "Problems",
+        "prefabOverrides" => "Prefab Overrides",
         "tools" => "Tools",
         "shortcuts" => "Shortcuts",
         "about" => "About",
@@ -2073,6 +2074,10 @@ impl EditorApp {
                         self.workspace.show_panel("problems");
                         ui.close();
                     }
+                    if ui.button("Prefab Overrides").clicked() {
+                        self.workspace.show_panel("prefabOverrides");
+                        ui.close();
+                    }
                 });
                 ui.separator();
                 self.menu_do(ui, "Capture Window", |app| app.capture_window_now());
@@ -2787,6 +2792,7 @@ impl EditorApp {
                     .unwrap_or_default();
                 panels::problems(ui, &module, &self.build_diagnostics, &mut self.state);
             }
+            "prefabOverrides" => panels::prefab_overrides(ui, &mut self.workspace, &mut self.state),
             "tools" => panels::tools(ui, &mut self.state),
             "shortcuts" => panels::shortcuts(ui),
             "about" => panels::about(ui),

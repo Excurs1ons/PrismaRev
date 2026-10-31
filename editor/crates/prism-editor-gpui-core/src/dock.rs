@@ -614,6 +614,7 @@ pub const UTILITY_TABS: &[&str] = &[
     "preferences",
     "build",
     "problems",
+    "prefabOverrides",
     "tools",
     "shortcuts",
     "about",

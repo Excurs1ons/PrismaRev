@@ -364,6 +364,19 @@ impl Default for Workspace {
     }
 }
 
+/// 实例相对源预制体的一个字段差异（Unity 的 Prefab Override）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrefabOverride {
+    /// 实例里的实体下标（不是 id）。
+    pub entity: usize,
+    pub entity_name: String,
+    /// `"transform"` 或组件名。
+    pub component: String,
+    pub field: String,
+    pub instance_value: Value,
+    pub prefab_value: Value,
+}
+
 impl Workspace {
     /// 一个自包含的最小工作区（没有 fixture 时也能启动）。
     pub fn sample() -> Self {
@@ -3153,6 +3166,361 @@ impl Workspace {
     pub fn prefab_component_name() -> &'static str {
         PREFAB_LINK_COMPONENT
     }
+
+    /// 实例（含子级）与源预制体的逐字段差异。
+    ///
+    /// 惰性计算：不往 `.scene.json` 里存快照，打开场景时按 `PrefabInstance`
+    /// 指向的文件实时比对，所以文档格式零改动。
+    ///
+    /// 实体配对靠 id 平移（`instantiate_prefab` 用 `base + 原 id` 复制整棵子树），
+    /// 不依赖数组顺序：用户在实例里增删兄弟节点不会让后面的实体全部错位。
+    pub fn prefab_overrides(&self, root_index: usize) -> io::Result<Vec<PrefabOverride>> {
+        let doc = &self.document().doc;
+        let root = doc
+            .entities
+            .get(root_index)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "实体不存在"))?;
+        let root_id = root
+            .id
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "实例根没有 id"))?;
+        let prefab = self.prefab_document_for(root_id)?;
+        let Some(prefab_root_id) = prefab.entities.first().and_then(|entity| entity.id) else {
+            return Ok(Vec::new());
+        };
+        let base = root_id as i64 - prefab_root_id as i64;
+
+        let mut out = Vec::new();
+        for (index, source) in prefab.entities.iter().enumerate() {
+            let Some(source_id) = source.id else { continue };
+            let instance_id = (source_id as i64 + base).try_into().unwrap_or(u32::MAX);
+            let Some(instance_index) = doc.index_of_id(instance_id) else {
+                continue;
+            };
+            let instance = &doc.entities[instance_index];
+            out.extend(overrides_between(instance, instance_index, source, index));
+        }
+        Ok(out)
+    }
+
+    /// 回滚一个 override：把源预制体的值写回实例（一个撤销步）。
+    pub fn revert_prefab_override(&mut self, target: &PrefabOverride) -> bool {
+        let Some(id) = self.document().doc.id_of_index(target.entity) else {
+            return false;
+        };
+        let mut changed = false;
+        self.edit("回滚预制体重写", |document| {
+            let Some(index) = document.doc.index_of_id(id) else {
+                return;
+            };
+            let entity = &mut document.doc.entities[index];
+            if target.component == "transform" {
+                let value = &target.prefab_value;
+                match target.field.as_str() {
+                    "position" | "scale" => {
+                        if let Some(array) = json_vec3(value) {
+                            if target.field == "position" {
+                                entity.transform.position = array;
+                            } else {
+                                entity.transform.scale = array;
+                            }
+                            changed = true;
+                        }
+                    }
+                    "rotation" => {
+                        if let Some(array) = json_quat(value) {
+                            entity.transform.rotation = array;
+                            changed = true;
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let Some(component) = entity.components.get_mut(&target.component) {
+                set_json_field(component, &target.field, target.prefab_value.clone());
+                changed = true;
+            }
+        });
+        changed
+    }
+
+    /// 把一个 override 应用到源预制体（写回文件或已打开的预制体文档）。
+    pub fn apply_prefab_override(
+        &mut self,
+        root_index: usize,
+        target: &PrefabOverride,
+    ) -> io::Result<()> {
+        let root_id = self
+            .document()
+            .doc
+            .entities
+            .get(root_index)
+            .and_then(|entity| entity.id)
+            .and_then(|id| {
+                self.document()
+                    .doc
+                    .entities
+                    .iter()
+                    .find(|e| e.id == Some(id))
+            })
+            .and_then(|entity| entity.prefab_link())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "不是预制体实例"))?
+            .to_string();
+
+        // 实例实体 → 预制体实体：同样按 id 平移配对。
+        let prefab = self.prefab_document_for(root_id_of(self, root_index)?)?;
+        let Some(prefab_root_id) = prefab.entities.first().and_then(|entity| entity.id) else {
+            return Ok(());
+        };
+        let base = root_id_of(self, root_index)? as i64 - prefab_root_id as i64;
+        let instance_id = self
+            .document()
+            .doc
+            .id_of_index(target.entity)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "实体没有 id"))?;
+        let prefab_id = (instance_id as i64 - base) as u32;
+
+        let mut updated = prefab.clone();
+        let index = updated
+            .index_of_id(prefab_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "预制体里找不到对应实体"))?;
+        let entity = &mut updated.entities[index];
+        if target.component == "transform" {
+            match target.field.as_str() {
+                "position" => {
+                    if let Some(array) = json_vec3(&target.instance_value) {
+                        entity.transform.position = array;
+                    }
+                }
+                "scale" => {
+                    if let Some(array) = json_vec3(&target.instance_value) {
+                        entity.transform.scale = array;
+                    }
+                }
+                "rotation" => {
+                    if let Some(array) = json_quat(&target.instance_value) {
+                        entity.transform.rotation = array;
+                    }
+                }
+                _ => {}
+            }
+        } else if let Some(component) = entity.components.get_mut(&target.component) {
+            set_json_field(component, &target.field, target.instance_value.clone());
+        }
+
+        // 预制体正开着时同步内存文档：干净就直接落盘（用户点 Apply 就是要写文件），
+        // 有未保存改动就留在内存里，让用户自己决定保存时机。
+        let open_clean = self
+            .docs
+            .iter()
+            .find(|document| document.path.as_deref() == Some(root_id.as_str()))
+            .map(|document| !document.dirty);
+        if let Some(document) = self
+            .docs
+            .iter_mut()
+            .find(|document| document.path.as_deref() == Some(root_id.as_str()))
+        {
+            document.doc = updated.clone();
+            document.dirty = true;
+        }
+        if open_clean == Some(false) {
+            return Ok(());
+        }
+        let root = self
+            .project_root
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "没有项目根"))?;
+        project::write_document(&root, &root_id, &updated)?;
+        Ok(())
+    }
+
+    /// 完全解包：移除实例（以及子树里嵌套实例）的预制体链接，保留场景内容。
+    ///
+    /// 返回被移除的链接数量，整体算一个撤销步。
+    pub fn unpack_prefab(&mut self, root_index: usize) -> usize {
+        let doc = &self.document().doc;
+        let mut subtree = doc.descendants(root_index);
+        subtree.push(root_index);
+        let linked: Vec<usize> = subtree
+            .into_iter()
+            .filter(|index| {
+                doc.entities
+                    .get(*index)
+                    .map(|entity| entity.has_component(PREFAB_LINK_COMPONENT))
+                    .unwrap_or(false)
+            })
+            .collect();
+        if linked.is_empty() {
+            return 0;
+        }
+        self.edit("解包预制体", |document| {
+            for index in &linked {
+                document.doc.remove_component(*index, PREFAB_LINK_COMPONENT);
+            }
+        });
+        linked.len()
+    }
+}
+
+/// 选中实体的 id（没有 id 直接报错：场景文档在 `normalize` 之后一定都有）。
+fn root_id_of(workspace: &Workspace, index: usize) -> io::Result<u32> {
+    workspace
+        .document()
+        .doc
+        .id_of_index(index)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "实体没有 id"))
+}
+
+fn json_vec3(value: &Value) -> Option<[f32; 3]> {
+    let items = value.as_array()?;
+    if items.len() != 3 {
+        return None;
+    }
+    Some([
+        items[0].as_f64()? as f32,
+        items[1].as_f64()? as f32,
+        items[2].as_f64()? as f32,
+    ])
+}
+
+fn json_quat(value: &Value) -> Option<[f32; 4]> {
+    let items = value.as_array()?;
+    if items.len() != 4 {
+        return None;
+    }
+    Some([
+        items[0].as_f64()? as f32,
+        items[1].as_f64()? as f32,
+        items[2].as_f64()? as f32,
+        items[3].as_f64()? as f32,
+    ])
+}
+
+fn set_json_field(component: &mut Value, field: &str, value: Value) {
+    if let Some(map) = component.as_object_mut() {
+        if value.is_null() {
+            map.remove(field);
+        } else {
+            map.insert(field.to_string(), value);
+        }
+    }
+}
+
+/// 浮点比较：JSON 往返和欧拉角编辑会带来 1e-6 级噪声，差 1e-4 以内算相同。
+fn values_close(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => {
+            let (a, b) = (a.as_f64().unwrap_or(0.0), b.as_f64().unwrap_or(0.0));
+            (a - b).abs() <= 1e-4 * a.abs().max(b.abs()).max(1.0)
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| values_close(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, value)| b.get(key).is_some_and(|other| values_close(value, other)))
+        }
+        _ => a == b,
+    }
+}
+
+/// 两个实体之间的字段差异（`transform` 的三个字段 + 每个组件的每个字段）。
+fn overrides_between(
+    instance: &EntityJson,
+    instance_index: usize,
+    source: &EntityJson,
+    _source_index: usize,
+) -> Vec<PrefabOverride> {
+    let mut out = Vec::new();
+    let name = instance.display_name();
+    for (field, left, right) in [
+        (
+            "position",
+            serde_json::json!(instance.transform.position),
+            serde_json::json!(source.transform.position),
+        ),
+        (
+            "rotation",
+            serde_json::json!(instance.transform.rotation),
+            serde_json::json!(source.transform.rotation),
+        ),
+        (
+            "scale",
+            serde_json::json!(instance.transform.scale),
+            serde_json::json!(source.transform.scale),
+        ),
+    ] {
+        if !values_close(&left, &right) {
+            out.push(PrefabOverride {
+                entity: instance_index,
+                entity_name: name.clone(),
+                component: "transform".to_string(),
+                field: field.to_string(),
+                instance_value: left,
+                prefab_value: right,
+            });
+        }
+    }
+
+    let mut components: Vec<&String> = instance
+        .components
+        .keys()
+        .chain(source.components.keys())
+        .filter(|name| name.as_str() != PREFAB_LINK_COMPONENT)
+        .collect();
+    components.sort();
+    components.dedup();
+    for component in components {
+        let left = instance.components.get(component);
+        let right = source.components.get(component);
+        let mut fields: Vec<String> = left
+            .and_then(|value| value.as_object())
+            .map(|map| map.keys().cloned().collect())
+            .unwrap_or_default();
+        if let Some(map) = right.and_then(|value| value.as_object()) {
+            fields.extend(map.keys().cloned());
+        }
+        fields.sort();
+        fields.dedup();
+        if fields.is_empty() {
+            // 数组 / 标量组件：整个值比一次。
+            let (left, right) = (
+                left.cloned().unwrap_or(Value::Null),
+                right.cloned().unwrap_or(Value::Null),
+            );
+            if !values_close(&left, &right) {
+                out.push(PrefabOverride {
+                    entity: instance_index,
+                    entity_name: name.clone(),
+                    component: component.clone(),
+                    field: String::new(),
+                    instance_value: left,
+                    prefab_value: right,
+                });
+            }
+            continue;
+        }
+        for field in fields {
+            let left = left
+                .and_then(|value| value.get(&field))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let right = right
+                .and_then(|value| value.get(&field))
+                .cloned()
+                .unwrap_or(Value::Null);
+            if !values_close(&left, &right) {
+                out.push(PrefabOverride {
+                    entity: instance_index,
+                    entity_name: name.clone(),
+                    component: component.clone(),
+                    field,
+                    instance_value: left,
+                    prefab_value: right,
+                });
+            }
+        }
+    }
+    out
 }
 
 fn hydrate_doc(schema: &Schema, doc: &mut SceneDoc) {
@@ -4750,6 +5118,150 @@ mod tests {
         assert!(workspace
             .rename_asset("assets/textures/b.png", "outside.png")
             .is_err());
+    }
+
+    /// 建一个「预制体在磁盘上 + 场景里实例化一份」的工程。
+    fn prefab_project(name: &str) -> (TempProject, Workspace) {
+        let project = TempProject::new(name);
+        std::fs::create_dir_all(project.root.join("assets/prefabs")).unwrap();
+        std::fs::write(
+            project.root.join("assets/prefabs/box.prefab.json"),
+            r#"{"version":3,"entities":[
+                {"id":1,"name":"Box","parent":null,
+                 "transform":{"position":[5,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+                 "components":{"prism_engine::scene::Camera":{"fov_y_degrees":33.0}}},
+                {"id":2,"name":"Child","parent":1,
+                 "transform":{"position":[0,1,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+                 "components":{}}
+            ]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        workspace
+            .instantiate_prefab_asset("assets/prefabs/box.prefab.json", None)
+            .unwrap();
+        (project, workspace)
+    }
+
+    #[test]
+    fn prefab_overrides_report_only_changed_fields() {
+        let (_project, mut workspace) = prefab_project("overrides");
+        let root = workspace.selection[0];
+        assert!(
+            workspace.prefab_overrides(root).unwrap().is_empty(),
+            "刚实例化时应该没有 override"
+        );
+
+        workspace.document_mut().doc.entities[root]
+            .transform
+            .position = [1.0, 2.0, 3.0];
+        workspace.document_mut().doc.entities[root].components["prism_engine::scene::Camera"]
+            ["fov_y_degrees"] = serde_json::json!(60.0);
+
+        let list = workspace.prefab_overrides(root).unwrap();
+        let fields: Vec<String> = list
+            .iter()
+            .map(|entry| format!("{}.{}", entry.component, entry.field))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                "transform.position".to_string(),
+                "prism_engine::scene::Camera.fov_y_degrees".to_string()
+            ]
+        );
+        assert_eq!(list[0].instance_value, serde_json::json!([1.0, 2.0, 3.0]));
+        assert_eq!(list[0].prefab_value, serde_json::json!([5.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn prefab_overrides_survive_a_sibling_inserted_into_the_instance() {
+        let (_project, mut workspace) = prefab_project("overrides-insert");
+        let root = workspace.selection[0];
+        // 在实例子树里插一个新实体（id 不在「base + 预制体 id」的集合里），
+        // 后面的实体不能因此错位。
+        let child = workspace.document().doc.children(root)[0];
+        workspace
+            .document_mut()
+            .doc
+            .add_named_child(Some(child), "Extra");
+        workspace.document_mut().doc.entities[child]
+            .transform
+            .position = [0.0, 9.0, 0.0];
+
+        let list = workspace.prefab_overrides(root).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].field, "position");
+        assert_eq!(list[0].instance_value, serde_json::json!([0.0, 9.0, 0.0]));
+    }
+
+    #[test]
+    fn reverting_a_prefab_override_restores_the_prefab_value() {
+        let (_project, mut workspace) = prefab_project("overrides-revert");
+        let root = workspace.selection[0];
+        workspace.document_mut().doc.entities[root]
+            .transform
+            .position = [1.0, 2.0, 3.0];
+        let entry = workspace.prefab_overrides(root).unwrap().remove(0);
+
+        assert!(workspace.revert_prefab_override(&entry));
+        assert_eq!(
+            workspace.document().doc.entities[root].transform.position,
+            [5.0, 0.0, 0.0]
+        );
+        assert!(workspace.prefab_overrides(root).unwrap().is_empty());
+        workspace.undo();
+        assert_eq!(
+            workspace.undo_history().first().map(|entry| entry.as_str()),
+            Some("实例化预制体"),
+            "回滚是一个独立的撤销步（撤销一次就回到实例化那一步之前）"
+        );
+        assert_eq!(
+            workspace.document().doc.entities[root].transform.position,
+            [1.0, 2.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn applying_a_prefab_override_writes_the_prefab_file() {
+        let (project, mut workspace) = prefab_project("overrides-apply");
+        let root = workspace.selection[0];
+        workspace.document_mut().doc.entities[root]
+            .transform
+            .position = [1.0, 2.0, 3.0];
+        let entry = workspace.prefab_overrides(root).unwrap().remove(0);
+
+        workspace.apply_prefab_override(root, &entry).unwrap();
+        let prefab =
+            crate::project::read_document(&project.root, "assets/prefabs/box.prefab.json").unwrap();
+        assert_eq!(prefab.entities[0].transform.position, [1.0, 2.0, 3.0]);
+        assert!(
+            workspace.prefab_overrides(root).unwrap().is_empty(),
+            "写回之后实例和源一致"
+        );
+    }
+
+    #[test]
+    fn unpack_prefab_drops_every_link_in_the_subtree_in_one_step() {
+        let (_project, mut workspace) = prefab_project("unpack");
+        let root = workspace.selection[0];
+        let before = workspace.document().doc.entities.len();
+        assert_eq!(workspace.unpack_prefab(root), 1);
+        assert!(workspace.document().doc.entities[root]
+            .prefab_link()
+            .is_none());
+        assert_eq!(workspace.document().doc.entities.len(), before);
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[root].prefab_link(),
+            Some("assets/prefabs/box.prefab.json")
+        );
     }
 
     #[test]

@@ -3108,3 +3108,150 @@ mod asset_browser_tests {
         assert_eq!(rename_target("assets/boat.png", "a:b.png"), None);
     }
 }
+
+// ---------------------------------------------------------------------------
+// 预制体重写
+// ---------------------------------------------------------------------------
+
+/// 预制体实例相对源预制体改了哪些字段（Unity 的 Prefab Overrides 窗口）。
+///
+/// 数据来自 `Workspace::prefab_overrides`：按 `PrefabInstance` 指向的文件实时
+/// 比对，文档里不存快照，所以打开场景时不需要迁移格式。
+pub fn prefab_overrides(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(root) = workspace.primary_selection() else {
+        ui.label(
+            RichText::new("select a prefab instance root in the hierarchy")
+                .weak()
+                .size(11.0),
+        );
+        return;
+    };
+    let linked = workspace
+        .document()
+        .doc
+        .entities
+        .get(root)
+        .and_then(|entity| entity.prefab_link())
+        .map(|path| path.to_string());
+    let Some(prefab_path) = linked else {
+        ui.label(
+            RichText::new("the selected entity is not a prefab instance")
+                .weak()
+                .size(11.0),
+        );
+        return;
+    };
+
+    let overrides = match workspace.prefab_overrides(root) {
+        Ok(list) => list,
+        Err(error) => {
+            ui.label(RichText::new(format!("cannot read {prefab_path}: {error}")).weak());
+            return;
+        }
+    };
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{prefab_path}")).size(11.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .small_button("Unpack")
+                .on_hover_text("Remove the prefab link, keep the objects")
+                .clicked()
+            {
+                let removed = workspace.unpack_prefab(root);
+                state.status = format!("unpacked ({removed} link(s) removed)");
+            }
+        });
+    });
+    ui.separator();
+
+    if overrides.is_empty() {
+        ui.label(RichText::new("no overrides").weak().size(11.0));
+        return;
+    }
+    ui.label(
+        RichText::new(format!("{} override(s)", overrides.len()))
+            .size(11.0)
+            .weak(),
+    );
+
+    let mut revert: Option<prism_editor_core::workspace::PrefabOverride> = None;
+    let mut apply: Option<prism_editor_core::workspace::PrefabOverride> = None;
+    egui::ScrollArea::vertical()
+        .id_salt("prefab-overrides")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for entry in &overrides {
+                ui.horizontal(|ui| {
+                    let field = if entry.field.is_empty() {
+                        entry.component.clone()
+                    } else {
+                        format!("{}.{}", entry.component, entry.field)
+                    };
+                    let label = format!("{} · {field}", entry.entity_name);
+                    ui.label(RichText::new(label).size(11.0))
+                        .on_hover_text(format!(
+                            "instance: {}\nprefab: {}",
+                            preview_value(&entry.instance_value),
+                            preview_value(&entry.prefab_value)
+                        ));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("Apply")
+                            .on_hover_text("Write to the prefab")
+                            .clicked()
+                        {
+                            apply = Some(entry.clone());
+                        }
+                        if ui
+                            .small_button("Revert")
+                            .on_hover_text("Copy the prefab value back")
+                            .clicked()
+                        {
+                            revert = Some(entry.clone());
+                        }
+                    });
+                });
+            }
+        });
+
+    if let Some(entry) = revert {
+        if workspace.revert_prefab_override(&entry) {
+            state.status = format!(
+                "reverted {} · {}",
+                entry.entity_name,
+                if entry.field.is_empty() {
+                    entry.component.clone()
+                } else {
+                    format!("{}.{}", entry.component, entry.field)
+                }
+            );
+        }
+    }
+    if let Some(entry) = apply {
+        match workspace.apply_prefab_override(root, &entry) {
+            Ok(()) => {
+                state.status = format!(
+                    "applied {} · {}",
+                    entry.entity_name,
+                    if entry.field.is_empty() {
+                        entry.component.clone()
+                    } else {
+                        format!("{}.{}", entry.component, entry.field)
+                    }
+                );
+            }
+            Err(error) => state.status = format!("apply failed: {error}"),
+        }
+    }
+}
+
+/// 覆盖值的一行预览（太长就截断，完整值在 hover 里）。
+fn preview_value(value: &serde_json::Value) -> String {
+    let text = value.to_string();
+    if text.chars().count() <= 80 {
+        text
+    } else {
+        format!("{}…", text.chars().take(79).collect::<String>())
+    }
+}
