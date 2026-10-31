@@ -661,6 +661,9 @@ impl ViewportState {
             if workspace.show_selection_outline {
                 self.draw_selection_outline(&painter, rect, workspace, &frame);
             }
+            // sprite 的真实矩形（#643）：AABB 描边对 2D 物体太大，这里按
+            // `frame_size / pixels_per_unit` 与轴心画出真正会被绘制的那块。
+            self.draw_sprite_rects(&painter, rect, workspace, &frame);
             // 引擎的 SceneView Gizmos：相机画视锥、光源画图标（点选图标 = 选中对象）。
             icon_hits = self.draw_component_icons(&painter, rect, workspace, &frame);
             self.draw_gizmo(&painter, rect, workspace, &frame);
@@ -1098,6 +1101,89 @@ impl ViewportState {
                     ],
                     stroke,
                 );
+            }
+        }
+    }
+
+    /// 选中 sprite 的矩形 gizmo（#643）。
+    ///
+    /// 只画选中项本身：sprite 的「盒子」就是它会被绘制的那块区域，
+    /// 用 `frame_size / pixels_per_unit` 当世界尺寸、`pivot` 当轴心，
+    /// 再乘实体自身的旋转 / 缩放。轴心额外点一个小实心方块，便于对齐。
+    fn draw_sprite_rects(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        workspace: &Workspace,
+        frame: &vm::CameraFrame,
+    ) {
+        use egui::Color32;
+
+        const SPRITE: &str = "prism_engine::scene::SpriteRenderer";
+
+        if workspace.selection.is_empty() {
+            return;
+        }
+        let width = rect.width();
+        let height = rect.height();
+        let stroke = egui::Stroke::new(1.4_f32, Color32::from_rgb(90, 200, 255));
+        let pivot_color = Color32::from_rgb(90, 200, 255);
+
+        for (index, transform) in proxies(workspace) {
+            if !workspace.selection.contains(&index) {
+                continue;
+            }
+            let doc = &workspace.document().doc;
+            let Some(entity) = doc.entities.get(index) else {
+                continue;
+            };
+            let Some(sprite) = entity.component(SPRITE) else {
+                continue;
+            };
+            let number = |field: &str| sprite.get(field).and_then(|value| value.as_f64());
+            let axis = |field: &str, axis: usize| {
+                sprite
+                    .get(field)
+                    .and_then(|value| value.as_array())
+                    .and_then(|values| values.get(axis))
+                    .and_then(|value| value.as_f64())
+            };
+            let ppu = number("pixels_per_unit").unwrap_or(100.0).max(0.0001);
+            let frame_w = axis("frame_size", 0).unwrap_or(0.0);
+            let frame_h = axis("frame_size", 1).unwrap_or(0.0);
+            if frame_w <= 0.0 || frame_h <= 0.0 {
+                continue;
+            }
+            let size = [(frame_w / ppu) as f32, (frame_h / ppu) as f32];
+            let pivot = [
+                axis("pivot", 0).unwrap_or(0.5) as f32,
+                axis("pivot", 1).unwrap_or(0.5) as f32,
+            ];
+            let Some(edges) =
+                vm::projected_rect_edges(&transform, size, pivot, frame, width, height)
+            else {
+                continue;
+            };
+            for (a, b) in edges {
+                painter.line_segment(
+                    [
+                        rect.min + egui::vec2(a.0, a.1),
+                        rect.min + egui::vec2(b.0, b.1),
+                    ],
+                    stroke,
+                );
+                // 角点小方块：2D 里比 3D 的线框更容易看清边界。
+                painter.rect_filled(
+                    egui::Rect::from_center_size(
+                        rect.min + egui::vec2(a.0, a.1),
+                        egui::vec2(5.0, 5.0),
+                    ),
+                    0.0,
+                    stroke.color,
+                );
+            }
+            if let Some((x, y, _)) = vm::project(transform.position, frame, width, height) {
+                painter.circle_filled(rect.min + egui::vec2(x, y), 3.0, pivot_color);
             }
         }
     }
