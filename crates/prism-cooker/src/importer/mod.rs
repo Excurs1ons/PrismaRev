@@ -496,8 +496,12 @@ impl Importer for TextureImporter {
 /// Intermediate 网格 格式 magic: "RMXI" 资源 网格 Intermediate)
 const MESH_INTERMEDIATE_MAGIC: &[u8; 4] = b"RMXI";
 
-/// Imports .gltf / .glb files by extracting the 第一个 网格 primitive's
-/// positions, normals, 纹理 coordinates, and triangle indices.
+/// Imports .gltf / .glb files: **整棵场景树**里的所有三角形 primitive 都被烘成一个
+/// 世界空间的网格资产（节点 TRS 已经乘进顶点，法线用逆转置矩阵变换）。
+///
+/// 一个 primitive 缺法线 / UV 时整份网格就不带该属性（不拿零值冒充）；
+/// 非索引 primitive 会补一条顺序索引。材质/图片暂时不落成资产（见 #520 的后续步骤），
+/// 所以整个网格仍然使用 `MeshRenderer.material_path` 上的那一个材质。
 ///
 /// Intermediate 格式
 /// ```text
@@ -557,55 +561,270 @@ impl GltfImporter {
     }
 
     #[allow(clippy::type_complexity)]
-    fn read_gltf(
-        path: &Path,
-    ) -> Result<
-        (
-            Vec<[f32; 3]>,
-            Option<Vec<[f32; 3]>>,
-            Option<Vec<[f32; 2]>>,
-            Vec<u32>,
-        ),
-        ImportError,
-    > {
+    fn read_gltf(path: &Path) -> Result<GltfMesh, ImportError> {
         let (document, buffers, _images) = gltf::import(path)
             .map_err(|e| ImportError::ImportFailed(format!("glTF parse failed: {e}")))?;
 
-        // Take the 第一个 网格 第一个 primitive.
-        let mesh = document
-            .meshes()
-            .next()
-            .ok_or_else(|| ImportError::ImportFailed("No meshes found in glTF".into()))?;
-        let primitive = mesh
-            .primitives()
-            .next()
-            .ok_or_else(|| ImportError::ImportFailed("No primitives found in glTF mesh".into()))?;
+        let mut mesh = GltfMesh {
+            material_count: document.materials().count(),
+            has_skins: document.skins().next().is_some(),
+            ..Default::default()
+        };
 
-        let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+        // 场景图：节点层级里的 TRS 直接烘进顶点，这样「一个网格资产」就是整棵树
+        // 在世界空间里的样子（不再只取第一个 mesh 的第一个 primitive，#520）。
+        let mut roots: Vec<gltf::Node> = Vec::new();
+        match document
+            .default_scene()
+            .or_else(|| document.scenes().next())
+        {
+            Some(scene) => roots.extend(scene.nodes()),
+            None => {
+                // 没有 scene：把所有「没有父节点」的节点当根。
+                let mut children = std::collections::HashSet::new();
+                for node in document.nodes() {
+                    for child in node.children() {
+                        children.insert(child.index());
+                    }
+                }
+                roots.extend(
+                    document
+                        .nodes()
+                        .filter(|node| !children.contains(&node.index())),
+                );
+            }
+        }
 
-        // Positions (required).
-        let positions: Vec<[f32; 3]> = reader
-            .read_positions()
-            .ok_or_else(|| ImportError::ImportFailed("glTF primitive has no positions".into()))?
-            .collect();
+        let parent = IDENTITY;
+        for node in &roots {
+            collect_node(node, &parent, &buffers, &mut mesh);
+        }
 
-        // Normals (optional).
-        let normals = reader.read_normals().map(|iter| iter.collect::<Vec<_>>());
+        // 没有节点但文件里有网格：退回到「所有网格、单位变换」，别让合法文件白读。
+        if mesh.primitive_count == 0 && !roots.is_empty() {
+            return Err(ImportError::ImportFailed(
+                "glTF has nodes but no triangle primitives".into(),
+            ));
+        }
+        if mesh.primitive_count == 0 {
+            for gltf_mesh in document.meshes() {
+                for primitive in gltf_mesh.primitives() {
+                    push_primitive(&primitive, &IDENTITY, &buffers, &mut mesh);
+                }
+            }
+        }
+        if mesh.primitive_count == 0 {
+            return Err(ImportError::ImportFailed(
+                "No triangle primitives found in glTF".into(),
+            ));
+        }
 
-        // TexCoords (optional, 通道 0).
-        let texcoords = reader
-            .read_tex_coords(0)
-            .map(|tc| tc.into_f32().collect::<Vec<_>>());
-
-        // Indices (required for triangle meshes).
-        let indices: Vec<u32> = reader
-            .read_indices()
-            .ok_or_else(|| ImportError::ImportFailed("glTF primitive has no indices".into()))?
-            .into_u32()
-            .collect();
-
-        Ok((positions, normals, texcoords, indices))
+        Ok(mesh)
     }
+}
+
+/// 累积结果：整棵场景树烘焙成一个世界空间的三角形网格。
+#[derive(Debug)]
+struct GltfMesh {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uv0: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+    /// 只要有一个 primitive 缺法线，整份网格就不带法线（交给 #515 的占位切线/法线流程）。
+    all_normals: bool,
+    all_uv0: bool,
+    primitive_count: usize,
+    node_count: usize,
+    material_count: usize,
+    has_skins: bool,
+}
+
+impl Default for GltfMesh {
+    fn default() -> Self {
+        Self {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            uv0: Vec::new(),
+            indices: Vec::new(),
+            all_normals: true,
+            all_uv0: true,
+            primitive_count: 0,
+            node_count: 0,
+            material_count: 0,
+            has_skins: false,
+        }
+    }
+}
+
+/// 列主序 4×4（与 glTF 的 `node.transform().matrix()` 一致）。
+type Mat4 = [[f32; 4]; 4];
+
+const IDENTITY: Mat4 = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+fn matrix_mul(a: &Mat4, b: &Mat4) -> Mat4 {
+    let mut out = [[0.0f32; 4]; 4];
+    for (col, slot) in out.iter_mut().enumerate() {
+        for (row, value) in slot.iter_mut().enumerate() {
+            *value = (0..4).map(|k| a[k][row] * b[col][k]).sum();
+        }
+    }
+    out
+}
+
+fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
+    let mut out = [0.0f32; 3];
+    for (row, value) in out.iter_mut().enumerate() {
+        *value = m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row];
+    }
+    out
+}
+
+/// 法线矩阵 = 左上 3×3 的逆转置（有非均匀缩放时仍然正确）。
+fn normal_matrix(m: &Mat4) -> [[f32; 3]; 3] {
+    let a = [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
+    ];
+    let cofactor = |r: usize, c: usize| -> f32 {
+        let rows: Vec<usize> = (0..3).filter(|i| *i != r).collect();
+        let cols: Vec<usize> = (0..3).filter(|i| *i != c).collect();
+        let minor =
+            a[rows[0]][cols[0]] * a[rows[1]][cols[1]] - a[rows[0]][cols[1]] * a[rows[1]][cols[0]];
+        if (r + c).is_multiple_of(2) {
+            minor
+        } else {
+            -minor
+        }
+    };
+    let det = a[0][0] * cofactor(0, 0) + a[0][1] * cofactor(0, 1) + a[0][2] * cofactor(0, 2);
+    if det.abs() < 1e-12 {
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    }
+    // adj(A)[i][j] = cofactor(j, i)；逆转置再做一次转置 → 直接用 adj。
+    let mut out = [[0.0f32; 3]; 3];
+    for (i, row) in out.iter_mut().enumerate() {
+        for (j, value) in row.iter_mut().enumerate() {
+            *value = cofactor(j, i) / det;
+        }
+    }
+    out
+}
+
+fn apply_normal(m: &[[f32; 3]; 3], n: [f32; 3]) -> [f32; 3] {
+    let x = m[0][0] * n[0] + m[1][0] * n[1] + m[2][0] * n[2];
+    let y = m[0][1] * n[0] + m[1][1] * n[1] + m[2][1] * n[2];
+    let z = m[0][2] * n[0] + m[1][2] * n[1] + m[2][2] * n[2];
+    let length = (x * x + y * y + z * z).sqrt();
+    if length > 1e-6 {
+        [x / length, y / length, z / length]
+    } else {
+        [0.0, 1.0, 0.0]
+    }
+}
+
+fn collect_node(
+    node: &gltf::Node,
+    parent: &Mat4,
+    buffers: &[gltf::buffer::Data],
+    out: &mut GltfMesh,
+) {
+    out.node_count += 1;
+    let world = matrix_mul(parent, &node.transform().matrix());
+    if let Some(mesh) = node.mesh() {
+        for primitive in mesh.primitives() {
+            push_primitive(&primitive, &world, buffers, out);
+        }
+    }
+    for child in node.children() {
+        collect_node(&child, &world, buffers, out);
+    }
+}
+
+fn push_primitive(
+    primitive: &gltf::Primitive,
+    world: &Mat4,
+    buffers: &[gltf::buffer::Data],
+    out: &mut GltfMesh,
+) {
+    // 只烤三角形；线/点之类先跳过并计数（不在这一版的支持范围内）。
+    if primitive.mode() != gltf::mesh::Mode::Triangles {
+        tracing::warn!(
+            "gltf: skipping a {:?} primitive (only triangles are supported)",
+            primitive.mode()
+        );
+        return;
+    }
+
+    let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+    let Some(positions) = reader.read_positions() else {
+        tracing::warn!("gltf: skipping a primitive without POSITION");
+        return;
+    };
+    let positions: Vec<[f32; 3]> = positions.collect();
+    if positions.is_empty() {
+        return;
+    }
+
+    let base = out.positions.len() as u32;
+    let normals = normal_matrix(world);
+    out.positions
+        .extend(positions.iter().map(|p| transform_point(world, *p)));
+
+    match reader.read_normals() {
+        Some(normals_iter) => {
+            let collected: Vec<[f32; 3]> = normals_iter.collect();
+            if collected.len() == positions.len() {
+                out.normals
+                    .extend(collected.iter().map(|n| apply_normal(&normals, *n)));
+            } else {
+                out.all_normals = false;
+                out.normals
+                    .resize(out.normals.len() + positions.len(), [0.0, 0.0, 0.0]);
+            }
+        }
+        None => {
+            out.all_normals = false;
+            out.normals
+                .resize(out.normals.len() + positions.len(), [0.0, 0.0, 0.0]);
+        }
+    }
+
+    match reader.read_tex_coords(0) {
+        Some(uvs) => {
+            let collected: Vec<[f32; 2]> = uvs.into_f32().collect();
+            if collected.len() == positions.len() {
+                out.uv0.extend(collected);
+            } else {
+                out.all_uv0 = false;
+                out.uv0.resize(out.uv0.len() + positions.len(), [0.0, 0.0]);
+            }
+        }
+        None => {
+            out.all_uv0 = false;
+            out.uv0.resize(out.uv0.len() + positions.len(), [0.0, 0.0]);
+        }
+    }
+
+    match reader.read_indices() {
+        Some(indices) => out.indices.extend(
+            indices
+                .into_u32()
+                .filter(|index| (*index as usize) < positions.len())
+                .map(|index| index + base),
+        ),
+        // 非索引网格：补一条顺序索引，而不是直接拒绝（合法的 glTF）。
+        None => out
+            .indices
+            .extend((0..positions.len() as u32).map(|index| index + base)),
+    }
+
+    out.primitive_count += 1;
 }
 
 impl Importer for GltfImporter {
@@ -626,24 +845,26 @@ impl Importer for GltfImporter {
     fn import(&self, ctx: &ImportContext) -> Result<ImportResult, ImportError> {
         let src = &ctx.source_path;
 
-        let (positions, normals, texcoords, indices) = Self::read_gltf(src)?;
+        let mesh = Self::read_gltf(src)?;
 
-        let output_data = Self::write_intermediate(
-            &positions,
-            normals.as_deref(),
-            texcoords.as_deref(),
-            &indices,
-        );
+        let normals = mesh.all_normals.then_some(mesh.normals.as_slice());
+        let texcoords = mesh.all_uv0.then_some(mesh.uv0.as_slice());
+        let output_data =
+            Self::write_intermediate(&mesh.positions, normals, texcoords, &mesh.indices);
 
         let metadata = serde_json::json!({
             "original_name": src
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown"),
-            "vertex_count": positions.len(),
-            "index_count": indices.len(),
+            "vertex_count": mesh.positions.len(),
+            "index_count": mesh.indices.len(),
             "has_normals": normals.is_some(),
             "has_texcoords": texcoords.is_some(),
+            "primitive_count": mesh.primitive_count,
+            "node_count": mesh.node_count,
+            "material_count": mesh.material_count,
+            "has_skins": mesh.has_skins,
             "intermediate_size": output_data.len(),
         });
 
