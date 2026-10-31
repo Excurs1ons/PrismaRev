@@ -1774,6 +1774,8 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut rename: Option<String> = None;
     let mut instantiate: Option<String> = None;
     let mut commit_rename: Option<(String, String)> = None;
+    // 资产拖到目录行 = 移入该目录（#471）。
+    let mut move_to_folder: Option<(String, String)> = None;
 
     egui::ScrollArea::vertical()
         .id_salt("asset-scroll")
@@ -1797,7 +1799,18 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     icons::FOLDER,
                     path.rsplit('/').next().unwrap_or(path)
                 );
-                if list_row(ui, &colors, false, state.compact, &label).clicked() {
+                let row = list_row(ui, &colors, false, state.compact, &label);
+                // 拖资产经过目录行：高亮；松手 = 移入该目录（#471）。
+                if row.dnd_hover_payload::<widgets::AssetDrag>().is_some() {
+                    ui.painter().rect_filled(
+                        row.rect,
+                        egui::CornerRadius::ZERO,
+                        egui::Color32::from_rgba_unmultiplied(90, 170, 120, 40),
+                    );
+                }
+                if let Some(payload) = row.dnd_release_payload::<widgets::AssetDrag>() {
+                    move_to_folder = Some((payload.path.clone(), path.clone()));
+                } else if row.clicked() {
                     navigate_assets(state, path);
                 }
             }
@@ -1907,6 +1920,17 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         });
 
+    if let Some((from, folder)) = move_to_folder {
+        match workspace.move_asset_to_folder(&from, Some(&folder)) {
+            // 已经在同一个目录里：不写状态栏，避免「拖了一下什么都没变」的噪音。
+            Ok(to) if to == from => {}
+            Ok(to) => {
+                state.asset_selection = Some(to.clone());
+                state.status = format!("moved → {to}");
+            }
+            Err(error) => state.status = format!("move failed: {error}"),
+        }
+    }
     if let Some(path) = open {
         if path.ends_with(".scene.json") || path.ends_with(".prefab.json") {
             if let Err(error) = workspace.open_project_file(&path) {
