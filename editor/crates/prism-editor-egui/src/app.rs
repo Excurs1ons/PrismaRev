@@ -167,6 +167,92 @@ fn dock_zone(rect: Rect, pos: egui::Pos2) -> prism_editor_core::dock::DockZone {
     }
 }
 
+/// 全局快捷键表：`(键位, 命令)`，菜单提示、Shortcuts 面板与分发共用这一份（#516 还在补别的差异）。
+///
+/// 裸键（不带修饰键）只留给 `Delete` / `F`：`Select All` 必须是 `Ctrl+A`，否则在输入框里
+/// 打一个 `a` 就会全选实体（#499）。
+fn editor_shortcuts() -> Vec<(egui::KeyboardShortcut, Command)> {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    vec![
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::S),
+            Command::Save,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::Z),
+            Command::Undo,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::Y),
+            Command::Redo,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::D),
+            Command::DuplicateEntity,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::C),
+            Command::CopyEntity,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::X),
+            Command::CutEntity,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::V),
+            Command::PasteEntity,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::V),
+            Command::PasteComponent,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::N),
+            Command::NewScene,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::P),
+            Command::Pause,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL | Modifiers::ALT, Key::P),
+            Command::Step,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::P),
+            Command::Play,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::NONE, Key::Delete),
+            Command::DeleteSelection,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::NONE, Key::F),
+            Command::FrameSelection,
+        ),
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::Num0),
+            Command::ResetSceneCamera,
+        ),
+        // 不是裸 `A`：输入框里打 `a` 不能触发全选实体。
+        (
+            KeyboardShortcut::new(Modifiers::CTRL, Key::A),
+            Command::SelectAll,
+        ),
+    ]
+}
+
+/// 文本控件聚焦时**必须让路**的命令（#499）。
+///
+/// 这几条绑的是裸键（`F` / `Delete` / `Ctrl+A` 之外的全选），而输入框此刻正等这些字符；
+/// 判断要发生在 `consume_shortcut` 之前，否则按键已经被从事件队列里摘掉了。
+fn plain_shortcut(command: Command) -> bool {
+    matches!(
+        command,
+        Command::SelectAll | Command::FrameSelection | Command::DeleteSelection
+    )
+}
+
 fn tab_title(tab: &str) -> &str {
     match tab {
         "sceneView" => "Scene",
@@ -3503,72 +3589,7 @@ impl EditorApp {
         {
             return;
         }
-        let shortcuts = [
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::S),
-                Command::Save,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::Z),
-                Command::Undo,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::Y),
-                Command::Redo,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::D),
-                Command::DuplicateEntity,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::C),
-                Command::CopyEntity,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::X),
-                Command::CutEntity,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::V),
-                Command::PasteEntity,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::V),
-                Command::PasteComponent,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::N),
-                Command::NewScene,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::P),
-                Command::Pause,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL | Modifiers::ALT, Key::P),
-                Command::Step,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::P),
-                Command::Play,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::NONE, Key::Delete),
-                Command::DeleteSelection,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::NONE, Key::F),
-                Command::FrameSelection,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::CTRL, Key::Num0),
-                Command::ResetSceneCamera,
-            ),
-            (
-                KeyboardShortcut::new(Modifiers::NONE, Key::A),
-                Command::SelectAll,
-            ),
-        ];
+        let shortcuts = editor_shortcuts();
 
         let wants_keyboard = ctx.memory(|memory| memory.focused()).is_some();
         // W / E / R 工具、X 世界/局部、G 网格（文本输入时不抢键）。
@@ -3668,15 +3689,12 @@ impl EditorApp {
         let inspector_focused = focus == "inspector";
 
         for (shortcut, command) in shortcuts {
+            // 判断必须在 `consume_shortcut` **之前**：那个调用会把按键事件从
+            // `input.events` 里 retain 掉，之后再跳过就晚了 —— 输入框已经收不到字符（#499）。
+            if wants_keyboard && plain_shortcut(command) {
+                continue;
+            }
             if ctx.input_mut(|input| input.consume_shortcut(&shortcut)) {
-                // 纯字母 / Delete 这类快捷键只在没有文本控件聚焦时生效。
-                let plain = matches!(
-                    command,
-                    Command::SelectAll | Command::FrameSelection | Command::DeleteSelection
-                );
-                if wants_keyboard && plain {
-                    continue;
-                }
                 if assets_focused {
                     match command {
                         Command::DeleteSelection => {
@@ -4362,6 +4380,36 @@ mod tests {
 
     fn rect() -> Rect {
         Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(400.0, 300.0))
+    }
+
+    /// #499：输入框聚焦时，裸键（F / Delete / 全选）不能被执行。
+    #[test]
+    fn typing_in_a_text_field_keeps_the_bare_shortcuts() {
+        assert!(plain_shortcut(Command::FrameSelection), "F 是裸键");
+        assert!(plain_shortcut(Command::DeleteSelection), "Delete 是裸键");
+        assert!(plain_shortcut(Command::SelectAll));
+        // 带修饰键的命令在输入时也要能用：Ctrl+S 存盘不能因为光标在输入框里失效。
+        assert!(!plain_shortcut(Command::Save));
+        assert!(!plain_shortcut(Command::Play));
+    }
+
+    /// #499：`Select All` 必须带 Ctrl，裸 `A` 不再绑任何命令。
+    #[test]
+    fn select_all_is_ctrl_a() {
+        let table = editor_shortcuts();
+        let (shortcut, _) = table
+            .iter()
+            .find(|(_, command)| *command == Command::SelectAll)
+            .expect("Select All must be bound");
+        assert_eq!(shortcut.modifiers, egui::Modifiers::CTRL);
+        assert_eq!(shortcut.logical_key, egui::Key::A);
+        assert!(
+            !table
+                .iter()
+                .any(|(entry, _)| entry.modifiers == egui::Modifiers::NONE
+                    && entry.logical_key == egui::Key::A),
+            "裸 A 会把输入框里打的字变成全选实体"
+        );
     }
 
     /// #455：tab 条装不下时要有溢出入口，而不是把 tab 裁掉。
