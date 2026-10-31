@@ -18,7 +18,8 @@ use crate::schema::{component_value_with_overrides, EntityPreset, Schema, TypeSc
 use crate::theme::{ThemeColors, ThemeState, ThemeToken};
 use crate::viewport_math::{
     basis_from_quat, parent_world_rotation, quat_axis_angle, quat_conjugate, quat_mul,
-    quat_normalize, quat_rotate, world_position, world_rotation, world_scale, GizmoSpace,
+    quat_normalize, quat_rotate, world_bounds, world_position, world_rotation, world_scale,
+    GizmoSpace,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -3505,68 +3506,29 @@ impl Workspace {
 
     // ── 视口取景 ────────────────────────────────────────────────────────
 
+    /// 框住整个文档：用世界包围盒（父链 + 缩放），不再只看局部 `position`。
     pub fn frame_all(&mut self) {
-        let doc = &self.document().doc;
-        let mut min = [f32::INFINITY; 3];
-        let mut max = [f32::NEG_INFINITY; 3];
-        let mut any = false;
-        for entity in &doc.entities {
-            any = true;
-            for axis in 0..3 {
-                min[axis] = min[axis].min(entity.transform.position[axis]);
-                max[axis] = max[axis].max(entity.transform.position[axis]);
-            }
+        let indices: Vec<usize> = (0..self.document().doc.entities.len()).collect();
+        let bounds = world_bounds(&self.document().doc, &indices);
+        if let Some((center, radius)) = bounds {
+            self.camera.focus(center, radius);
         }
-        if !any {
+    }
+
+    /// 框住选中项：世界包围球 + 按相机 FOV 推导的距离（`#505`）。
+    ///
+    /// 半径来自 [`Self::selection_world_bounds`]（含父链变换与缩放），所以
+    /// 大物体不再穿进去、小物体不再离得太远。
+    pub fn frame_selection(&mut self) {
+        let Some((center, radius)) = self.selection_world_bounds() else {
             return;
-        }
-        let center = [
-            (min[0] + max[0]) * 0.5,
-            (min[1] + max[1]) * 0.5,
-            (min[2] + max[2]) * 0.5,
-        ];
-        let mut radius: f32 = 1.0;
-        for entity in &doc.entities {
-            let delta = [
-                entity.transform.position[0] - center[0],
-                entity.transform.position[1] - center[1],
-                entity.transform.position[2] - center[2],
-            ];
-            radius = radius
-                .max((delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt());
-        }
+        };
         self.camera.focus(center, radius);
     }
 
-    pub fn frame_selection(&mut self) {
-        let doc = &self.document().doc;
-        let selected: Vec<&EntityJson> = self
-            .selection
-            .iter()
-            .filter_map(|index| doc.entities.get(*index))
-            .collect();
-        if selected.is_empty() {
-            return;
-        }
-        let count = selected.len() as f32;
-        let center = [
-            selected
-                .iter()
-                .map(|e| e.transform.position[0])
-                .sum::<f32>()
-                / count,
-            selected
-                .iter()
-                .map(|e| e.transform.position[1])
-                .sum::<f32>()
-                / count,
-            selected
-                .iter()
-                .map(|e| e.transform.position[2])
-                .sum::<f32>()
-                / count,
-        ];
-        self.camera.focus(center, 2.0);
+    /// 选中集合的世界包围球 `(center, radius)`；空选返回 `None`。
+    pub fn selection_world_bounds(&self) -> Option<([f32; 3], f32)> {
+        world_bounds(&self.document().doc, &self.selection)
     }
 
     /// 选择集在世界空间的中心（父链累积位置）。
@@ -6824,6 +6786,95 @@ mod tests {
         workspace.select(0, false);
         workspace.frame_selection();
         assert_eq!(workspace.camera.target[1], 1.0);
+    }
+
+    /// `fixture()` + 自定义实体表：用来测世界变换相关的取景逻辑。
+    fn scene_fixture(entities: serde_json::Value) -> Value {
+        let mut value = fixture();
+        value["docs"]["assets/scenes/a.scene.json"]["entities"] = entities;
+        value
+    }
+
+    #[test]
+    fn framing_a_child_uses_its_world_position() {
+        // 回归 #505：子物体按**局部** position 取景，父级在 x=100 时镜头飞到原点。
+        let mut workspace = Workspace::load_fixture(&scene_fixture(json!([
+            { "id": 1, "name": "Root", "parent": null,
+              "transform": {"position":[100,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+              "components": {} },
+            { "id": 2, "name": "Child", "parent": 1,
+              "transform": {"position":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+              "components": {} }
+        ])));
+        workspace.select(1, false);
+        workspace.frame_selection();
+        assert!(
+            (workspace.camera.target[0] - 100.0).abs() < 1e-4,
+            "子物体应在世界 x=100 取景，实际 {:?}",
+            workspace.camera.target
+        );
+    }
+
+    #[test]
+    fn framing_a_large_object_pulls_the_camera_back() {
+        // 100 单位宽的墙：旧实现固定按半径 2 算距离（≈4.8），会直接穿进去。
+        let mut workspace = Workspace::load_fixture(&scene_fixture(json!([
+            { "id": 1, "name": "Wall", "parent": null,
+              "transform": {"position":[0,0,0],"rotation":[0,0,0,1],"scale":[100,1,1]},
+              "components": {} }
+        ])));
+        workspace.select(0, false);
+        workspace.frame_selection();
+        assert!(
+            workspace.camera.distance > 100.0,
+            "大物体要退到能框住它，实际 {}",
+            workspace.camera.distance
+        );
+    }
+
+    #[test]
+    fn framing_a_tiny_object_keeps_a_workable_distance() {
+        let mut workspace = Workspace::load_fixture(&scene_fixture(json!([
+            { "id": 1, "name": "Dot", "parent": null,
+              "transform": {"position":[0,0,0],"rotation":[0,0,0,1],"scale":[0.01,0.01,0.01]},
+              "components": {} }
+        ])));
+        workspace.select(0, false);
+        workspace.frame_selection();
+        assert!(
+            (0.4..2.0).contains(&workspace.camera.distance),
+            "小物体不该离得太远，实际 {}",
+            workspace.camera.distance
+        );
+    }
+
+    #[test]
+    fn frame_all_uses_world_bounds_not_local_positions() {
+        // 父在 x=100、子局部 x=50（世界 150）：并集中心应是 125，而不是 75。
+        let mut workspace = Workspace::load_fixture(&scene_fixture(json!([
+            { "id": 1, "name": "Root", "parent": null,
+              "transform": {"position":[100,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+              "components": {} },
+            { "id": 2, "name": "Child", "parent": 1,
+              "transform": {"position":[50,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+              "components": {} }
+        ])));
+        workspace.frame_all();
+        assert!(
+            (workspace.camera.target[0] - 125.0).abs() < 1e-3,
+            "world bounds 中心应为 125，实际 {:?}",
+            workspace.camera.target
+        );
+    }
+
+    #[test]
+    fn framing_an_empty_selection_does_not_move_the_camera() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let before = workspace.camera.target;
+        workspace.clear_selection();
+        workspace.frame_selection();
+        assert_eq!(workspace.camera.target, before);
+        assert!(workspace.selection_world_bounds().is_none());
     }
 
     #[test]

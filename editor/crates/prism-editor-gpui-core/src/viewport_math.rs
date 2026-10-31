@@ -334,6 +334,80 @@ pub fn world_scale(doc: &SceneDoc, index: usize) -> [f32; 3] {
     scale
 }
 
+/// 一组实体在世界空间的**包围球** `(center, radius)`（`#505`）。
+///
+/// 编辑器文档里没有网格数据，所以每个实体用「单位立方体 × 世界缩放」当代理
+/// （与选择描边 / gizmo 的代理一致）：8 个角点按世界旋转换算到世界空间，
+/// 取并集 AABB 的中心与半对角线作为半径。父链的平移 / 旋转 / 缩放都通过
+/// [`world_position`] / [`world_rotation`] / [`world_scale`] 累积，所以子物体框选
+/// 得到的是它在**世界**里的位置（而不是局部 `transform.position`）。
+///
+/// 越界索引、非有限变换、空集合都只跳过；全空时返回 `None`。半径下限 `0.25`，
+/// 免得零缩放 / 单点实体的取景距离塌到相机最小距离。
+pub fn world_bounds(doc: &SceneDoc, indices: &[usize]) -> Option<([f32; 3], f32)> {
+    let mut points: Vec<[f32; 3]> = Vec::new();
+    for index in indices {
+        if *index >= doc.entities.len() {
+            continue;
+        }
+        let center = world_position(doc, *index);
+        let scale = world_scale(doc, *index);
+        let rotation = world_rotation(doc, *index);
+        if !center.iter().all(|value| value.is_finite())
+            || !scale.iter().all(|value| value.is_finite())
+            || !rotation.iter().all(|value| value.is_finite())
+        {
+            continue;
+        }
+        let half = [
+            scale[0].abs() * 0.5,
+            scale[1].abs() * 0.5,
+            scale[2].abs() * 0.5,
+        ];
+        for sx in [-1.0f32, 1.0] {
+            for sy in [-1.0f32, 1.0] {
+                for sz in [-1.0f32, 1.0] {
+                    let corner = quat_rotate(rotation, [half[0] * sx, half[1] * sy, half[2] * sz]);
+                    points.push(add(center, corner));
+                }
+            }
+        }
+    }
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for point in &points {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
+    }
+    if points.is_empty() {
+        return None;
+    }
+    let center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    // 半径取「中心到最远角点」而不是 AABB 半对角线：后者会随旋转变大，
+    // 同一个物体转一下就换了取景距离。
+    let radius = points
+        .iter()
+        .map(|point| {
+            ((point[0] - center[0]).powi(2)
+                + (point[1] - center[1]).powi(2)
+                + (point[2] - center[2]).powi(2))
+            .sqrt()
+        })
+        .fold(0.0f32, f32::max);
+    let radius = if radius.is_finite() {
+        radius.max(0.25)
+    } else {
+        0.25
+    };
+    Some((center, radius))
+}
+
 /// 世界轴在当前相机里的屏幕方向（x 右、y 下）。
 pub fn orientation_axis_direction(frame: &CameraFrame, axis: usize, sign: f32) -> [f32; 2] {
     let world = match axis {
@@ -1426,6 +1500,49 @@ mod tests {
         assert!((world[2] - 3.0).abs() < 1e-4);
         let scale = world_scale(&doc, child);
         assert_eq!(scale, [2.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn world_bounds_wraps_the_unit_cube_and_follows_the_parent_chain() {
+        let mut doc = SceneDoc::default();
+        let parent = doc.add_named_child(None, "Parent");
+        doc.entities[parent].transform.position = [100.0, 0.0, 0.0];
+        let child = doc.add_named_child(Some(parent), "Child");
+
+        // 单位立方体：半对角线 = sqrt(3)/2 ≈ 0.866。
+        let (center, radius) = world_bounds(&doc, &[child]).expect("bounds");
+        assert!(
+            (center[0] - 100.0).abs() < 1e-4,
+            "子物体应在世界 x=100: {center:?}"
+        );
+        assert!((radius - 0.866_025).abs() < 1e-3, "radius {radius}");
+
+        // 父缩放放大包围盒。
+        doc.entities[parent].transform.scale = [10.0, 1.0, 1.0];
+        let (_, scaled_radius) = world_bounds(&doc, &[child]).expect("bounds");
+        assert!(
+            scaled_radius > radius * 5.0,
+            "缩放后半径应变大: {scaled_radius}"
+        );
+
+        // 旋转不改变立方体的包围球半径（只是换了朝向）。
+        doc.entities[parent].transform.scale = [1.0; 3];
+        doc.entities[parent].transform.rotation = euler_degrees_to_quat([30.0, 45.0, 10.0]);
+        let (_, rotated_radius) = world_bounds(&doc, &[child]).expect("bounds");
+        assert!((rotated_radius - radius).abs() < 1e-3, "旋转不该改变半径");
+    }
+
+    #[test]
+    fn world_bounds_handles_empty_and_broken_input() {
+        let doc = SceneDoc::default();
+        assert!(world_bounds(&doc, &[]).is_none());
+        assert!(world_bounds(&doc, &[7]).is_none(), "越界索引跳过");
+
+        let mut doc = SceneDoc::default();
+        let entity = doc.add_named_child(None, "Tiny");
+        doc.entities[entity].transform.scale = [0.0; 3];
+        let (_, radius) = world_bounds(&doc, &[entity]).expect("零缩放仍要有一个半径");
+        assert_eq!(radius, 0.25, "半径下限让取景距离不会塌到 0");
     }
 
     #[test]
