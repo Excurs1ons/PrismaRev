@@ -17,6 +17,7 @@ use crate::engine_host::ViewKind;
 use crate::gpu::SharedVulkan;
 use crate::logging;
 use crate::panels::{self, UiState};
+use crate::project_module::ModuleState;
 use crate::theme;
 use crate::viewport::{ImageBridge, ViewportState};
 use egui_phosphor::regular as icons;
@@ -123,6 +124,7 @@ fn tab_title(tab: &str) -> &str {
         "preferences" => "Preferences",
         "theme" => "Theme",
         "build" => "Build",
+        "problems" => "Problems",
         "tools" => "Tools",
         "shortcuts" => "Shortcuts",
         "about" => "About",
@@ -503,6 +505,17 @@ impl EditorApp {
                 // 本身仍然在后台线程，不会卡住 UI。
                 let status = view.host.project_module_status();
                 match &status {
+                    // 已加载但源码有未编译的改动（Auto Refresh 关 / 上一个 build 被
+                    // Play 挡住）：Play 前补编一次，别让试玩跑旧代码。
+                    Some(status) if status.loaded && status.dirty => {
+                        if !status.building {
+                            view.host.refresh_project_module();
+                        }
+                        play_note = Some(
+                            "Play: compiling pending module changes — project state resets on reload"
+                                .to_string(),
+                        );
+                    }
                     Some(status) if status.loaded => {}
                     Some(status) if status.available => {
                         if !status.building {
@@ -1308,6 +1321,9 @@ impl EditorApp {
                 "loaded": status.loaded,
                 "building": status.building,
                 "auto_refresh": status.auto_refresh,
+                "state": status.state.as_str(),
+                "dirty": status.dirty,
+                "problems": status.problems,
                 "manifest": status.manifest.as_ref().map(|path| path.display().to_string()),
                 "error": status.error,
             }),
@@ -1315,7 +1331,7 @@ impl EditorApp {
         }
     }
 
-    /// 每帧把后台编译结果换进 Game view，并推进热重载的 debounce。
+    /// 每帧把后台编译结果换进 Game view，并推进模块重载的 debounce。
     fn poll_project_module(&mut self) {
         let playing = self.playing;
         let events = if let Some(view) = self.game_view.as_mut() {
@@ -1921,6 +1937,10 @@ impl EditorApp {
                     ] {
                         self.menu_item(ui, label, "", command);
                     }
+                    if ui.button("Problems").clicked() {
+                        self.workspace.show_panel("problems");
+                        ui.close();
+                    }
                 });
                 ui.separator();
                 self.menu_do(ui, "Capture Window", |app| app.capture_window_now());
@@ -2164,6 +2184,42 @@ impl EditorApp {
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // 模块编译状态 + 显式的 Compile：没有脚本层，代码就是一个可重载的 cdylib，
+                // 所以这里对应 UE 的 Compile 按钮，而不是 Unity 的脚本编译。
+                if let Some(status) = self.project_module_status() {
+                    if status.available {
+                        if ui
+                            .add_enabled(
+                                !status.building,
+                                egui::Button::new("Compile (Ctrl+R)").small(),
+                            )
+                            .on_hover_text(
+                                "Recompile and reload the project module \
+                                 (whole-module reload: project state resets)",
+                            )
+                            .clicked()
+                        {
+                            self.refresh_project_module();
+                        }
+                        let color = match status.state {
+                            ModuleState::Ready => Color32::from_rgb(120, 200, 120),
+                            ModuleState::Pending => Color32::from_rgb(220, 190, 100),
+                            ModuleState::Compiling => Color32::from_rgb(120, 170, 230),
+                            ModuleState::Failed => Color32::from_rgb(232, 96, 96),
+                            ModuleState::Unavailable => Color32::from_gray(140),
+                        };
+                        let label = if status.problems > 0 {
+                            format!("{} · {} problems", status.state.label(), status.problems)
+                        } else {
+                            status.state.label().to_string()
+                        };
+                        let hint = status.error.as_deref().unwrap_or(
+                            "Project module build state (diagnostics live in the Problems panel)",
+                        );
+                        ui.label(RichText::new(label).size(10.0).color(color))
+                            .on_hover_text(hint);
+                    }
+                }
                 let text = if self.playing {
                     if self.paused {
                         "PAUSED"
@@ -2571,6 +2627,15 @@ impl EditorApp {
                 if let Some(kind) = self.state.pending_build.take() {
                     self.start_build(kind);
                 }
+            }
+            "problems" => {
+                // 只在面板可见时拷一份诊断；状态栏只拿条数。
+                let diagnostics = self
+                    .game_view
+                    .as_ref()
+                    .map(|view| view.host.project_diagnostics().to_vec())
+                    .unwrap_or_default();
+                panels::problems(ui, &diagnostics, &mut self.state);
             }
             "tools" => panels::tools(ui, &mut self.state),
             "shortcuts" => panels::shortcuts(ui),

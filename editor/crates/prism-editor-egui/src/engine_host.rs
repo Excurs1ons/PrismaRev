@@ -28,7 +28,7 @@ use prism_engine::Engine;
 use prism_render::descriptor::FrameUBOData;
 use prism_render::{FrameInput, GraphRenderer, VulkanContext};
 
-use crate::project_module::{ProjectEvent, ProjectModuleDriver, ProjectModuleStatus};
+use crate::project_module::{Diagnostic, ProjectEvent, ProjectModuleDriver, ProjectModuleStatus};
 
 /// 视口种类：Scene view 用编辑器轨道相机，Game view 用文档相机。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +134,14 @@ impl EngineHost {
 
     pub fn project_module_status(&self) -> Option<ProjectModuleStatus> {
         self.project.as_ref().map(ProjectModuleDriver::status)
+    }
+
+    /// Problems 面板的明细（state 里只放条数，避免状态栏每帧克隆诊断）。
+    pub fn project_diagnostics(&self) -> &[Diagnostic] {
+        self.project
+            .as_ref()
+            .map(ProjectModuleDriver::diagnostics)
+            .unwrap_or_default()
     }
 
     /// 每帧轮询：收编译结果 / 按需编译。不阻塞 UI 线程。

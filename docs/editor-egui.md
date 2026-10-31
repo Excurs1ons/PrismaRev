@@ -86,7 +86,19 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
   项目模块**不链接引擎**：`prism-game-api` 只开 `plugin` 后端。
 - 源码改动落定 **350 ms** 后自动重编；Play 期间不自动换模块（避免打断试玩），
   `Ctrl+R` / File → Compile Project Module 强制重编。编译失败保留上一次成功的
-  模块继续跑，错误进 Console。
+  模块继续跑，诊断进 Console 与 Problems 面板。
+- **重载是整模块替换，不是热重载**：旧 session 释放、模块 `create` 重跑，项目侧
+  静态状态归零。没有脚本层可以迁移状态，所以文案统一用 “reload”，不要用
+  “hot reload / domain reload”。
+- 工具栏右侧显示模块状态（`ready` / `changes not compiled` / `compiling…` /
+  `compile failed`）和 `Compile (Ctrl+R)` 按钮。源码时间戳晚于上一次编译尝试时是
+  `pending`，Auto Refresh 关掉也看得出来。
+- **Problems 面板**（Window → General → Problems）列出
+  `cargo --message-format=json-render-diagnostics` 的 error / warning，带
+  `file:line:col`，点一行用默认编辑器打开（先试 `code -g`，没有 `code` 就交给
+  系统默认处理程序）。编译成功时 warning 也保留；失败时第一条 error 同时进 Console。
+- Play 前如果模块已加载但源码有未编译改动（Auto Refresh 关、或上一次 build 被 Play
+  挡住），会先补编一次，避免试玩跑旧代码。
 - Play 每帧先 `ProjectSession::tick(WorldCommands)`，再跑引擎 system：项目写入的
   组件和 `draw_quad` 提交的 UI 四边形在同一帧被 hierarchy / `ui::render` 看到。
 - 项目模块通过 `AssetIo` 读**项目自己的** `assets/`（不是仓库根的引擎资产）。
@@ -156,6 +168,8 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
 - **Project（资产）**：后退 / 前进 / 面包屑、目录浏览、类型过滤、搜索、重命名 /
   复制 / 删除 / 复制路径 / 实例化预制体；**资产可拖拽**：拖到目录 = 移动并改写引用，
   拖到层级实体 = 实例化预制体，拖到检查器的路径字段 = 直接写入路径（`AssetDrag` 载荷）。
+- **Problems**：项目模块编译的 error / warning 列表（`file:line:col`），点一行打开
+  源码；工具栏的模块状态与它同源，`Ctrl+R` / `Compile` 重新编译。
 - **Docking**：拖动标签页（行为）：拖到另一个 leaf 的左/右/上/下 25% = 分屏，
   中间 = 合并成标签，拖出面板区 = 浮动窗口，拖到本 leaf 边缘 = 原地分屏。
 - **预制体**：实例区块有 Revert / Sync All / **Apply to Prefab**（当前子树覆盖预制体

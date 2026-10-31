@@ -613,6 +613,7 @@ pub const UTILITY_TABS: &[&str] = &[
     "projectSettings",
     "preferences",
     "build",
+    "problems",
     "tools",
     "shortcuts",
     "about",
