@@ -2469,6 +2469,15 @@ impl EditorApp {
                 settings.show_grid = !grid_on;
                 self.apply_render_settings(settings);
             }
+            let outline_on = self.workspace.show_selection_outline;
+            if ui
+                .selectable_label(outline_on, "Outline")
+                .on_hover_text("Draw a wireframe around the selected objects")
+                .clicked()
+            {
+                self.workspace.show_selection_outline = !outline_on;
+                self.mark_scene_dirty();
+            }
             let mut settings = self.render_settings.clone();
             if panels::scene_render_mode_combo(ui, &mut settings) {
                 self.apply_render_settings(settings);

@@ -662,6 +662,45 @@ fn transformed_corners(transform: &TransformJson) -> [[f32; 3]; 8] {
     corners
 }
 
+/// 世界代理立方体的 12 条边投影到屏幕空间（#487 的选中描边）。
+///
+/// 返回 `[((x0, y0), (x1, y1)); 12]`，坐标是**视口像素**（左上原点，与
+/// [`box_select`] / `pick_entity` 同一坐标系）。任何一个角落在相机背后时
+/// 返回 `None`：那种情况下逐点裁剪只会画出穿透屏幕的乱线。
+pub fn projected_box_edges(
+    transform: &TransformJson,
+    frame: &CameraFrame,
+    width: f32,
+    height: f32,
+) -> Option<[((f32, f32), (f32, f32)); 12]> {
+    let corners = transformed_corners(transform);
+    let mut screen = [(0.0f32, 0.0f32); 8];
+    for (slot, corner) in corners.iter().enumerate() {
+        let (x, y, _) = project(*corner, frame, width, height)?;
+        screen[slot] = (x, y);
+    }
+    // 角点下标按「dx / dy / dz 各占一位」排列：z 变化最快。
+    const EDGES: [(usize, usize); 12] = [
+        (0, 1),
+        (2, 3),
+        (4, 5),
+        (6, 7), // 沿 z
+        (0, 2),
+        (1, 3),
+        (4, 6),
+        (5, 7), // 沿 y
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7), // 沿 x
+    ];
+    let mut out = [((0.0f32, 0.0f32), (0.0f32, 0.0f32)); 12];
+    for (slot, (a, b)) in EDGES.iter().enumerate() {
+        out[slot] = (screen[*a], screen[*b]);
+    }
+    Some(out)
+}
+
 /// 把屏幕上的拖拽框换算成视口像素坐标 `(min_x, min_y, max_x, max_y)`。
 ///
 /// [`box_select`] 和 `pick_entity` 都以**视口左上角**为原点，而 egui 给的是屏幕坐标：
@@ -1088,6 +1127,27 @@ mod tests {
             local_box((700.0, 500.0), (720.0, 520.0), origin),
             (400.0, 380.0, 420.0, 400.0)
         );
+    }
+
+    #[test]
+    fn a_world_box_projects_twelve_edges() {
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        let transform = TransformJson::default();
+        let edges = projected_box_edges(&transform, &frame, 800.0, 600.0).expect("in front");
+        assert_eq!(edges.len(), 12);
+        // 单位立方体在原点、相机沿 +Z 后退 10：中心应该落在屏幕中心附近。
+        let center_x: f32 = edges.iter().map(|(a, b)| (a.0 + b.0) * 0.5).sum::<f32>() / 12.0;
+        let center_y: f32 = edges.iter().map(|(a, b)| (a.1 + b.1) * 0.5).sum::<f32>() / 12.0;
+        assert!((center_x - 400.0).abs() < 1.0, "{center_x}");
+        assert!((center_y - 300.0).abs() < 1.0, "{center_y}");
+
+        // 相机背后的盒子不画（否则会画出穿透屏幕的线）。
+        let behind = TransformJson {
+            position: [0.0, 0.0, 50.0],
+            ..TransformJson::default()
+        };
+        assert!(projected_box_edges(&behind, &frame, 800.0, 600.0).is_none());
     }
 
     #[test]
