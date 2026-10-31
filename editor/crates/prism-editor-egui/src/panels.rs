@@ -263,6 +263,8 @@ pub struct UiState {
     /// 等待确认删除的场景 / 预制体（相对项目根路径）。删除不可撤销，
     /// 资产面板与文档面板共用同一个确认框。
     pub pending_doc_delete: Option<String>,
+    /// 保存时发现磁盘上的版本变了，等用户选「覆盖 / 重新载入 / 取消」（#452）。
+    pub pending_save_conflict: Option<usize>,
     /// Build 面板里点击的构建请求，由 `EditorApp` 在同一帧取走并真正启动。
     pub pending_build: Option<crate::build::BuildKind>,
     /// 当前是否有构建子进程在跑（由 `EditorApp` 每帧同步，用来禁用按钮）。
@@ -2011,6 +2013,15 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         );
         row_ui.add_space(6.0);
         row_ui.label(RichText::new(title).size(12.0).color(text_color));
+        if workspace.docs[index].externally_modified {
+            row_ui
+                .label(
+                    RichText::new("⚠")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(220, 170, 60)),
+                )
+                .on_hover_text("磁盘上的版本已被外部修改，保存前会先问你");
+        }
         row_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if flat_icon(ui, icons::X).clicked() {
                 close = Some(index);
@@ -2036,16 +2047,25 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         workspace.set_active(index);
     }
     if let Some(index) = save {
-        match workspace.save_document(index) {
-            Ok(path) => state.status = format!("saved {path}"),
-            Err(error) => state.status = format!("save failed: {error}"),
-        }
+        request_save_document(workspace, state, index);
     }
     if let Some(index) = close {
         request_close_document(workspace, state, index);
     }
     if let Some(path) = delete_doc {
         state.pending_doc_delete = Some(path);
+    }
+}
+
+/// 保存一个文档；磁盘上的版本被外部改过就挂起，交给冲突对话框（#452）。
+pub fn request_save_document(workspace: &mut Workspace, state: &mut UiState, index: usize) {
+    match workspace.save_document(index) {
+        Ok(path) => state.status = format!("saved {path}"),
+        Err(_) if workspace.save_conflict(index).is_some() => {
+            state.pending_save_conflict = Some(index);
+            state.status = "文件在磁盘上已被修改".to_string();
+        }
+        Err(error) => state.status = format!("save failed: {error}"),
     }
 }
 

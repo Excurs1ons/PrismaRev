@@ -188,6 +188,15 @@ pub fn read_document(root: &Path, relative: &str) -> io::Result<SceneDoc> {
     Ok(doc)
 }
 
+/// 文件的修改时间；不存在 / 不可读时返回 `None`。
+///
+/// 编辑器用它做「保存前是否被外部改过」的检查（#452）。mtime 的粒度取决于
+/// 文件系统（NTFS 100ns，FAT 2s），同一 tick 内的改动检测不到——这是可接受的
+/// 折中：真正的并发写仍然由原子 rename 保证不会撕裂文件。
+pub fn file_mtime(root: &Path, relative: &str) -> Option<std::time::SystemTime> {
+    fs::metadata(root.join(relative)).ok()?.modified().ok()
+}
+
 /// 写回一个文档（自动创建父目录，2 空格缩进，与作者格式一致）。
 ///
 /// 保存必须是**原子**的：先写 `<path>.tmp`、`sync_all`，把旧文件滚成 `<path>.bak`，
