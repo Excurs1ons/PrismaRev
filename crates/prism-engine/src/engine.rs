@@ -232,6 +232,40 @@ impl Engine {
         crate::scene_state::save_scene_state(&self.world);
     }
 
+    /// 指定存档目录（宿主的 `[app] company/name` 推导出的应用数据目录）。
+    ///
+    /// 不设置时回退到 [`crate::config::app_data_dir`]，也就是所有项目共用一个
+    /// 目录 —— 那是 #484 里「项目互相覆盖存档」的根因。
+    pub fn set_save_directory(&mut self, dir: impl Into<std::path::PathBuf>) {
+        self.world
+            .insert_resource(crate::scene_state::SaveDirectory(dir.into()));
+    }
+
+    /// 当前存档路径（尊重 [`Self::set_save_directory`]）。
+    pub fn scene_state_path(&self) -> std::path::PathBuf {
+        crate::scene_state::scene_state_path(&self.world)
+    }
+
+    /// 写到指定槽位：`scene_state-<slot>.json`。
+    pub fn save_scene_state_slot(&self, slot: u32) {
+        crate::scene_state::save_scene_state_slot(&self.world, slot);
+    }
+
+    /// 从指定槽位恢复。
+    pub fn load_scene_state_slot(&mut self, slot: u32) -> bool {
+        crate::scene_state::load_scene_state_slot(&mut self.world, slot)
+    }
+
+    /// 写到任意路径（用于「另存存档」/ 测试）。
+    pub fn save_scene_state_to(&self, path: &std::path::Path) {
+        crate::scene_state::save_scene_state_to(&self.world, path);
+    }
+
+    /// 从任意路径恢复。
+    pub fn load_scene_state_from(&mut self, path: &std::path::Path) -> bool {
+        crate::scene_state::load_scene_state_from(&mut self.world, path)
+    }
+
     /// 读档原语：从 `scene_state.json` 恢复世界状态到 ECS 世界。
     ///
     /// 返回是否读取到了存档文件。由**用户项目**决定何时调用（如启动后、

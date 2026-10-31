@@ -1,7 +1,11 @@
 //! Scene-state persistence: save/restore inspector-editable parameters
 //! (transforms, lights, 相机 to/from a JSON file.
 //!
-//! Saved on explicit Ctrl+S and on graceful exit; loaded on startup.
+//! **Nothing saves or loads automatically.** The host (or the project module via
+//! `GameWorld::save_scene_state` / `load_scene_state`) decides when: the engine
+//! used to document "saved on Ctrl+S, loaded on startup", which was never true
+//! and made the API look dead (#484).
+//!
 //! The 格式 is hand-rolled JSON (no serde dependency).
 //!
 //! **Format version 2:** Point-light position and 激活 状态 are serialized
@@ -39,12 +43,55 @@ const LEGACY_INDEPENDENT_LIGHTS_VERSION: u32 = 2;
 // File path
 // ---------------------------------------------------------------------------
 
-fn scene_state_path() -> std::path::PathBuf {
-    if let Some(dir) = crate::config::app_data_dir() {
-        dir.join("scene_state.json")
+/// 存档目录（`World` resource）。宿主在启动时插入真实的工程配置目录。
+///
+/// 以前 `scene_state_path()` 直接用 [`crate::config::app_data_dir`]，而那个函数
+/// 拿的是 `AppConfig::default()` —— 所有项目都写进
+/// `%APPDATA%/Excurs1ons/PrismaRev/scene_state.json`，互相覆盖（#484）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveDirectory(pub std::path::PathBuf);
+
+/// 默认存档目录（`config::app_data_dir()`，即真实配置不可用时的兜底）。
+pub fn default_save_dir() -> Option<std::path::PathBuf> {
+    crate::config::app_data_dir()
+}
+
+/// `dir` 下的存档文件名：`slot` 为 `None` 时是 `scene_state.json`，
+/// 否则 `scene_state-<slot>.json`。
+pub fn scene_state_path_in(dir: Option<&std::path::Path>, slot: Option<u32>) -> std::path::PathBuf {
+    let dir = dir
+        .map(|dir| dir.to_path_buf())
+        .or_else(default_save_dir)
+        .unwrap_or_default();
+    let name = match slot {
+        Some(slot) => format!("scene_state-{slot}.json"),
+        None => "scene_state.json".to_string(),
+    };
+    if dir.as_os_str().is_empty() {
+        std::path::PathBuf::from(name)
     } else {
-        std::path::PathBuf::from("scene_state.json")
+        dir.join(name)
     }
+}
+
+/// 当前世界的存档路径：优先 [`SaveDirectory`] resource，其次默认目录。
+pub fn scene_state_path(world: &World) -> std::path::PathBuf {
+    scene_state_path_in(
+        world
+            .get_resource::<SaveDirectory>()
+            .map(|dir| dir.0.as_path()),
+        None,
+    )
+}
+
+/// 指定槽位的存档路径（同样尊重 [`SaveDirectory`]）。
+pub fn scene_state_path_for_slot(world: &World, slot: u32) -> std::path::PathBuf {
+    scene_state_path_in(
+        world
+            .get_resource::<SaveDirectory>()
+            .map(|dir| dir.0.as_path()),
+        Some(slot),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -276,8 +323,8 @@ fn snapshot_camera_state(world: &World) -> Option<CameraState> {
     })
 }
 
-/// 查询 the ECS 世界 + 相机 and 写入 the JSON file.
-pub fn save_scene_state(world: &World) {
+/// 查询 the ECS 世界 + 相机 and 写入 JSON 到 `path`。
+pub fn save_scene_state_to(world: &World, path: &std::path::Path) {
     use std::fmt::Write;
 
     let camera_state = snapshot_camera_state(world);
@@ -336,19 +383,30 @@ pub fn save_scene_state(world: &World) {
     json.push_str("]\n");
     json.push_str("}\n");
 
-    let path = scene_state_path();
-    match std::fs::write(&path, &json) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(path, &json) {
         Ok(_) => log::info!("saved scene state to {:?}", path),
         Err(e) => log::warn!("failed to save scene state to {:?}: {e}", path),
     }
 }
 
+/// 写到世界的默认存档路径（[`scene_state_path`]）。
+pub fn save_scene_state(world: &World) {
+    save_scene_state_to(world, &scene_state_path(world));
+}
+
+/// 写到指定槽位（`scene_state-<slot>.json`）。
+pub fn save_scene_state_slot(world: &World, slot: u32) {
+    save_scene_state_to(world, &scene_state_path_for_slot(world, slot));
+}
+
 /// 读取 the JSON file and apply saved values to the ECS 世界 相机
 /// lives as a 资源 inside the 世界
 /// Returns `true` if a 状态 was loaded (so callers can skip 默认 placement).
-pub fn load_scene_state(world: &mut World) -> bool {
-    let path = scene_state_path();
-    let text = match std::fs::read_to_string(&path) {
+pub fn load_scene_state_from(world: &mut World, path: &std::path::Path) -> bool {
+    let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(_) => return false,
     };
@@ -356,6 +414,16 @@ pub fn load_scene_state(world: &mut World) -> bool {
     log::info!("restoring scene state from {:?}", path);
     apply_scene_state(world, &text);
     true
+}
+
+/// 从世界的默认存档路径恢复。
+pub fn load_scene_state(world: &mut World) -> bool {
+    load_scene_state_from(world, &scene_state_path(world))
+}
+
+/// 从指定槽位恢复。
+pub fn load_scene_state_slot(world: &mut World, slot: u32) -> bool {
+    load_scene_state_from(world, &scene_state_path_for_slot(world, slot))
 }
 
 /// Apply already-read scene-state text. Kept separate from file I/O so 状态
