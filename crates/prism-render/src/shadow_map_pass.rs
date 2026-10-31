@@ -55,9 +55,9 @@ pub struct ShadowMapPass {
     layout_initialized: bool,
 }
 
-/// Square shadow 映射表 分辨率 2048 is a reasonable desktop/mobile 默认
-/// raise for quality, lower for 带宽 on weak GPUs.
-const SHADOW_MAP_SIZE: u32 = 2048;
+/// 阴影贴图边长（texel）。与 [`crate::SHADOW_MAP_SIZE`] 是同一个值，这里 re-export
+/// 方便 pass 内部使用；引擎侧请用不带 feature 门限的那个。
+pub use crate::SHADOW_MAP_SIZE;
 /// CSM 级联数预留（DESIGN 计划）：当前单张正交阴影，下一步扩展扩展为多级联
 pub const SHADOW_CASCADE_COUNT: u32 = 1; // CSM: 扩展为 3-4 级联并按相机视锥切片
 

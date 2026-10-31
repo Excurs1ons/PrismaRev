@@ -7,7 +7,7 @@
 use glam::{self, Mat4, Vec3, Vec4};
 
 use crate::dirty_router::{draw_items_signature, DirtyRouter};
-use crate::render_settings::RenderSettings;
+use crate::render_settings::{RenderSettings, DEFAULT_SHADOW_DISTANCE};
 use crate::scene;
 use crate::scene::components::Camera;
 use prism_ecs::World;
@@ -137,8 +137,29 @@ pub fn extract_frame_packet(
     display_aspect: f32,
     surface_rotation: &Mat4,
 ) -> FramePacket {
+    extract_frame_packet_with_shadow(
+        world,
+        display_aspect,
+        surface_rotation,
+        DEFAULT_SHADOW_DISTANCE,
+    )
+}
+
+/// [`extract_frame_packet`]，阴影覆盖距离由调用方给定（`RenderSettings::shadow_distance`）。
+pub fn extract_frame_packet_with_shadow(
+    world: &mut World,
+    display_aspect: f32,
+    surface_rotation: &Mat4,
+    shadow_distance: f32,
+) -> FramePacket {
     let mut packet = FramePacket::default();
-    extract_frame_packet_into(world, display_aspect, surface_rotation, &mut packet);
+    extract_frame_packet_into_with_shadow(
+        world,
+        display_aspect,
+        surface_rotation,
+        shadow_distance,
+        &mut packet,
+    );
     packet
 }
 
@@ -154,8 +175,34 @@ pub fn extract_frame_packet_into(
     surface_rotation: &Mat4,
     packet: &mut FramePacket,
 ) {
+    extract_frame_packet_into_with_shadow(
+        world,
+        display_aspect,
+        surface_rotation,
+        DEFAULT_SHADOW_DISTANCE,
+        packet,
+    );
+}
+
+/// [`extract_frame_packet_into`] 加阴影覆盖距离（米，见 `RenderSettings::shadow_distance`）。
+///
+/// 阴影正交盒子的大小与中心都跟着它走，所以宿主每帧把它传进来，而不是让引擎
+/// 猜一个常量（#526）。
+pub fn extract_frame_packet_into_with_shadow(
+    world: &mut World,
+    display_aspect: f32,
+    surface_rotation: &Mat4,
+    shadow_distance: f32,
+    packet: &mut FramePacket,
+) {
     // 1. Collect per-frame scene 状态 (needs orientation).
-    collect_scene_changes_into(world, display_aspect, surface_rotation, &mut packet.scene);
+    collect_scene_changes_into(
+        world,
+        display_aspect,
+        surface_rotation,
+        shadow_distance,
+        &mut packet.scene,
+    );
 
     // 2. Build the flat draw list and ECS-authored render helpers.
     let scene_view = scene::SceneReadView::new(world);
@@ -226,13 +273,37 @@ pub struct FramePacket {
 /// a [`SceneChanges`] 快照 for the 当前 帧
 /// 采集一帧的 scene 快照（不带复用的便捷包装，测试用）。
 #[cfg(test)]
+#[allow(dead_code)] // 仅测试用：生产路径直接走 `extract_frame_packet_*`。
 fn collect_scene_changes(
     world: &mut World,
     display_aspect: f32,
     surface_rotation: &Mat4,
 ) -> SceneChanges {
+    collect_scene_changes_with_shadow(
+        world,
+        display_aspect,
+        surface_rotation,
+        DEFAULT_SHADOW_DISTANCE,
+    )
+}
+
+/// 阴影覆盖距离（米）参与的场景采集。`extract_frame_packet*` 的默认入口用
+/// [`DEFAULT_SHADOW_DISTANCE`]，宿主可以传 `RenderSettings::shadow_distance`。
+#[allow(dead_code)] // 同上：只有测试从这一层进去（阴影距离由测试显式给）。
+fn collect_scene_changes_with_shadow(
+    world: &mut World,
+    display_aspect: f32,
+    surface_rotation: &Mat4,
+    shadow_distance: f32,
+) -> SceneChanges {
     let mut out = SceneChanges::default();
-    collect_scene_changes_into(world, display_aspect, surface_rotation, &mut out);
+    collect_scene_changes_into(
+        world,
+        display_aspect,
+        surface_rotation,
+        shadow_distance,
+        &mut out,
+    );
     out
 }
 
@@ -244,6 +315,7 @@ fn collect_scene_changes_into(
     world: &mut World,
     display_aspect: f32,
     surface_rotation: &Mat4,
+    shadow_distance: f32,
     out: &mut SceneChanges,
 ) {
     let fallback_dir = Vec4::new(
@@ -423,8 +495,24 @@ fn collect_scene_changes_into(
         ));
     }
 
-    // 5. Light-space view-projection (shadow 映射表
-    let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
+    // 5. Light-space view-projection（阴影贴图，#526）。
+    //
+    // 盒子中心取**相机前方 `distance * 0.5`**，而不是 `eye` 本身：以前一半贴图
+    // 浪费在相机背后；现在整块都盖在可见区域上，并在光空间里按 texel 吸附，
+    // 相机平移时阴影边缘不再爬行。
+    let distance = if shadow_distance.is_finite() && shadow_distance > 0.0 {
+        shadow_distance
+    } else {
+        DEFAULT_SHADOW_DISTANCE
+    };
+    let forward = -Vec3::new(view.x_axis.z, view.y_axis.z, view.z_axis.z).normalize_or_zero();
+    let shadow_center = shadow_box_center(eye, forward, distance);
+    let light_view_proj = light_view_proj_snapped(
+        &light_direction,
+        distance * 0.5,
+        &shadow_center,
+        prism_render::SHADOW_MAP_SIZE,
+    );
 
     // 6. 清屏色 —— 与取景来自**同一台**相机（`Camera.backgroundColor`）。
     let clear_color = camera_entity
@@ -645,14 +733,47 @@ fn directional_light_ubo_direction(direction: Vec3, radiance: f32) -> Vec4 {
 }
 
 /// 构建 an 正交 light-space view-projection 矩阵
-fn light_view_proj(light_dir: &Vec4, half: f32, center: &Vec3) -> Mat4 {
+/// 光空间正交盒子，并把盒心**吸附到阴影贴图的 texel 网格**上（#526）。
+///
+/// `texels` 是阴影贴图的边长（`0`/`1` 表示不吸附）：盒心在光空间里 round 到
+/// `2 * half / texels` 的整数倍，相机连续平移时贴图就不会整块重采样，
+/// 阴影边缘不再爬行。
+/// 阴影正交盒子的中心：相机前方 `distance * 0.5` 处（#526）。
+///
+/// 以前直接把相机位置当中心，导致一半贴图落在相机背后；退化输入（距离非正 /
+/// 朝向为零）退回相机位置，避免把光矩阵算歪。
+fn shadow_box_center(eye: Vec3, forward: Vec3, distance: f32) -> Vec3 {
+    if !distance.is_finite() || distance <= 0.0 || forward == Vec3::ZERO {
+        return eye;
+    }
+    eye + forward * (distance * 0.5)
+}
+
+fn light_view_proj_snapped(light_dir: &Vec4, half: f32, center: &Vec3, texels: u32) -> Mat4 {
     let l = Vec3::new(light_dir.x, light_dir.y, light_dir.z).normalize_or_zero();
     let dist = half * 2.0;
-    let eye = center + l * dist;
     let up = if l.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
-    let fwd = (center - eye).normalize_or_zero();
+    // 光的方向与盒子基向量跟盒心无关，先用未吸附的中心算出来。
+    let fwd = (-l).normalize_or_zero();
     let right = fwd.cross(up).normalize_or_zero();
     let true_up = right.cross(fwd);
+
+    // texel 吸附：只量化盒子平面（right / true_up）上的位置；深度轴保持连续，
+    // 否则遮挡体到光源的距离也会被量化。
+    let center = if texels > 1 && half.is_finite() && half > 0.0 {
+        let texel = (2.0 * half) / texels as f32;
+        let snap = |value: f32| (value / texel).round() * texel;
+        let local = Vec3::new(
+            snap(right.dot(*center)),
+            snap(true_up.dot(*center)),
+            fwd.dot(*center),
+        );
+        right * local.x + true_up * local.y + fwd * local.z
+    } else {
+        *center
+    };
+    let eye = center + l * dist;
+
     Mat4::from_cols(
         glam::vec4(right.x, true_up.x, -fwd.x, 0.0),
         glam::vec4(right.y, true_up.y, -fwd.y, 0.0),
@@ -676,6 +797,67 @@ fn norm3(a: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
     use crate::scene::components::LocalToWorld;
+
+    /// 阴影盒子以相机**前方**为中心，不是以相机位置为中心（#526）。
+    #[test]
+    fn the_shadow_box_is_centred_in_front_of_the_camera() {
+        let eye = Vec3::new(0.0, 10.0, 0.0);
+        let forward = Vec3::new(0.0, 0.0, -1.0);
+        let center = shadow_box_center(eye, forward, 60.0);
+        assert!((center - Vec3::new(0.0, 10.0, -30.0)).length() < 1e-5);
+        // 退化输入：距离非法 / 朝向为零时退回相机位置。
+        assert_eq!(shadow_box_center(eye, forward, 0.0), eye);
+        assert_eq!(shadow_box_center(eye, Vec3::ZERO, 60.0), eye);
+        assert_eq!(shadow_box_center(eye, forward, f32::NAN), eye);
+    }
+
+    /// 相机平移一点点时，盒心被吸附到同一个 texel：同一个世界点会落在同一个
+    /// 贴图位置，阴影边缘不会爬行（深度轴允许有轻微的亚 texel 差异）。
+    #[test]
+    fn texel_snapping_freezes_the_shadow_matrix_between_texels() {
+        let dir = Vec4::new(-0.4, -1.0, -0.3, 0.0);
+        let project = |center: Vec3, probe: Vec3| {
+            let m = light_view_proj_snapped(&dir, 30.0, &center, 2048);
+            let clip = m * probe.extend(1.0);
+            (clip.x, clip.y)
+        };
+        let probe = Vec3::new(3.0, 1.5, -25.0);
+        // 基位置特意不在 texel 边界上（否则 round() 的落点本来就会翻）。
+        let base = Vec3::new(0.137, -0.211, -30.0);
+        let (ax, ay) = project(base, probe);
+        // 平面内位移远小于一个 texel（60 / 2048 ≈ 0.029 世界单位）。
+        let (bx, by) = project(base + Vec3::new(0.0005, 0.0, 0.0), probe);
+        assert!(
+            (ax - bx).abs() < 1e-6 && (ay - by).abs() < 1e-6,
+            "sub-texel camera motion must not move the shadow map: {ax},{ay} vs {bx},{by}"
+        );
+        // 挪出好几个 texel 就该真的动。
+        let (cx, cy) = project(base + Vec3::new(0.5, 0.0, 0.0), probe);
+        assert!(
+            (ax - cx).abs() > 1e-3 || (ay - cy).abs() > 1e-3,
+            "moving several texels must move the projection"
+        );
+    }
+
+    /// 阴影距离越大，正交盒子覆盖的世界范围越大。
+    #[test]
+    fn a_longer_shadow_distance_covers_more_world() {
+        let dir = Vec4::new(0.0, -1.0, 0.0, 0.0);
+        let near = light_view_proj_snapped(&dir, 30.0, &Vec3::ZERO, 2048);
+        let far = light_view_proj_snapped(&dir, 60.0, &Vec3::ZERO, 2048);
+        // 同一个世界点：近盒里在盒子外，远盒里在盒子内。
+        let probe = Vec3::new(45.0, 0.0, 0.0).extend(1.0);
+        let in_near = near * probe;
+        let in_far = far * probe;
+        assert!(
+            in_near.x.abs() > 1.0,
+            "half=30 covers 60 units: {in_near:?}"
+        );
+        assert!(
+            in_far.x.abs() <= 1.0,
+            "half=60 covers 120 units: {in_far:?}"
+        );
+    }
 
     /// `LightSample.direction` 是光传播方向，UBO 的 `lightDirection` 要「指向光源」。
     #[test]

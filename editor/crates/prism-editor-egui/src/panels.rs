@@ -3902,6 +3902,19 @@ pub fn render_graph(
                 .changed();
             ui.end_row();
 
+            ui.label("Shadow Distance");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut settings.shadow_distance, 10.0..=300.0)
+                        .suffix(" m")
+                        .fixed_decimals(1),
+                )
+                .on_hover_text(
+                    "Directional shadow coverage. Larger sees further, each texel covers more                      world, so contact shadows get blurrier.",
+                )
+                .changed();
+            ui.end_row();
+
             ui.label("Anti-aliasing");
             egui::ComboBox::from_id_salt("aa-mode")
                 .selected_text(match settings.aa_mode {

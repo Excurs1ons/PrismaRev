@@ -86,6 +86,12 @@ pub mod shader;
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
+/// 方向光阴影贴图边长（texel）。
+///
+/// 放在不受 feature 门限的位置：引擎侧算 texel 吸附时要用它，而 `shadows` 砖块
+/// 可能被关掉（Lego 最小档）。`shadow_map_pass` 内部 re-export 同一个常量。
+pub const SHADOW_MAP_SIZE: u32 = 2048;
+
 /// 方向光阴影贴图 pass（Lego 砖块 `shadows`）。
 #[cfg(feature = "shadows")]
 pub mod shadow_map_pass;

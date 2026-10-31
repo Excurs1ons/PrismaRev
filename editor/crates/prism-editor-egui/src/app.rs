@@ -4312,6 +4312,7 @@ fn render_settings_json(
         "contrast": settings.contrast,
         "saturation": settings.saturation,
         "vignette": settings.vignette,
+        "shadowDistance": settings.shadow_distance,
         "debugRt": settings.debug_rt,
         "pathTrace": settings.render_mode == RenderMode::PathTrace,
         "ptMaxBounces": settings.pt_max_bounces,
@@ -4353,6 +4354,7 @@ fn render_settings_from_json(
         contrast: f32_field("contrast", base.contrast),
         saturation: f32_field("saturation", base.saturation),
         vignette: f32_field("vignette", base.vignette),
+        shadow_distance: f32_field("shadowDistance", base.shadow_distance),
         debug_rt: u32_field("debugRt", base.debug_rt),
         render_mode: if path_trace {
             RenderMode::PathTrace
@@ -4637,6 +4639,7 @@ mod tests {
         settings.contrast = 1.4;
         settings.saturation = 0.6;
         settings.vignette = 0.3;
+        settings.shadow_distance = 90.0;
         let value = render_settings_json(&settings);
         let loaded = render_settings_from_json(&value, false);
         assert_eq!(loaded.show_grid, true);
@@ -4645,6 +4648,7 @@ mod tests {
         assert_eq!(loaded.contrast, 1.4);
         assert_eq!(loaded.saturation, 0.6);
         assert_eq!(loaded.vignette, 0.3);
+        assert_eq!(loaded.shadow_distance, 90.0);
         assert_eq!(
             render_settings_from_json(&serde_json::json!({}), true).show_grid,
             true
