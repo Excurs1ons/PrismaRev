@@ -6,6 +6,7 @@
 //! | 变换     | `LocalTransform`, `LocalToWorld`, `TransformDirty` |
 //! | 渲染     | `MeshRenderer`, `SpriteRenderer`, `Active` |
 //! | 动画     | `SpriteAnimation`（2D 帧）, `KeyframeAnimation`（曲线） |
+//! | 粒子     | `ParticleSystem`（世界空间 CPU 粒子） |
 //! | 光源 | `Light`（形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
@@ -502,6 +503,172 @@ impl LineRenderer {
     /// 是否有可绘制的线段。
     pub fn has_line(&self) -> bool {
         self.points.len() >= 2
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Particles
+// ---------------------------------------------------------------------------
+
+/// 发射器形状 = `ParticleSystemShape`。
+///
+/// 只影响「粒子出生点的偏移」和「初速度方向」；Phase 1 没有碰撞/拖尾。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ParticleShape {
+    /// 全部从发射器原点出发，方向随机。
+    #[default]
+    Point,
+    /// 球壳内出生，方向沿径向向外。
+    Sphere,
+    /// 立方体内出生，方向随机。
+    Box,
+    /// 锥形（沿发射器本地 **+Y**），`cone_angle_degrees` 是半角。
+    Cone,
+}
+
+impl ReflectType for ParticleShape {
+    fn field_type() -> FieldType {
+        FieldType::U8
+    }
+
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        // 顺序与声明一致；这些字符串就是 `.scene.json` 里的取值。
+        Some(&["Point", "Sphere", "Box", "Cone"])
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(match self {
+            Self::Point => 0,
+            Self::Sphere => 1,
+            Self::Box => 2,
+            Self::Cone => 3,
+        })
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        match value.as_u64()? {
+            0 => Ok(Self::Point),
+            1 => Ok(Self::Sphere),
+            2 => Ok(Self::Box),
+            3 => Ok(Self::Cone),
+            other => Err(ReflectError::BadData(format!(
+                "invalid ParticleShape discriminant {other}"
+            ))),
+        }
+    }
+}
+
+/// 世界空间 CPU 粒子发射器 = `ParticleSystem`（Phase 1 子集）。
+///
+/// 只描述**作者参数**；活着的粒子存在运行时组件
+/// `prism_engine::scene::systems::particles::ParticleEmitter` 里，不进
+/// `.scene.json` / RSCN。每个粒子出生时取一次
+/// `start_speed` / `start_size` / `lifetime` 的随机值，颜色在
+/// `start_color → end_color` 之间按生命周期线性插值。
+///
+/// 粒子在**世界空间**模拟（发射器移动不会拖走已有的粒子），初速度方向按发射器
+/// 当前的旋转换算。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::ParticleSystem")]
+#[serde(default)]
+pub struct ParticleSystem {
+    /// 是否发射/推进；`false` 时已有粒子停在原地（不是清除）。
+    pub playing: bool,
+    /// 每秒发射数量。
+    pub emission_rate: f32,
+    /// 每个循环开始时额外一次性发射的数量。
+    pub burst: u32,
+    /// 发射持续时长（秒）；`0` = 一直发射（忽略 `looping`）。
+    pub duration: f32,
+    /// `duration > 0` 时是否循环发射。
+    pub looping: bool,
+    /// 同时存活的粒子上限；`0` = 内置默认（256）。
+    pub max_particles: u32,
+    /// 生命周期随机区间 `[min, max]`（秒）。
+    pub lifetime: [f32; 2],
+    /// 初始速度随机区间（世界单位 / 秒）。
+    pub start_speed: [f32; 2],
+    /// 初始半径随机区间（世界单位）。
+    pub start_size: [f32; 2],
+    /// 出生时的线性 RGBA 颜色（含 alpha）。
+    pub start_color: [f32; 4],
+    /// 死亡时的线性 RGBA 颜色；alpha 通常写 0 做淡出。
+    pub end_color: [f32; 4],
+    /// 恒定加速度（世界单位 / 秒²），`[0, -9.81, 0]` 是重力。
+    pub gravity: [f32; 3],
+    /// 速度阻尼（每秒衰减比例，`0` = 无阻尼，`1` = 一秒内速度归零）。
+    pub drag: f32,
+    /// 发射器形状。
+    pub shape: ParticleShape,
+    /// `Sphere` / `Box` 的半径（世界单位）。
+    pub shape_radius: f32,
+    /// `Cone` 的半角（度，0..90）。
+    pub cone_angle_degrees: f32,
+}
+
+impl Default for ParticleSystem {
+    fn default() -> Self {
+        Self {
+            playing: true,
+            emission_rate: 20.0,
+            burst: 0,
+            duration: 0.0,
+            looping: true,
+            max_particles: 0,
+            lifetime: [0.8, 1.4],
+            start_speed: [0.6, 1.6],
+            start_size: [0.12, 0.28],
+            start_color: [1.0, 0.85, 0.35, 1.0],
+            end_color: [1.0, 0.25, 0.05, 0.0],
+            gravity: [0.0, 1.2, 0.0],
+            drag: 0.6,
+            shape: ParticleShape::Cone,
+            shape_radius: 0.15,
+            cone_angle_degrees: 20.0,
+        }
+    }
+}
+
+impl ParticleSystem {
+    /// 同时存活粒子上限（`max_particles == 0` 时回落到 256）。
+    pub fn particle_cap(&self) -> usize {
+        if self.max_particles == 0 {
+            256
+        } else {
+            self.max_particles as usize
+        }
+    }
+
+    /// 发射时长（秒）；`0` / 非有限值表示无限。
+    pub fn emission_duration(&self) -> Option<f32> {
+        if self.duration.is_finite() && self.duration > 0.0 {
+            Some(self.duration)
+        } else {
+            None
+        }
+    }
+
+    /// 每秒发射数量（非法值按 0，负值不发射）。
+    pub fn rate(&self) -> f32 {
+        if self.emission_rate.is_finite() && self.emission_rate > 0.0 {
+            self.emission_rate
+        } else {
+            0.0
+        }
+    }
+
+    /// 区间取值（非法/倒序时用 `fallback`，并把两端排序）。
+    pub fn random_range(range: [f32; 2], t: f32, fallback: f32) -> f32 {
+        let (lo, hi) = if range[0].is_finite() && range[1].is_finite() {
+            if range[0] <= range[1] {
+                (range[0], range[1])
+            } else {
+                (range[1], range[0])
+            }
+        } else {
+            (fallback, fallback)
+        };
+        lo + (hi - lo) * t
     }
 }
 

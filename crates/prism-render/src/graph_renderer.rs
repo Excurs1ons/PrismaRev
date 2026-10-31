@@ -91,6 +91,9 @@ pub struct FrameInput<'a> {
     /// ECS-authored 2D sprites for this frame (sorted back-to-front by the
     /// engine). Empty for 3D-only scenes.
     pub sprite_items: &'a [crate::render_graph::SpriteDrawItem],
+    /// World-space particle billboards for this frame (sorted back-to-front
+    /// by the engine). Empty when no `ParticleSystem` emits this frame.
+    pub particle_items: &'a [crate::render_graph::ParticleDrawItem],
     /// ECS-authored skybox parameters; `None` means no sky draw.
     pub skybox: Option<crate::skybox_pass::SkyboxSettings>,
     pub frame_data: &'a FrameUBOData,
@@ -1726,6 +1729,7 @@ impl GraphRenderer {
             draw_items,
             gizmos,
             sprite_items,
+            particle_items,
             skybox,
             frame_data,
             light_view_proj,
@@ -1789,6 +1793,7 @@ impl GraphRenderer {
                 draw_list: draw_items,
                 gizmos,
                 sprite_items,
+                particle_items,
                 skybox: *skybox,
                 mesh_manager: &self.mesh_manager,
                 light_view_proj,
@@ -2132,6 +2137,7 @@ impl GraphRenderer {
             draw_items,
             gizmos: &[],
             sprite_items: &[],
+            particle_items: &[],
             skybox: None,
             frame_data,
             light_view_proj,

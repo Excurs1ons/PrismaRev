@@ -6,6 +6,7 @@
 pub mod gizmo;
 pub mod gtao;
 pub mod mesh_vert;
+pub mod particles;
 pub mod post;
 pub mod pt_render;
 pub mod rt_preview;

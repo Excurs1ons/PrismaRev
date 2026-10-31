@@ -489,6 +489,9 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     registry.register_reflect_type::<crate::animation::Vec3Key>();
     registry.register_reflect_serde::<KeyframeAnimation>("prism_engine::scene::KeyframeAnimation");
 
+    // ── 粒子发射器（作者态；活粒子在运行时 `ParticleEmitter` 里）──
+    registry.register_reflect_serde::<ParticleSystem>("prism_engine::scene::ParticleSystem");
+
     // ── 预制体实例（编辑器元数据）──
     registry.register_reflect_serde::<PrefabInstance>("prism_engine::scene::PrefabInstance");
 

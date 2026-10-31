@@ -618,6 +618,13 @@ fn default_schedule() -> Schedule {
         crate::scene::systems::animation::keyframe_animation_system(world, dt)
     });
 
+    // ── 粒子模拟 ────────────────────────────────────────────
+    // CPU 粒子积分 + 发射（#501 Phase 1）。同样在 `hierarchy_system` 之前，
+    // 提取阶段看到的已经是本帧推进后的粒子。
+    s.add_system("fx::particles", |world, dt| {
+        crate::scene::systems::particles::particle_system(world, dt);
+    });
+
     // ── UI 布局 ─────────────────────────────────────────────
     // 每帧重新计算所有 UI 元素的屏幕空间矩形。
     s.add_system("ui::layout", |world, _dt| {

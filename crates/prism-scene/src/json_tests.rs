@@ -360,3 +360,63 @@ fn keyframe_animation_tracks_cook_and_decode() {
     assert_eq!(clip.euler_xyz.len(), 1);
     assert!(clip.scale.is_empty());
 }
+
+#[test]
+fn a_particle_system_survives_cook_and_decode() {
+    // 发射器带一个枚举字段（`shape`）：RSCN 把枚举写成小整数，解码时再还原，
+    // 最容易在位置化编码里掉值（#501）。
+    let mut registry = ComponentRegistry::new();
+    register_builtin_components(&mut registry);
+    let scene = SceneJson::parse(
+        r#"{
+            "version": 3,
+            "entities": [{
+                "id": 0,
+                "name": "Fire",
+                "components": {
+                    "prism_engine::scene::ParticleSystem": {
+                        "playing": true,
+                        "emission_rate": 30.0,
+                        "burst": 4,
+                        "duration": 3.0,
+                        "looping": false,
+                        "max_particles": 64,
+                        "lifetime": [0.4, 0.9],
+                        "start_speed": [1.0, 2.0],
+                        "start_size": [0.1, 0.2],
+                        "start_color": [1.0, 0.6, 0.2, 1.0],
+                        "end_color": [0.6, 0.1, 0.0, 0.0],
+                        "gravity": [0.0, 1.0, 0.0],
+                        "drag": 0.3,
+                        "shape": "Cone",
+                        "shape_radius": 0.2,
+                        "cone_angle_degrees": 25.0
+                    }
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let bytes = crate::encode_scene(&scene, &registry).expect("scene with an emitter must cook");
+    let decoded = crate::decode_scene(&bytes, &registry).expect("cooked scene must decode");
+    let component = decoded.entities[0]
+        .components
+        .iter()
+        .find(|component| component.type_name == "prism_engine::scene::ParticleSystem")
+        .expect("emitter component must survive the cook");
+
+    let mut world = prism_ecs::World::new();
+    let entity = world.spawn();
+    assert!(registry.apply_object(&mut world, entity, component));
+    let system = world
+        .get::<crate::components::ParticleSystem>(entity)
+        .expect("emitter must apply to the world");
+    assert_eq!(system.emission_rate, 30.0);
+    assert_eq!(system.burst, 4);
+    assert!(!system.looping);
+    assert_eq!(system.lifetime, [0.4, 0.9]);
+    assert_eq!(system.shape, crate::components::ParticleShape::Cone);
+    assert_eq!(system.start_color, [1.0, 0.6, 0.2, 1.0]);
+    assert_eq!(system.particle_cap(), 64);
+}

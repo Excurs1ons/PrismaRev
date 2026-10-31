@@ -14,4 +14,5 @@ pub mod animation;
 pub mod camera;
 pub mod hierarchy;
 pub mod lights;
+pub mod particles;
 pub mod render;

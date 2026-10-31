@@ -1,5 +1,8 @@
 //! 2D screen-space particle system —— 雨、雪、火花等 2D 特效的通用模拟器。
 //!
+//! > 世界空间的 3D 粒子（billboard、深度测试、`ParticleSystem` 场景组件）不在这里，
+//! > 见 `crate::scene::systems::particles`（#501 Phase 1）。
+//!
 //! 粒子在**像素屏幕空间**（原点左上、y 向下，与 `ComputedLayout::rect` 一致）
 //! 中模拟，并以 `UiQuad`（plain colored quad）的形式输出。引擎已有的
 //! `UiOverlay` 叠加 pass 直接绘制这些四边形——**无需新增/修改任何 shader**。

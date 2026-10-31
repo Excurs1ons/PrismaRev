@@ -407,12 +407,24 @@ pub fn sort_draw_items(items: &mut [DrawItem], eye: [f32; 3]) {
     });
 }
 
-/// One 2D sprite instance for [`crate::sprite_pass::SpritePass`].
+/// One world-space particle billboard for
+/// [`crate::particle_pass::ParticlePass`].
 ///
-/// The engine resolves the authoring `SpriteRenderer` (texture path, sprite
-/// sheet frame, pivot, sorting) into this flat record: `model` already carries
-/// the world transform, the pivot offset and the sprite's world size, and
-/// `texture` is the bindless slot of the resolved texture.
+/// The engine simulates the particles on the CPU and hands the renderer a flat
+/// list. The camera basis is **not** part of the record: the pass expands the
+/// quad along `GraphFrame::inv_view_rot`'s right/up columns, so the billboard
+/// faces whatever camera rendered the frame.
+#[derive(Clone, Copy, Debug)]
+pub struct ParticleDrawItem {
+    /// World-space center (xyz) and radius in world units (w).
+    pub center: [f32; 3],
+    /// Billboard half-size / radius in world units.
+    pub size: f32,
+    /// Linear RGBA color (already faded by the particle's age).
+    pub color: [f32; 4],
+}
+
+/// One 2D sprite instance for [`crate::sprite_pass::SpritePass`].
 #[derive(Clone, Copy, Debug)]
 pub struct SpriteDrawItem {
     /// World matrix applied to the unit quad (includes size + pivot).
@@ -439,6 +451,8 @@ pub struct GraphFrame<'a> {
     pub gizmos: &'a [crate::gizmo::GizmoInstance],
     /// ECS-authored 2D sprites for this frame (sorted back-to-front).
     pub sprite_items: &'a [SpriteDrawItem],
+    /// World-space particle billboards for this frame (sorted back-to-front).
+    pub particle_items: &'a [ParticleDrawItem],
     /// ECS-authored skybox parameters (`None` = skip the sky draw).
     pub skybox: Option<crate::skybox_pass::SkyboxSettings>,
     /// 网格 管理器 — passes 解析 [`DrawItem::mesh`] handles to GPU buffers.

@@ -177,6 +177,8 @@ pub fn extract_frame_packet_into(
         None
     };
     scene_view.sprite_items_into(&mut packet.sprite_items);
+    // 3D 粒子：世界空间 billboard，按到眼睛的距离远到近排序（透明混合）。
+    scene_view.particle_items_into(packet.scene.eye, &mut packet.particle_items);
 
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
     crate::ui::convert_ui_draw_list_to_overlay_into(world, &mut packet.ui_overlay);
@@ -206,6 +208,9 @@ pub struct FramePacket {
     /// ECS `SpriteRenderer` entities resolved into flat 2D draw records
     /// (already sorted back-to-front).
     pub sprite_items: Vec<prism_render::SpriteDrawItem>,
+    /// `ParticleSystem` emitters resolved into world-space billboards
+    /// (already sorted back-to-front).
+    pub particle_items: Vec<prism_render::ParticleDrawItem>,
     pub ui_overlay: UiOverlayInput,
     /// 应用层渲染设置（调试标志 / 色调映射 / PT 参数）。主线程每帧写入，
     /// 渲染线程只读——保证 `App::render_settings` 的修改（快捷键、项目配置）
@@ -477,6 +482,7 @@ pub fn render_system(
         ref gizmos,
         skybox,
         ref sprite_items,
+        ref particle_items,
         ref ui_overlay,
         settings: _,
     } = *packet;
@@ -554,6 +560,7 @@ pub fn render_system(
         draw_items,
         gizmos,
         sprite_items,
+        particle_items,
         skybox,
         frame_data: &frame_data,
         light_view_proj: light_view_proj.to_cols_array_2d(),
