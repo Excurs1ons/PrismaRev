@@ -91,6 +91,7 @@ pub mod shadow_map_pass;
 pub mod skybox_pass;
 pub mod sprite_pass;
 pub mod swapchain;
+pub mod tangents;
 pub mod ui_overlay;
 pub(crate) mod vulkan_compat;
 
