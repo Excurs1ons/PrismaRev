@@ -41,7 +41,7 @@ pub mod keys {
     pub const OTHER_BASE: usize = 30;
 }
 
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
@@ -109,6 +109,39 @@ impl EntityHandle {
     }
 }
 
+/// 触点阶段（`InputSnapshot::touches` 里 `phase` 的取值）。
+pub const TOUCH_PHASE_STARTED: u32 = 0;
+pub const TOUCH_PHASE_MOVED: u32 = 1;
+pub const TOUCH_PHASE_ENDED: u32 = 2;
+pub const TOUCH_PHASE_CANCELLED: u32 = 3;
+
+/// 单个触点（Android / iOS 的 `Touch`）。
+///
+/// 与 [`InputSnapshot`] 一样是 POD：`InputSnapshot` 整块跨 ABI 传，放不下
+/// `Vec`，所以固定上限 [`InputSnapshot::MAX_TOUCHES`]。超出上限的触点被丢弃
+/// （宿主的 `InputManager` 侧仍保留完整列表）。
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TouchSnapshot {
+    /// 平台触点 id（同一根手指的整个生命周期内不变）。
+    pub id: u64,
+    /// 绘图区像素坐标（与 [`InputSnapshot::cursor`] 同一坐标系）。
+    pub position: [f32; 2],
+    /// 见 `TOUCH_PHASE_*`；未知值按「移动中」处理。
+    pub phase: u32,
+    /// 保留字段，必须是 0。
+    pub _reserved: u32,
+}
+
+impl TouchSnapshot {
+    pub const EMPTY: Self = Self {
+        id: 0,
+        position: [0.0; 2],
+        phase: TOUCH_PHASE_CANCELLED,
+        _reserved: 0,
+    };
+}
+
 /// 每帧下发给 gameplay 代码的输入快照。
 ///
 /// 固定大小、`#[repr(C)]`，可以整块跨 ABI 传。按键用位图而不是 `Vec`，
@@ -128,12 +161,59 @@ pub struct InputSnapshot {
     /// 按键位图：`keys[i / 64] & (1 << (i % 64))`。
     /// 键位编号由宿主定义，插件只做查表。
     pub keys: [u64; 4],
+
+    // ---- 以下字段是 #485 追加的：`left_clicked` / `left_held` / `keys` 之前
+    // 只覆盖了「左键 + 按住」这一种组合，右键、滚轮、鼠标位移、触摸、按键边沿
+    // 全都没有出口。追加在末尾是为了让 ABI 差异只体现在 `ABI_VERSION` 上。
+    /// 右键「本帧刚按下」。
+    pub right_clicked: bool,
+    /// 右键「按住」。
+    pub right_held: bool,
+    /// 中键「本帧刚按下」。
+    pub middle_clicked: bool,
+    /// 中键「按住」。
+    pub middle_held: bool,
+    /// 本帧鼠标位移（像素，未缩放）。FPS 视角用它，不要用 `cursor` 差分：
+    /// 指针锁定时 `cursor` 不再移动。
+    pub mouse_delta: [f32; 2],
+    /// 本帧滚轮量，单位是「滚轮行」（一格传统滚轮 = 1.0）。
+    pub scroll: f32,
+    /// 指针是否被锁定（`CursorGrabMode::Locked`）。锁定期间鼠标不再受屏幕边缘限制。
+    pub pointer_locked: bool,
+    /// 按键边沿位图：前 [`InputSnapshot::KEY_WORDS`] 个 word 是「本帧刚按下」，
+    /// 后 `KEY_WORDS` 个是「本帧刚释放」。
+    ///
+    /// `keys` 是**按住**语义，所以要判断「这一帧刚按下 Space」必须用这里——
+    /// 自己差分 `keys` 会漏掉在同一帧里按下又松开的快速连按。
+    pub key_edges: [u64; 8],
+    /// `touches` 里有效触点数（`0..=MAX_TOUCHES`）。
+    pub touch_count: u32,
+    /// 触点表；只有前 `touch_count` 项有效。
+    pub touches: [TouchSnapshot; 10],
 }
 
 impl InputSnapshot {
     /// 支持的键位数量。
     pub const KEY_COUNT: usize = 256;
     pub const KEY_WORDS: usize = Self::KEY_COUNT / 64;
+    /// 全零快照（`const` 上下文用：`HostApi::logging_only`）。
+    pub const EMPTY: Self = Self {
+        cursor: [0.0; 2],
+        screen: [0.0; 2],
+        left_clicked: false,
+        left_held: false,
+        keys: [0; Self::KEY_WORDS],
+        right_clicked: false,
+        right_held: false,
+        middle_clicked: false,
+        middle_held: false,
+        mouse_delta: [0.0; 2],
+        scroll: 0.0,
+        pointer_locked: false,
+        key_edges: [0; 8],
+        touch_count: 0,
+        touches: [TouchSnapshot::EMPTY; Self::MAX_TOUCHES],
+    };
 
     pub fn set_key(&mut self, index: usize, down: bool) {
         if index >= Self::KEY_COUNT {
@@ -156,17 +236,52 @@ impl InputSnapshot {
     pub fn any_key(&self) -> bool {
         self.keys.iter().any(|word| *word != 0)
     }
+
+    /// 触点数上限（固定数组长度，见 [`Self::touches`]）。
+    pub const MAX_TOUCHES: usize = 10;
+
+    /// 本帧是否**刚按下**这个键（边沿，不受按住语义影响）。
+    pub fn key_pressed(&self, index: usize) -> bool {
+        index < Self::KEY_COUNT && (self.key_edges[index / 64] & (1u64 << (index % 64))) != 0
+    }
+
+    /// 本帧是否**刚释放**这个键。
+    pub fn key_released(&self, index: usize) -> bool {
+        index < Self::KEY_COUNT
+            && (self.key_edges[Self::KEY_WORDS + index / 64] & (1u64 << (index % 64))) != 0
+    }
+
+    /// 设置一个按键边沿位（宿主填表用）。
+    pub fn set_key_edge(&mut self, index: usize, pressed: bool) {
+        if index >= Self::KEY_COUNT {
+            return;
+        }
+        let mask = 1u64 << (index % 64);
+        let word = if pressed {
+            &mut self.key_edges[index / 64]
+        } else {
+            &mut self.key_edges[Self::KEY_WORDS + index / 64]
+        };
+        *word |= mask;
+    }
+
+    /// 有效触点。
+    pub fn touch_slice(&self) -> &[TouchSnapshot] {
+        let count = (self.touch_count as usize).min(Self::MAX_TOUCHES);
+        &self.touches[..count]
+    }
+
+    /// 有没有触点按下（Android 上「按屏幕」的判断）。
+    pub fn any_touch(&self) -> bool {
+        self.touch_slice()
+            .iter()
+            .any(|touch| touch.phase != TOUCH_PHASE_ENDED && touch.phase != TOUCH_PHASE_CANCELLED)
+    }
 }
 
 impl Default for InputSnapshot {
     fn default() -> Self {
-        Self {
-            cursor: [0.0; 2],
-            screen: [0.0; 2],
-            left_clicked: false,
-            left_held: false,
-            keys: [0; Self::KEY_WORDS],
-        }
+        Self::EMPTY
     }
 }
 
@@ -322,13 +437,7 @@ impl HostApi {
             capabilities: HOST_CAP_LOGGING,
             scene_generation: 0,
             user_data: core::ptr::null_mut(),
-            input: InputSnapshot {
-                cursor: [0.0; 2],
-                screen: [0.0; 2],
-                left_clicked: false,
-                left_held: false,
-                keys: [0; InputSnapshot::KEY_WORDS],
-            },
+            input: InputSnapshot::EMPTY,
             log: None,
             spawn_entity: None,
             set_entity_name: None,
@@ -420,5 +529,56 @@ mod tests {
         assert_eq!(api.capabilities, HOST_CAP_LOGGING);
         assert!(api.query_entities.is_none());
         assert!(api.set_component.is_none());
+    }
+}
+
+#[cfg(test)]
+mod input_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn key_edges_are_separate_from_the_held_bitmap() {
+        let mut snapshot = InputSnapshot::default();
+        snapshot.set_key(6, true);
+        snapshot.set_key_edge(6, true);
+        assert!(snapshot.key(6));
+        assert!(snapshot.key_pressed(6));
+        assert!(!snapshot.key_released(6));
+        assert!(!snapshot.key_pressed(7));
+
+        // 越界不能越写。
+        snapshot.set_key(InputSnapshot::KEY_COUNT, true);
+        snapshot.set_key_edge(InputSnapshot::KEY_COUNT, true);
+        assert!(!snapshot.key_pressed(InputSnapshot::KEY_COUNT));
+    }
+
+    #[test]
+    fn touch_slice_only_returns_the_counted_entries() {
+        let mut snapshot = InputSnapshot::default();
+        assert!(snapshot.touch_slice().is_empty());
+        assert!(!snapshot.any_touch());
+
+        snapshot.touches[0] = TouchSnapshot {
+            id: 3,
+            position: [5.0, 6.0],
+            phase: TOUCH_PHASE_MOVED,
+            _reserved: 0,
+        };
+        snapshot.touch_count = 1;
+        assert_eq!(snapshot.touch_slice().len(), 1);
+        assert!(snapshot.any_touch());
+
+        // 超过固定数组长度时截断，不 panic。
+        snapshot.touch_count = u32::MAX;
+        assert_eq!(snapshot.touch_slice().len(), InputSnapshot::MAX_TOUCHES);
+    }
+
+    #[test]
+    fn the_snapshot_stays_pod_sized() {
+        // `InputSnapshot` 要能整块跨 ABI：字段只能是 POD，且不能悄悄膨胀到
+        // 让 `#[repr(C)]` 布局随编译器变化。
+        let size = core::mem::size_of::<InputSnapshot>();
+        assert!(size <= 512, "InputSnapshot grew to {size} bytes");
+        assert!(size >= 4 * 8 + 10 * core::mem::size_of::<TouchSnapshot>());
     }
 }

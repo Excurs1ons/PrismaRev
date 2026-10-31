@@ -196,6 +196,11 @@ impl InputManager {
     pub fn key_just_released(&self, key: KeyCode) -> bool {
         self.keys_just_released.contains(&key)
     }
+
+    /// 本帧松开的所有按键（宿主填 `InputSnapshot::key_edges` 用）。
+    pub fn released_keys(&self) -> &[KeyCode] {
+        &self.keys_just_released
+    }
     pub fn mouse_held(&self, button: MouseButton) -> bool {
         self.mouse_buttons_held.contains(&button)
     }
