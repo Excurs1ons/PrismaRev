@@ -2046,15 +2046,29 @@ impl Workspace {
         }
     }
 
-    /// 重命名结束：用开始编辑前的快照补一个撤销步（内容没变则不记）。
-    pub fn finish_rename(&mut self, base: SceneDoc) {
+    /// 重命名结束：用开始编辑前的快照补一个撤销步。
+    ///
+    /// `was_dirty` 是开始编辑时文档的脏标记：如果这次编辑最终没改变内容
+    /// （输入后又删回原样），文档要回到原来的状态，而不是因为中途预览过
+    /// 一次就永远带着 `*`（#473）。
+    pub fn finish_rename(&mut self, base: SceneDoc, was_dirty: bool) {
         let after = self.document().doc.clone();
-        if base != after {
-            self.document_mut()
-                .undo
-                .push_snapshot("重命名实体", base, &after);
-            self.document_mut().dirty = true;
+        if base == after {
+            self.document_mut().dirty = was_dirty;
+            return;
         }
+        let document = self.document_mut();
+        document.undo.push_snapshot("重命名实体", base, &after);
+        document.dirty = true;
+    }
+
+    /// 放弃就地重命名：把文档还原成开始编辑前的快照（含脏标记），不记撤销步。
+    ///
+    /// `preview_rename` 会实时改动文档，按 `Esc` 时要把这些预览还原掉（#473）。
+    pub fn cancel_rename(&mut self, base: SceneDoc, was_dirty: bool) {
+        let document = self.document_mut();
+        document.doc = base;
+        document.dirty = was_dirty;
     }
 
     pub fn rename_entity(&mut self, index: usize, name: &str) {
@@ -4686,13 +4700,68 @@ mod tests {
         );
         assert!(!workspace.can_undo(), "预览阶段不产生撤销步");
 
-        workspace.finish_rename(base);
+        workspace.finish_rename(base, false);
         assert_eq!(workspace.document().undo.history().len(), 1);
         workspace.undo();
         assert_eq!(
             workspace.document().doc.entities[0].display_name(),
             "Camera"
         );
+    }
+
+    /// #473：预览不产生撤销步；提交后恰好一步，且撤销能回到原名。
+    #[test]
+    fn finish_rename_pushes_exactly_one_undo_step() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let base = workspace.document().doc.clone();
+        let was_dirty = workspace.document().dirty;
+        assert!(!was_dirty);
+
+        workspace.preview_rename(0, "F");
+        workspace.preview_rename(0, "Floor");
+        assert!(workspace.document().dirty, "预览阶段就要有未保存标记");
+        assert!(!workspace.can_undo(), "预览阶段不产生撤销步");
+
+        workspace.finish_rename(base, was_dirty);
+        assert_eq!(workspace.document().undo.history().len(), 1);
+        assert!(workspace.document().dirty);
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[0].display_name(),
+            "Camera"
+        );
+    }
+
+    /// 输入后又删回原样：既不该留下撤销步，也不该把文档标脏。
+    #[test]
+    fn finishing_an_unchanged_rename_leaves_the_document_clean() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let base = workspace.document().doc.clone();
+
+        workspace.preview_rename(0, "Floor");
+        workspace.preview_rename(0, "Camera");
+        workspace.finish_rename(base, false);
+
+        assert!(!workspace.document().dirty);
+        assert!(!workspace.can_undo());
+    }
+
+    /// Esc：预览过的名字要还原，脏标记也回到编辑前的状态。
+    #[test]
+    fn cancel_rename_restores_the_previous_name_and_dirty_flag() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let base = workspace.document().doc.clone();
+
+        workspace.preview_rename(0, "Floor");
+        assert!(workspace.document().dirty);
+        workspace.cancel_rename(base, false);
+
+        assert_eq!(
+            workspace.document().doc.entities[0].display_name(),
+            "Camera"
+        );
+        assert!(!workspace.document().dirty);
+        assert!(!workspace.can_undo());
     }
 
     #[test]
