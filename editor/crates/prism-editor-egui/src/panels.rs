@@ -387,6 +387,8 @@ enum TreeAction {
     Duplicate(usize),
     CommitRename(usize, String),
     BeginRename(usize, String),
+    /// 双击层级行 = 选中并在 Scene 视图里框住它（Unity 的 `FrameSelected`）。
+    Frame(usize),
 }
 
 /// 层级搜索命中项及其祖先（`path_of` 已包含自身）。
@@ -640,7 +642,8 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                         }
                     }
                     if row.double_clicked() {
-                        action = Some(TreeAction::BeginRename(index, name.clone()));
+                        // 双击 = 定位（#472）；重命名改到 F2，与 Unity 一致。
+                        action = Some(TreeAction::Frame(index));
                     }
                 }
 
@@ -841,6 +844,22 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         }
     }
 
+    // F2 = 就地重命名（Unity 的绑定；macOS 上 Return 同义）。双击已经改成「定位」，
+    // 否则误触双击会直接把实体名变成输入框（#472）。
+    let typing = ui.ctx().memory(|memory| memory.focused()).is_some();
+    let rename_key = ui.input(|input| {
+        input.key_pressed(egui::Key::F2)
+            || (cfg!(target_os = "macos") && input.key_pressed(egui::Key::Enter))
+    });
+    if !typing && rename_key && state.rename.is_none() {
+        if let Some(index) = workspace.primary_selection() {
+            if let Some(entity) = workspace.document().doc.entities.get(index) {
+                let name = entity.display_name();
+                action = Some(TreeAction::BeginRename(index, name));
+            }
+        }
+    }
+
     if let Some(action) = action {
         match action {
             TreeAction::Select(index, extend) => workspace.select(index, extend),
@@ -878,6 +897,10 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             TreeAction::BeginRename(index, name) => {
                 state.rename = Some((index, name));
                 state.rename_focus = true;
+            }
+            TreeAction::Frame(index) => {
+                workspace.select(index, false);
+                workspace.frame_selection();
             }
             TreeAction::CommitRename(index, name) => {
                 let name = name.trim().to_string();
