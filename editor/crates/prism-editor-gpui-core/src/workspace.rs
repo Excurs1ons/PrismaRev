@@ -5182,6 +5182,41 @@ mod tests {
             .is_err());
     }
 
+    /// #471：把资产拖进目录（`move_asset_to_folder`）也要像重命名一样改写引用。
+    #[test]
+    fn moving_an_asset_rewrites_the_references_of_open_documents() {
+        let project = TempProject::new("asset-move-references");
+        std::fs::create_dir_all(project.root.join("assets/meshes")).unwrap();
+        std::fs::write(project.root.join("assets/meshes/cube.fbx"), b"fbx").unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes/a.scene.json"),
+            r#"{"version":3,"entities":[{"id":1,"name":"Mesh","components":{"prism_engine::scene::MeshRenderer":{"mesh_path":"assets/meshes/cube.fbx"}}}]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        workspace.create_asset_folder("assets/moved").unwrap();
+
+        let moved = workspace
+            .move_asset_to_folder("assets/meshes/cube.fbx", Some("assets/moved"))
+            .unwrap();
+        assert_eq!(moved, "assets/moved/cube.fbx");
+        assert!(project.root.join(&moved).is_file());
+        assert!(!project.root.join("assets/meshes/cube.fbx").exists());
+
+        let document = workspace.document();
+        let value = document
+            .doc
+            .entities
+            .iter()
+            .find(|entity| entity.name.as_deref() == Some("Mesh"))
+            .and_then(|entity| entity.component("prism_engine::scene::MeshRenderer"))
+            .and_then(|component| component.get("mesh_path"))
+            .and_then(|value| value.as_str());
+        assert_eq!(value, Some("assets/moved/cube.fbx"));
+        assert!(document.dirty, "文档被改写了就该是 dirty");
+    }
+
     #[test]
     fn snap_ground_and_align_operations() {
         let mut workspace = Workspace::sample();
