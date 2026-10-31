@@ -132,6 +132,15 @@ impl<'a> SceneReadView<'a> {
         super::systems::render::scene_2d_system_into(self.world, out)
     }
 
+    /// 提取 3D 粒子 billboard（已按到 `eye` 的距离**远到近**排序）。
+    pub fn particle_items_into(
+        &self,
+        eye: glam::Vec3,
+        out: &mut Vec<prism_render::ParticleDrawItem>,
+    ) {
+        super::systems::particles::scene_particles_into(self.world, eye, out)
+    }
+
     /// 提取渲染所需的扁平绘制列表，不暴露可变 ECS 访问。
     ///
     /// 委托给 [`crate::scene::systems::render::scene_render_system`]：这里曾经是

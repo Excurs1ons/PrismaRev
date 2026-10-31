@@ -147,6 +147,10 @@ pub struct ForwardPass {
     /// 3D mesh list and before the debug gizmo; owns its pipeline + a
     /// per-frame instance buffer.
     sprites: crate::sprite_pass::SpritePass,
+    /// 3D particle pass (camera-facing billboards with a soft radial falloff).
+    /// Drawn after the opaque mesh list (depth test on, write off) and before
+    /// the 2D sprite pass; owns its pipeline + a per-frame instance buffer.
+    particles: crate::particle_pass::ParticlePass,
     /// World-space XYZ orientation gizmo, drawn on 顶部 of the scene 深度
     /// test 禁用 内置 lazily once the 渲染 pass 存在
     gizmo: Option<Gizmo>,
@@ -204,6 +208,7 @@ impl ForwardPass {
             gi_layout: vk::DescriptorSetLayout::null(),
             skybox: SkyboxPass::new(vk::DescriptorSet::null(), vk::DescriptorSetLayout::null()),
             sprites: crate::sprite_pass::SpritePass::new(),
+            particles: crate::particle_pass::ParticlePass::new(),
             gizmo: None,
             ground_grid: None,
             device: None,
@@ -1657,6 +1662,22 @@ impl RenderPassNode for ForwardPass {
                 } else {
                     ctx.device.cmd_draw(ctx.cmd, uploaded.vertex_count, 1, 0, 0);
                 }
+            }
+        }
+
+        // 世界空间粒子：深度测试开启（被前面的几何遮挡），所以画在不透明网格
+        // 之后、2D 精灵之前；透明排序由引擎在提交前完成（远到近）。
+        if !ctx.frame.particle_items.is_empty() {
+            if let Err(e) = self.particles.draw(
+                ctx.device,
+                ctx.context,
+                ctx.cmd,
+                self.render_pass.unwrap(),
+                &ctx.frame.view_proj,
+                &ctx.frame.inv_view_rot,
+                ctx.frame.particle_items,
+            ) {
+                log::warn!("ParticlePass draw failed (particles skipped): {e:#}");
             }
         }
 

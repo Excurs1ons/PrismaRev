@@ -1,0 +1,382 @@
+//! 世界空间 CPU 粒子模拟（#501 Phase 1）。
+//!
+//! 数据侧只有作者组件 [`ParticleSystem`]；活着的粒子保存在运行时组件
+//! [`ParticleEmitter`] 里，**不进** `.scene.json` / RSCN（和播放头、`SpriteRef`
+//! 一样的约定）。
+//!
+//! 设计取舍：
+//!
+//! - **CPU 模拟 + 实例化 billboard**：先做与 ECS / 场景格式一致的版本，
+//!   GPU（compute + indirect draw）留 Phase 2；
+//! - 粒子在**世界空间**积分，发射器移动不会拖走已飞出的粒子；初速度方向按
+//!   发射器当前的旋转换算；
+//! - 出生时按 `start_speed` / `start_size` / `lifetime` 的区间各取一个随机值，
+//!   颜色在 `start_color → end_color` 之间按年龄线性插值（提取时算，不在模拟里
+//!   存，这样改作者数据立刻生效）；
+//! - 随机源是每个发射器独立的 `xorshift32`（种子 = 实体 id），所以同一场景
+//!   每次加载的粒子分布一致——比 `rand` 依赖更轻，也让单测可复现；
+//! - `dt` 上限 0.1s：编辑器卡一下不会让粒子瞬移穿过整个场景。
+//!
+//! 系统跑在 `Engine::update` 的调度里、`hierarchy_system` 之前（和关键帧动画
+//! 并排），所以同一帧的提取看到的已经是推进后的粒子。
+
+use prism_ecs::{Entity, World};
+
+use crate::scene::components::{LocalToWorld, ParticleShape, ParticleSystem};
+use crate::scene::systems::hierarchy::is_active_in_hierarchy;
+
+/// 单帧最大模拟步长（秒）。更大的 `dt` 被截断，避免卡顿后粒子瞬移。
+pub const MAX_STEP: f32 = 0.1;
+
+/// 单个存活粒子（世界空间）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Particle {
+    /// 世界空间位置。
+    pub position: glam::Vec3,
+    /// 世界空间速度（单位 / 秒）。
+    pub velocity: glam::Vec3,
+    /// 已经存活的时间（秒）。
+    pub age: f32,
+    /// 总寿命（秒）；`age >= lifetime` 时被回收。
+    pub lifetime: f32,
+    /// 世界单位半径。
+    pub size: f32,
+}
+
+/// 发射器的运行时状态（活粒子 + 发射计时 + 随机源）。
+///
+/// 每次场景加载都重置；不进作者格式。
+#[derive(Debug, Default, Clone)]
+pub struct ParticleEmitter {
+    /// 存活粒子（容量复用，不每帧重建）。
+    pub particles: Vec<Particle>,
+    /// 发射累加器（不足一个粒子时保留小数）。
+    pub accumulator: f32,
+    /// 当前发射循环内的时间（秒）。
+    pub cycle_time: f32,
+    /// 本循环的 `burst` 是否已经发射过。
+    pub emitted_burst: bool,
+    /// `xorshift32` 状态；0 表示还没播种。
+    pub rng: u32,
+}
+
+impl ParticleEmitter {
+    /// 用实体 id 播种：同一场景每次加载的粒子分布一致。
+    pub fn seeded(entity: Entity) -> Self {
+        Self {
+            particles: Vec::new(),
+            accumulator: 0.0,
+            cycle_time: 0.0,
+            emitted_burst: false,
+            rng: seed_from_entity(entity),
+        }
+    }
+}
+
+fn seed_from_entity(entity: Entity) -> u32 {
+    // 0 是 xorshift 的非法状态，这里强制非 0。
+    entity.id().wrapping_mul(2_654_435_761).max(1)
+}
+
+/// `xorshift32` → `[0, 1)`。
+fn next_unit(rng: &mut u32) -> f32 {
+    let mut x = *rng;
+    if x == 0 {
+        x = 1;
+    }
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *rng = x;
+    (x >> 8) as f32 / (1u32 << 24) as f32
+}
+
+/// 区间取值 `[min, max]`（非有限 / 倒序时回落到 `fallback`）。
+fn range(range: [f32; 2], t: f32, fallback: f32) -> f32 {
+    ParticleSystem::random_range(range, t, fallback)
+}
+
+fn sanitize_vec3(v: [f32; 3]) -> glam::Vec3 {
+    glam::Vec3::new(
+        if v[0].is_finite() { v[0] } else { 0.0 },
+        if v[1].is_finite() { v[1] } else { 0.0 },
+        if v[2].is_finite() { v[2] } else { 0.0 },
+    )
+}
+
+fn random_unit(rng: &mut u32) -> glam::Vec3 {
+    // 拒绝采样：球内均匀随机点归一化；命中概率 ~52%，重试几次就够。
+    for _ in 0..4 {
+        let x = next_unit(rng) * 2.0 - 1.0;
+        let y = next_unit(rng) * 2.0 - 1.0;
+        let z = next_unit(rng) * 2.0 - 1.0;
+        let v = glam::Vec3::new(x, y, z);
+        let len_sq = v.length_squared();
+        if len_sq > 1e-4 && len_sq <= 1.0 {
+            return v / len_sq.sqrt();
+        }
+    }
+    glam::Vec3::Y
+}
+
+/// 发射器局部空间的出生偏移与初速度方向。
+fn spawn_local(
+    shape: ParticleShape,
+    radius: f32,
+    cone_degrees: f32,
+    rng: &mut u32,
+) -> (glam::Vec3, glam::Vec3) {
+    let radius = if radius.is_finite() && radius > 0.0 {
+        radius
+    } else {
+        0.0
+    };
+    match shape {
+        ParticleShape::Point => (glam::Vec3::ZERO, random_unit(rng)),
+        ParticleShape::Sphere => {
+            let dir = random_unit(rng);
+            (dir * radius * next_unit(rng).sqrt(), dir)
+        }
+        ParticleShape::Box => {
+            let offset = glam::Vec3::new(
+                (next_unit(rng) * 2.0 - 1.0) * radius,
+                (next_unit(rng) * 2.0 - 1.0) * radius,
+                (next_unit(rng) * 2.0 - 1.0) * radius,
+            );
+            (offset, random_unit(rng))
+        }
+        ParticleShape::Cone => {
+            // 圆锥绕发射器本地 +Y：先在球面上取一个点，再按 half-angle
+            // 把极角压到 [0, cone]。
+            let cos_max = cone_degrees.clamp(0.0, 180.0).to_radians().cos();
+            let z = 1.0 - next_unit(rng) * (1.0 - cos_max);
+            let phi = next_unit(rng) * std::f32::consts::TAU;
+            let sin_theta = (1.0 - z * z).max(0.0).sqrt();
+            let dir = glam::Vec3::new(sin_theta * phi.cos(), z, sin_theta * phi.sin());
+            let offset = dir * radius * next_unit(rng).sqrt();
+            (offset, dir)
+        }
+    }
+}
+
+fn spawn_particle(
+    system: &ParticleSystem,
+    emitter: &mut ParticleEmitter,
+    origin: glam::Vec3,
+    rotation: glam::Quat,
+) {
+    let (offset, direction) = spawn_local(
+        system.shape,
+        system.shape_radius,
+        system.cone_angle_degrees,
+        &mut emitter.rng,
+    );
+    let speed = range(system.start_speed, next_unit(&mut emitter.rng), 1.0).max(0.0);
+    let size = range(system.start_size, next_unit(&mut emitter.rng), 0.2).max(0.0);
+    let lifetime = range(system.lifetime, next_unit(&mut emitter.rng), 1.0).max(0.0);
+    emitter.particles.push(Particle {
+        position: origin + rotation * offset,
+        velocity: rotation * direction * speed,
+        age: 0.0,
+        lifetime,
+        size,
+    });
+}
+
+/// 推进所有 `ParticleSystem` 实体：积分已有粒子、按 emission 规则发射新粒子。
+///
+/// 返回本帧结束时存活的粒子总数（编辑器 / 测试用）。
+pub fn particle_system(world: &mut World, dt: f32) -> usize {
+    if !dt.is_finite() || dt < 0.0 {
+        return 0;
+    }
+    let dt = dt.min(MAX_STEP);
+
+    let entities: Vec<Entity> = world
+        .query::<ParticleSystem>()
+        .filter(|(entity, _)| is_active_in_hierarchy(world, *entity))
+        .map(|(entity, _)| entity)
+        .collect();
+
+    let mut alive = 0usize;
+    for entity in entities {
+        // 作者组件可能刚被删除；先拷一份，避免借用冲突。
+        let Some(system) = world.get::<ParticleSystem>(entity).cloned() else {
+            continue;
+        };
+        let transform = world
+            .get::<LocalToWorld>(entity)
+            .map(|t| t.0)
+            .unwrap_or(glam::Mat4::IDENTITY);
+        let (scale, rotation, translation) = transform.to_scale_rotation_translation();
+        // 无效矩阵（NaN / 零缩放）时按单位变换处理，别把粒子射到无穷远。
+        let rotation = if rotation.is_finite() {
+            rotation.normalize()
+        } else {
+            glam::Quat::IDENTITY
+        };
+        let origin = if translation.is_finite() {
+            translation
+        } else {
+            glam::Vec3::ZERO
+        };
+        let _ = scale;
+
+        if world.get::<ParticleEmitter>(entity).is_none() {
+            world.insert(entity, ParticleEmitter::seeded(entity));
+        }
+        let Some(mut emitter) = world.remove::<ParticleEmitter>(entity) else {
+            continue;
+        };
+
+        step(&system, &mut emitter, origin, rotation, dt);
+        alive += emitter.particles.len();
+        world.insert(entity, emitter);
+    }
+    alive
+}
+
+fn step(
+    system: &ParticleSystem,
+    emitter: &mut ParticleEmitter,
+    origin: glam::Vec3,
+    rotation: glam::Quat,
+    dt: f32,
+) {
+    if !system.playing {
+        // 暂停：粒子停在原地，也不再积累发射计数。
+        return;
+    }
+
+    // 1. 积分 + 回收。
+    //    阻尼按「每秒衰减 drag 比例」处理：`(1 - drag)^dt`，与帧率无关。
+    let drag = if system.drag.is_finite() {
+        system.drag.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let damping = (1.0 - drag).max(0.0).powf(dt.max(0.0));
+    let gravity = sanitize_vec3(system.gravity);
+    for particle in &mut emitter.particles {
+        particle.age += dt;
+        particle.velocity += gravity * dt;
+        particle.velocity *= damping;
+        particle.position += particle.velocity * dt;
+    }
+    emitter.particles.retain(|p| p.age < p.lifetime);
+
+    // 2. 发射窗口（duration / looping）。`duration == 0` = 一直发射。
+    //
+    // 先按「本步开始时」的窗口状态发射，再把 `cycle_time` 往前推：这样
+    // `duration = 0.2` 的发射器能发满最后那一小段，而不是在恰好到点的那一帧
+    // 提前停下。
+    let duration = system.emission_duration();
+    let emitting = match duration {
+        None => true,
+        Some(duration) => system.looping || emitter.cycle_time < duration,
+    };
+
+    let cap = system.particle_cap();
+
+    // 3. burst：每个循环开始时一次性发射。
+    if !emitter.emitted_burst {
+        let burst = system.burst.min(cap as u32);
+        for _ in 0..burst {
+            if emitter.particles.len() >= cap {
+                break;
+            }
+            spawn_particle(system, emitter, origin, rotation);
+        }
+        emitter.emitted_burst = true;
+    }
+
+    // 4. 持续发射。
+    if emitting {
+        emitter.accumulator += system.rate() * dt;
+        while emitter.accumulator >= 1.0 {
+            emitter.accumulator -= 1.0;
+            if emitter.particles.len() >= cap {
+                emitter.accumulator = 0.0;
+                break;
+            }
+            spawn_particle(system, emitter, origin, rotation);
+        }
+    } else {
+        emitter.accumulator = 0.0;
+    }
+
+    if emitter.particles.len() > cap {
+        emitter.particles.truncate(cap);
+    }
+
+    // 5. 推进发射窗口：到点后循环回 0（重新计 burst）或停在终点。
+    if let Some(duration) = duration {
+        emitter.cycle_time += dt;
+        if emitter.cycle_time >= duration {
+            if system.looping {
+                emitter.cycle_time = emitter.cycle_time.rem_euclid(duration);
+                emitter.emitted_burst = false;
+            } else {
+                emitter.cycle_time = duration;
+            }
+        }
+    }
+}
+
+/// 粒子当前颜色：`start_color → end_color` 按年龄线性插值。
+///
+/// `t` 超出 `[0, 1]` 时钳到端点，所以颜色永远在作者给的两个值之间。
+pub fn particle_color(system: &ParticleSystem, particle: &Particle) -> [f32; 4] {
+    let t = if particle.lifetime > 0.0 {
+        (particle.age / particle.lifetime).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let lerp = |a: f32, b: f32| a + (b - a) * t;
+    [
+        lerp(system.start_color[0], system.end_color[0]),
+        lerp(system.start_color[1], system.end_color[1]),
+        lerp(system.start_color[2], system.end_color[2]),
+        lerp(system.start_color[3], system.end_color[3]),
+    ]
+}
+
+/// 提取所有可见发射器的粒子为 billboard 绘制项，按到相机的距离**远到近**排序。
+///
+/// 只读；不修改模拟状态。没有 `ParticleSystem` 的孤儿 `ParticleEmitter`
+/// （作者删了组件）被跳过。
+pub fn scene_particles_into(
+    world: &World,
+    eye: glam::Vec3,
+    out: &mut Vec<prism_render::ParticleDrawItem>,
+) {
+    out.clear();
+    for (entity, emitter) in world.query::<ParticleEmitter>() {
+        let Some(system) = world.get::<ParticleSystem>(entity) else {
+            continue;
+        };
+        if !is_active_in_hierarchy(world, entity) {
+            continue;
+        }
+        out.extend(
+            emitter
+                .particles
+                .iter()
+                .map(|particle| prism_render::ParticleDrawItem {
+                    center: particle.position.to_array(),
+                    size: particle.size,
+                    color: particle_color(system, particle),
+                }),
+        );
+    }
+
+    out.sort_by(|a, b| {
+        let da = glam::Vec3::from_array(a.center).distance_squared(eye);
+        let db = glam::Vec3::from_array(b.center).distance_squared(eye);
+        db.total_cmp(&da)
+    });
+}
+
+#[cfg(test)]
+#[path = "particle_tests.rs"]
+mod particle_tests;

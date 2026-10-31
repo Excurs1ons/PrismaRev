@@ -356,3 +356,41 @@ fn mesh_renderer_state_defaults_and_round_trips() {
     // 标准 alpha 混合 = 透明。
     assert!(back.blends());
 }
+
+#[test]
+fn particle_system_round_trips_with_variant_names() {
+    let system = ParticleSystem {
+        emission_rate: 12.0,
+        burst: 3,
+        duration: 2.0,
+        lifetime: [0.5, 1.5],
+        shape: ParticleShape::Sphere,
+        shape_radius: 0.75,
+        ..ParticleSystem::default()
+    };
+
+    // 作者格式用变体名（与 `CameraClearFlags` / `TextAlign` 一致）。
+    let json = serde_json::to_value(&system).unwrap();
+    assert_eq!(json["shape"], serde_json::json!("Sphere"));
+    assert_eq!(json["emission_rate"], serde_json::json!(12.0));
+
+    let back: ParticleSystem = serde_json::from_value(json).unwrap();
+    assert_eq!(back.shape, ParticleShape::Sphere);
+    assert_eq!(back.burst, 3);
+    assert_eq!(back.lifetime, [0.5, 1.5]);
+}
+
+#[test]
+fn a_particle_system_without_fields_falls_back_to_the_defaults() {
+    // 缺少字段保持默认（跨版本兼容）。
+    let system: ParticleSystem = serde_json::from_str("{}").unwrap();
+    assert_eq!(system.shape, ParticleShape::Cone);
+    assert!(system.playing);
+    assert_eq!(system.particle_cap(), 256);
+    assert_eq!(system.emission_duration(), None);
+    assert_eq!(ParticleSystem::random_range([2.0, 1.0], 0.25, 0.0), 1.25);
+    assert_eq!(
+        ParticleSystem::random_range([f32::NAN, 1.0], 0.25, 7.0),
+        7.0
+    );
+}

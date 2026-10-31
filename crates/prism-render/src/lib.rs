@@ -63,6 +63,7 @@ pub mod ibl;
 pub mod managers;
 pub mod mesh;
 pub mod offscreen;
+pub mod particle_pass;
 pub mod pipeline;
 pub mod plugin;
 pub mod post;
@@ -116,15 +117,17 @@ pub use ground_grid::GroundGrid;
 #[cfg(feature = "gtao")]
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
+pub use particle_pass::ParticlePass;
 pub use pipeline::GraphicsPipeline;
 pub use post::PostPass;
 pub use probe_loader::{load_probe_volume, save_probe_volume, ProbeVolumeData};
 #[cfg(feature = "pathtrace")]
 pub use pt_pass::PathTracePass;
 pub use render_graph::{
-    sort_draw_items, DrawItem, DrawState, PassInfo, PassKind, RenderGraphSnapshot, RenderMode,
-    RenderSettings, ResourceHandle, ResourceInfo, ResourceType, ShadowMode, SpriteDrawItem,
-    FORWARD_COLOR_H, FORWARD_DEPTH_H, FORWARD_NORMAL_H, PT_COLOR_H, SHADOW_MAP_H,
+    sort_draw_items, DrawItem, DrawState, ParticleDrawItem, PassInfo, PassKind,
+    RenderGraphSnapshot, RenderMode, RenderSettings, ResourceHandle, ResourceInfo, ResourceType,
+    ShadowMode, SpriteDrawItem, FORWARD_COLOR_H, FORWARD_DEPTH_H, FORWARD_NORMAL_H, PT_COLOR_H,
+    SHADOW_MAP_H,
 };
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;

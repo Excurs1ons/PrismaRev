@@ -183,6 +183,13 @@ compile_stage sprites vertexMain vertex
 compile_stage sprites fragmentMain fragment
 emit_reflection sprites vertexMain vertex fragmentMain fragment
 
+# particles: vertex + fragment (world-space billboards, no texture: the radial
+# alpha falloff is computed from the quad UV). Drawn inside ForwardPass' HDR
+# render pass with the depth test on, so scene geometry occludes them.
+compile_stage particles vertexMain vertex
+compile_stage particles fragmentMain fragment
+emit_reflection particles vertexMain vertex fragmentMain fragment
+
 # rt_render: vertex + fragment — offscreen shader that renders a 4x4 bitmap
 # pattern (from a CPU-generated 16-bit value) into a RenderTexture. The shader
 # is target-agnostic; RenderToTexturePass binds the RT view as the attachment.

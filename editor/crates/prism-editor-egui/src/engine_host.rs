@@ -630,6 +630,7 @@ impl EngineHost {
             draw_items: &self.packet.draw_items,
             gizmos: &self.packet.gizmos,
             sprite_items: &self.packet.sprite_items,
+            particle_items: &self.packet.particle_items,
             skybox: self.packet.skybox,
             frame_data: &frame_data,
             light_view_proj: scene.light_view_proj.to_cols_array_2d(),
