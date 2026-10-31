@@ -392,6 +392,11 @@ pub struct CameraFrame {
     pub right: [f32; 3],
     pub up: [f32; 3],
     pub forward: [f32; 3],
+    /// 正交半高（世界单位）；`None` = 透视（沿用历史硬编码的 30° 半角）。
+    ///
+    /// [#641] Scene view 的 2D 模式是正交相机，投影 / 拾取射线都要跟着换公式，
+    /// 否则屏幕上的位置和引擎里画出来的对不上。
+    pub ortho_half_height: Option<f32>,
 }
 
 pub fn camera_frame(camera: &OrbitCamera) -> CameraFrame {
@@ -405,6 +410,7 @@ pub fn camera_frame(camera: &OrbitCamera) -> CameraFrame {
         right,
         up,
         forward,
+        ortho_half_height: camera.ortho_half_height(),
     }
 }
 
@@ -450,9 +456,23 @@ pub fn project(
         return None;
     }
     let aspect = (width / height.max(1.0)).max(0.2);
-    let tan_half = 30.0f32.to_radians().tan();
-    let ndc_x = dot(delta, frame.right) / depth / tan_half / aspect;
-    let ndc_y = dot(delta, frame.up) / depth / tan_half;
+    let (ndc_x, ndc_y) = match frame.ortho_half_height {
+        // 正交：屏幕位置与深度无关，半高就是世界单位。
+        Some(half_h) => {
+            let half_h = half_h.max(1e-4);
+            (
+                dot(delta, frame.right) / (half_h * aspect),
+                dot(delta, frame.up) / half_h,
+            )
+        }
+        None => {
+            let tan_half = 30.0f32.to_radians().tan();
+            (
+                dot(delta, frame.right) / depth / tan_half / aspect,
+                dot(delta, frame.up) / depth / tan_half,
+            )
+        }
+    };
     Some((
         (ndc_x * 0.5 + 0.5) * width,
         (1.0 - (ndc_y * 0.5 + 0.5)) * height,
@@ -469,9 +489,22 @@ pub fn ray_from_screen(
     height: f32,
 ) -> ([f32; 3], [f32; 3]) {
     let aspect = (width / height.max(1.0)).max(0.2);
+    let (ndc_x, ndc_y) = (
+        2.0 * x / width.max(1.0) - 1.0,
+        1.0 - 2.0 * y / height.max(1.0),
+    );
+    if let Some(half_h) = frame.ortho_half_height {
+        // 正交：所有射线方向相同，起点在近平面上按半宽 / 半高铺开。
+        let half_h = half_h.max(1e-4);
+        let offset = add(
+            scale(frame.right, ndc_x * half_h * aspect),
+            scale(frame.up, ndc_y * half_h),
+        );
+        return (add(frame.eye, offset), frame.forward);
+    }
     let tan_half = 30.0f32.to_radians().tan();
-    let ndc_x = (2.0 * x / width.max(1.0) - 1.0) * aspect * tan_half;
-    let ndc_y = (1.0 - 2.0 * y / height.max(1.0)) * tan_half;
+    let ndc_x = ndc_x * aspect * tan_half;
+    let ndc_y = ndc_y * tan_half;
     let direction = normalize(add(
         frame.forward,
         add(scale(frame.right, ndc_x), scale(frame.up, ndc_y)),
@@ -534,8 +567,13 @@ pub fn distance_point_segment(point: (f32, f32), a: (f32, f32), b: (f32, f32)) -
 
 /// gizmo 轴的世界长度：保持屏幕上的长度近似恒定。
 pub fn gizmo_world_length(camera: &OrbitCamera, viewport_height: f32) -> f32 {
+    let pixels = GIZMO_SCREEN_PIXELS / viewport_height.max(1.0);
+    if camera.orthographic {
+        // 正交：GIZMO_SCREEN_PIXELS 像素对应 distance（半高）×2 世界单位。
+        return camera.distance.max(0.05) * pixels * 2.0;
+    }
     let tan_half = 30.0f32.to_radians().tan();
-    camera.distance * GIZMO_SCREEN_PIXELS / viewport_height.max(1.0) * 2.0 * tan_half
+    camera.distance * pixels * 2.0 * tan_half
 }
 
 /// 一条 gizmo 轴的屏幕端点 `(start, end, 每世界单位像素)`。
@@ -819,7 +857,58 @@ mod tests {
             yaw: 0.0,
             pitch: 0.0,
             distance: 10.0,
+            orthographic: false,
         }
+    }
+
+    fn camera_2d() -> OrbitCamera {
+        let mut camera = camera();
+        camera.set_2d(true);
+        camera
+    }
+
+    /// #641：2D 视图是正交投影，屏幕位置与深度无关。
+    #[test]
+    fn ortho_projection_ignores_depth() {
+        let camera = camera_2d();
+        let frame = camera_frame(&camera);
+        let near = project([1.0, 0.5, 0.0], &frame, 800.0, 600.0).unwrap();
+        let far = project([1.0, 0.5, -6.0], &frame, 800.0, 600.0).unwrap();
+        assert!((near.0 - far.0).abs() < 1e-4);
+        assert!((near.1 - far.1).abs() < 1e-4);
+        // 半高 = distance = 10 → 600px 高的视口里每世界单位 30px：
+        // +1 X 右移 30px、+0.5 Y 上抬 15px。
+        assert!((near.0 - 430.0).abs() < 1e-3);
+        assert!((near.1 - 285.0).abs() < 1e-3);
+    }
+
+    /// 正交射线互相平行，起点按像素铺开；正中那条就从 eye 出发。
+    #[test]
+    fn ortho_rays_are_parallel() {
+        let camera = camera_2d();
+        let frame = camera_frame(&camera);
+        let (o_center, d_center) = ray_from_screen(400.0, 300.0, &frame, 800.0, 600.0);
+        let (o_side, d_side) = ray_from_screen(700.0, 100.0, &frame, 800.0, 600.0);
+        for axis in 0..3 {
+            assert!((d_center[axis] - d_side[axis]).abs() < 1e-5);
+        }
+        assert!((o_center[0] - frame.eye[0]).abs() < 1e-4);
+        assert!((o_center[1] - frame.eye[1]).abs() < 1e-4);
+        assert!(o_side[0] > o_center[0], "屏幕右移 → 起点沿 +X 平移");
+        assert!(o_side[1] > o_center[1], "屏幕上移 → 起点沿 +Y 平移");
+        // 中心射线命中盒子；横向平移 10 个世界单位的那条直接打空
+        // （正交没有近大远小，不会因为「更靠近相机」而命中）。
+        assert!(ray_box(o_center, d_center, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5]).is_some());
+        assert!(ray_box(o_side, d_side, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5]).is_none());
+    }
+
+    #[test]
+    fn ortho_gizmo_length_follows_the_ortho_size() {
+        let camera = camera_2d();
+        let length = gizmo_world_length(&camera, 600.0);
+        let expected = camera.distance * GIZMO_SCREEN_PIXELS / 600.0 * 2.0;
+        assert!((length - expected).abs() < 1e-4);
+        assert!(length.is_finite());
     }
 
     #[test]

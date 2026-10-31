@@ -2483,6 +2483,20 @@ impl EditorApp {
                 self.workspace.show_selection_outline = !outline_on;
                 self.mark_scene_dirty();
             }
+            let view_2d = self.workspace.camera.orthographic;
+            if ui
+                .selectable_label(view_2d, "2D")
+                .on_hover_text(
+                    "Orthographic XY view for sprites and UI (locks the orbit, pan and zoom only)",
+                )
+                .clicked()
+            {
+                self.workspace.camera.toggle_2d();
+                self.mark_scene_dirty();
+                if let Some(view) = self.scene_view.as_mut() {
+                    view.mark_dirty();
+                }
+            }
             let mut settings = self.render_settings.clone();
             if panels::scene_render_mode_combo(ui, &mut settings) {
                 self.apply_render_settings(settings);
@@ -3136,14 +3150,9 @@ impl EditorApp {
                     view.mark_dirty();
                 }
             }
-            let camera = self.workspace.camera.clone();
+            let camera = self.workspace.camera;
             if let Some(view) = self.scene_view.as_mut() {
-                view.host.place_editor_camera(
-                    camera.yaw,
-                    camera.pitch,
-                    camera.distance,
-                    camera.target,
-                );
+                view.host.place_editor_camera(&camera);
             }
         }
 
