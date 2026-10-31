@@ -107,12 +107,85 @@ pub fn ui_layout_system(world: &mut World) {
             if let Some(layout) = world.get_mut::<ComputedLayout>(entity) {
                 layout.rect = rect;
             } else {
-                world.insert(entity, ComputedLayout { rect });
+                world.insert(entity, ComputedLayout::from_rect(rect));
             }
             resolved.insert(entity, rect);
         }
 
         remaining = next_pass;
+    }
+
+    assign_draw_order(world);
+}
+
+/// 给每个 UI 实体算 `ComputedLayout::order`（绘制顺序）。
+///
+/// 语义对齐 UGUI：**同一父级下按兄弟顺序深度优先遍历**，父先于子，一个节点的
+/// 整棵子树都排在它的下一个兄弟之前。这样「后加的全屏遮罩」才能盖住前面的标题
+/// 文字（#462），而不是永远按 0/1 两个 layer 分批画。
+///
+/// 兄弟顺序取 `.scene.json` 的 `id`（`SceneEntityId`）；运行时 `spawn` 出来的
+/// 实体没有它，排在所有场景实体之后（按实体分配下标），和 UGUI 里新
+/// `Instantiate` 的兄弟默认追加到末尾一致。
+pub fn assign_draw_order(world: &mut World) {
+    use std::collections::HashMap;
+
+    let mut children: HashMap<prism_ecs::Entity, Vec<prism_ecs::Entity>> = HashMap::new();
+    let mut roots: Vec<prism_ecs::Entity> = Vec::new();
+    let mut all: Vec<prism_ecs::Entity> = Vec::new();
+
+    for (entity, _node, _style) in world.query2::<Node, Style>() {
+        all.push(entity);
+    }
+
+    let is_ui: std::collections::HashSet<prism_ecs::Entity> = all.iter().copied().collect();
+
+    for &entity in &all {
+        match world
+            .get::<prism_scene::components::Parent>(entity)
+            .map(|parent| parent.0)
+            .filter(|parent| is_ui.contains(parent))
+        {
+            Some(parent) => children.entry(parent).or_default().push(entity),
+            None => roots.push(entity),
+        }
+    }
+
+    let key = |world: &World, entity: prism_ecs::Entity| -> (u32, u32) {
+        let scene_id = world
+            .get::<crate::scene::components::SceneEntityId>(entity)
+            .map(|id| id.0)
+            .unwrap_or(u32::MAX);
+        (scene_id, entity.id())
+    };
+
+    roots.sort_by_key(|entity| key(world, *entity));
+    for list in children.values_mut() {
+        list.sort_by_key(|entity| key(world, *entity));
+    }
+
+    // 深度优先前序；`depth` 只是防御 Parent 成环（环里的节点会在自己的子树里
+    // 再次出现，但不至于无限递归）。
+    let mut order: u32 = 0;
+    let mut stack: Vec<(prism_ecs::Entity, u32)> =
+        roots.into_iter().rev().map(|entity| (entity, 0)).collect();
+    let mut seen: std::collections::HashSet<prism_ecs::Entity> = std::collections::HashSet::new();
+
+    while let Some((entity, depth)) = stack.pop() {
+        if !seen.insert(entity) {
+            continue;
+        }
+        if let Some(layout) = world.get_mut::<ComputedLayout>(entity) {
+            layout.order = order;
+            order = order.saturating_add(1);
+        }
+        if depth < 64 {
+            if let Some(kids) = children.get(&entity) {
+                for &kid in kids.iter().rev() {
+                    stack.push((kid, depth + 1));
+                }
+            }
+        }
     }
 }
 

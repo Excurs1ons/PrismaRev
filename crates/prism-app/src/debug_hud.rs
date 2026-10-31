@@ -82,7 +82,7 @@ impl DebugHud {
         }
 
         if !has_camera {
-            ui.texts.push(UiTextInput {
+            ui.push_text(UiTextInput {
                 rect: [0.0, (height * 0.5 - 12.0).max(0.0), width, 24.0],
                 content: "[ No camera ]".to_string(),
                 font_size: 20.0,
@@ -92,7 +92,7 @@ impl DebugHud {
         }
 
         for (i, line) in lines.iter().enumerate() {
-            ui.texts.push(UiTextInput {
+            ui.push_text(UiTextInput {
                 rect: [
                     MARGIN,
                     MARGIN + i as f32 * LINE_HEIGHT,

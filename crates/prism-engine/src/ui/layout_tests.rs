@@ -56,7 +56,7 @@ fn stale_computed_layout_is_overwritten() {
     let entity = world.spawn();
     world.insert(entity, Node {});
     world.insert(entity, Style::fixed(200.0, 100.0));
-    world.insert(entity, ComputedLayout { rect: [9.0; 4] });
+    world.insert(entity, ComputedLayout::from_rect([9.0; 4]));
 
     ui_layout_system(&mut world);
 

@@ -10,7 +10,7 @@ use prism_scene::HierarchyHelper;
 fn spawn_ui(world: &mut World, rect: [f32; 4], visible: bool) -> Entity {
     let entity = world.spawn();
     world.insert(entity, Node {});
-    world.insert(entity, ComputedLayout { rect });
+    world.insert(entity, ComputedLayout::from_rect(rect));
     world.insert(
         entity,
         Style {

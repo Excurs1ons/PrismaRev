@@ -2,7 +2,7 @@
 //!
 //! `Active` 是层级面板眼睛按钮写入的组件，缺失视为激活；父级关闭要连带隐藏子树。
 
-use super::{convert_ui_draw_list_to_overlay, ui_render_system, UiDrawList};
+use super::{convert_ui_draw_list_to_overlay, ui_render_system, UiDrawItem, UiDrawList};
 use crate::ui::components::*;
 use crate::ui::input::{ui_input_system, UiInputState};
 use crate::ui::{is_ui_active, ScreenSize};
@@ -26,7 +26,7 @@ fn spawn_quad(world: &mut World, rect: [f32; 4]) -> Entity {
             ..Style::default()
         },
     );
-    world.insert(entity, ComputedLayout { rect });
+    world.insert(entity, ComputedLayout::from_rect(rect));
     entity
 }
 
@@ -34,7 +34,7 @@ fn spawn_text(world: &mut World, rect: [f32; 4], content: &str) -> Entity {
     let entity = world.spawn();
     world.insert(entity, Node {});
     world.insert(entity, Style::default());
-    world.insert(entity, ComputedLayout { rect });
+    world.insert(entity, ComputedLayout::from_rect(rect));
     world.insert(
         entity,
         Text {
@@ -49,7 +49,7 @@ fn spawn_interactive(world: &mut World, rect: [f32; 4]) -> Entity {
     let entity = world.spawn();
     world.insert(entity, Node {});
     world.insert(entity, Style::default());
-    world.insert(entity, ComputedLayout { rect });
+    world.insert(entity, ComputedLayout::from_rect(rect));
     world.insert(entity, Interaction::default());
     entity
 }
@@ -68,10 +68,13 @@ fn inactive_entities_are_skipped_by_drawing() {
     ui_render_system(&mut world);
 
     let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
-    assert_eq!(draw_list.quads.len(), 1, "只有激活的 quad 应该被收集");
-    assert_eq!(draw_list.quads[0].rect, [0.0, 0.0, 10.0, 10.0]);
-    assert_eq!(draw_list.texts.len(), 1, "只有激活的文本应该被收集");
-    assert_eq!(draw_list.texts[0].content, "shown");
+    assert_eq!(draw_list.quads().count(), 1, "只有激活的 quad 应该被收集");
+    assert_eq!(
+        draw_list.quads().next().expect("quad").rect,
+        [0.0, 0.0, 10.0, 10.0]
+    );
+    assert_eq!(draw_list.texts().count(), 1, "只有激活的文本应该被收集");
+    assert_eq!(draw_list.texts().next().expect("text").content, "shown");
 
     // 隐藏的实体不会进入上屏数据。
     let overlay = convert_ui_draw_list_to_overlay(&world);
@@ -102,8 +105,8 @@ fn deactivating_a_parent_hides_the_whole_subtree() {
 
     ui_render_system(&mut world);
     let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
-    assert!(draw_list.quads.is_empty());
-    assert!(draw_list.texts.is_empty());
+    assert!(draw_list.quads().count() == 0);
+    assert!(draw_list.texts().count() == 0);
 }
 
 #[test]
@@ -171,10 +174,13 @@ fn invisible_text_is_skipped_like_quads() {
     ui_render_system(&mut world);
 
     let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
-    assert!(draw_list.quads.is_empty(), "隐藏的 quad 不应进绘制列表");
-    assert_eq!(draw_list.texts.len(), 1, "只有可见文本应该被收集");
-    assert_eq!(draw_list.texts[0].content, "shown");
-    assert_eq!(draw_list.texts[0].rect, [0.0, 0.0, 100.0, 20.0]);
+    assert!(draw_list.quads().count() == 0, "隐藏的 quad 不应进绘制列表");
+    assert_eq!(draw_list.texts().count(), 1, "只有可见文本应该被收集");
+    assert_eq!(draw_list.texts().next().expect("text").content, "shown");
+    assert_eq!(
+        draw_list.texts().next().expect("text").rect,
+        [0.0, 0.0, 100.0, 20.0]
+    );
 
     // 上屏数据同样只剩可见文本。
     let overlay = convert_ui_draw_list_to_overlay(&world);
@@ -195,7 +201,7 @@ fn invisible_text_is_skipped_like_quads() {
     );
     ui_render_system(&mut world);
     let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
-    assert_eq!(draw_list.texts.len(), 2, "重新可见后应恢复绘制");
+    assert_eq!(draw_list.texts().count(), 2, "重新可见后应恢复绘制");
 }
 
 #[test]
@@ -203,12 +209,7 @@ fn text_without_style_is_still_drawn() {
     let mut world = world_with_screen();
     let entity = world.spawn();
     world.insert(entity, Node {});
-    world.insert(
-        entity,
-        ComputedLayout {
-            rect: [0.0, 0.0, 10.0, 10.0],
-        },
-    );
+    world.insert(entity, ComputedLayout::from_rect([0.0, 0.0, 10.0, 10.0]));
     world.insert(
         entity,
         Text {
@@ -221,7 +222,7 @@ fn text_without_style_is_still_drawn() {
 
     let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
     assert_eq!(
-        draw_list.texts.len(),
+        draw_list.texts().count(),
         1,
         "缺少 Style 的文本按可见处理（与 `visible` 的默认值一致）"
     );
@@ -249,4 +250,128 @@ fn overlay_ndc_keeps_screen_orientation() {
     let [_, top, _, bottom] = overlay.quads[0].rect;
     assert!(top < bottom, "NDC 上边必须小于下边");
     assert!(top > -1.0, "y=100 应该已经离开屏幕顶");
+}
+
+// ── 层级绘制顺序（#462）────────────────────────────────────────
+
+fn spawn_node(world: &mut World, bg: Option<[f32; 4]>, text: Option<&str>) -> Entity {
+    let entity = world.spawn();
+    world.insert(entity, Node {});
+    world.insert(
+        entity,
+        Style {
+            background: bg.unwrap_or([0.0; 4]),
+            ..Style::default()
+        },
+    );
+    if let Some(content) = text {
+        world.insert(
+            entity,
+            Text {
+                content: content.to_string(),
+                ..Text::default()
+            },
+        );
+    }
+    entity
+}
+
+fn draw_texts(draw_list: &UiDrawList) -> Vec<String> {
+    draw_list.texts().map(|t| t.content.clone()).collect()
+}
+
+#[test]
+fn a_later_sibling_covers_the_text_of_an_earlier_one() {
+    let mut world = world_with_screen();
+
+    let title = spawn_node(&mut world, None, Some("Intro"));
+    let blackout = spawn_node(&mut world, Some([0.0, 0.0, 0.0, 1.0]), None);
+
+    crate::ui::layout::ui_layout_system(&mut world);
+    ui_render_system(&mut world);
+
+    let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
+    // 文本必须在黑场之前画，否则黑场盖不住它。
+    assert_eq!(draw_list.items.len(), 2);
+    assert!(
+        matches!(&draw_list.items[0], UiDrawItem::Text(t) if t.content == "Intro"),
+        "标题文本应该先画"
+    );
+    assert!(
+        matches!(&draw_list.items[1], UiDrawItem::Quad(q) if q.color[3] == 1.0),
+        "后加的全屏遮罩应该盖住它"
+    );
+    assert!(
+        world.get::<ComputedLayout>(title).unwrap().order
+            < world.get::<ComputedLayout>(blackout).unwrap().order
+    );
+}
+
+#[test]
+fn children_draw_above_their_parent_even_when_created_first() {
+    let mut world = world_with_screen();
+
+    let child = spawn_node(&mut world, Some([0.0, 1.0, 0.0, 1.0]), None);
+    let parent = spawn_node(&mut world, Some([1.0, 0.0, 0.0, 1.0]), None);
+    HierarchyHelper::reparent(&mut world, child, Some(parent));
+
+    crate::ui::layout::ui_layout_system(&mut world);
+    ui_render_system(&mut world);
+
+    let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
+    assert_eq!(draw_list.items.len(), 2);
+    // 父先画、子后画：子面板永远在父背景之上。
+    assert!(matches!(&draw_list.items[0], UiDrawItem::Quad(q) if q.color[1] == 0.0));
+    assert!(matches!(&draw_list.items[1], UiDrawItem::Quad(q) if q.color[1] == 1.0));
+}
+
+#[test]
+fn siblings_follow_the_document_id_not_the_spawn_order() {
+    let mut world = world_with_screen();
+
+    // 先 spawn 的那个拿到更大的 id：绘制顺序要跟文档顺序走。
+    let later_in_document = spawn_node(&mut world, Some([0.0, 0.0, 1.0, 1.0]), None);
+    let earlier_in_document = spawn_node(&mut world, Some([1.0, 0.0, 0.0, 1.0]), None);
+    world.insert(
+        later_in_document,
+        crate::scene::components::SceneEntityId(7),
+    );
+    world.insert(
+        earlier_in_document,
+        crate::scene::components::SceneEntityId(2),
+    );
+
+    crate::ui::layout::ui_layout_system(&mut world);
+    ui_render_system(&mut world);
+
+    let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
+    // id 2（红）在文档里更靠前，尽管它后 spawn。
+    assert!(matches!(&draw_list.items[0], UiDrawItem::Quad(q) if q.color[0] == 1.0));
+    assert!(matches!(&draw_list.items[1], UiDrawItem::Quad(q) if q.color[2] == 1.0));
+}
+
+#[test]
+fn an_external_layer_still_draws_above_the_whole_ui() {
+    let mut world = world_with_screen();
+
+    spawn_node(&mut world, Some([1.0, 0.0, 0.0, 1.0]), Some("Intro"));
+
+    world.insert_resource(crate::ui::ExternalUiQuads(vec![crate::ui::UiQuad {
+        rect: [0.0, 0.0, 8.0, 6.0],
+        color: [0.5, 0.5, 0.5, 1.0],
+        border_radius: 0.0,
+        layer: 1,
+        ..crate::ui::UiQuad::default()
+    }]));
+
+    crate::ui::layout::ui_layout_system(&mut world);
+    ui_render_system(&mut world);
+
+    let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
+    assert_eq!(draw_list.items.len(), 3);
+    assert!(
+        matches!(&draw_list.items[2], UiDrawItem::Quad(q) if q.layer == 1),
+        "layer 1 的外部 quad 必须画在所有 layer 0 之上"
+    );
+    assert_eq!(draw_texts(draw_list), vec!["Intro".to_string()]);
 }

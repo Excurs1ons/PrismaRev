@@ -185,9 +185,22 @@ pub struct ComputedLayout {
     /// 屏幕空间边界 `[left, top, width, height]`
     #[serde(default)]
     pub rect: [f32; 4],
+    /// 层级绘制顺序（深度优先前序：父在前，子在后，兄弟按文档顺序）。
+    ///
+    /// 由布局系统每帧重算，和 `rect` 一样是**派生值**——作者不写它，`.scene.json`
+    /// 里也没有这个字段。同一实体的背景和文本共用同一个 `order`（靠
+    /// [`crate::ui`] 的绘制列表再按「先矩形后文本」区分），所以兄弟节点的 z 序
+    /// 就是层级面板里看到的顺序（见 #462）。
+    #[serde(default)]
+    pub order: u32,
 }
 
 impl ComputedLayout {
+    /// 只带矩形的布局（顺序留 0，由布局系统随后填充）。
+    pub fn from_rect(rect: [f32; 4]) -> Self {
+        Self { rect, order: 0 }
+    }
+
     pub fn left(&self) -> f32 {
         self.rect[0]
     }
