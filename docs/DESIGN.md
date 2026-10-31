@@ -1180,9 +1180,12 @@ profile、同一 target、同一条构建命令，差值只来自文本后端。
 
 | profile | 用途 | 关键设置 |
 |---|---|---|
-| `dev` | 开发、编辑器 | `opt-level = 1`、完整调试信息、`panic = unwind` |
+| `dev` | 开发、编辑器 | `opt-level = 1`、`line-tables-only` 调试信息（依赖不带）、`panic = unwind` |
 | `release` | 编辑器 / 工具 / CI | `opt-level = 3`、`lto = "thin"`、`panic = unwind` |
 | `dist` | 玩家 / Android 打包 | `lto = "fat"`、`codegen-units = 1`、`panic = "abort"`、`strip = "symbols"` |
+
+`dev` 只保留行号表：workspace crate 仍能定位 panic 的 file:line，依赖 crate 不带 DWARF。
+完整调试信息会让 `target/` 与 `incremental/` 膨胀到数 GB，对日常调试的收益很低。
 
 `panic = "abort"` **不能**进 `release`：editor 在进程内跑引擎，abort 会让整个编辑器
 崩溃而不是让某个视口失败。用法：`cargo build --profile dist`（Android 打包脚本已切到它）。

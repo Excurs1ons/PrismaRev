@@ -95,6 +95,12 @@ rand = "0.10.2"
 
 [profile.dev]
 opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug builds usable
+# 本仓库 crate 保留行号表，足够定位 panic；完整 DWARF 会让 target/ 与 incremental 膨胀到数 GB。
+debug = "line-tables-only"
+
+# 依赖的调试信息基本用不上，去掉可再省一大截；本仓库 crate 仍保留行号。
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 opt-level = 3
