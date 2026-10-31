@@ -734,6 +734,15 @@ impl EditorApp {
         if command == Command::Stop && was_playing {
             self.playing = false;
             self.paused = false;
+            // 播放期间的编辑已经被 `workspace.stop()` 丢弃（#500）：先把预览文件写回编辑态，
+            // 否则 Game view 会从「被丢弃的那份文档」重新加载。
+            let discarded = self.pending_doc.is_some();
+            self.write_preview_scene();
+            self.pending_since = None;
+            if discarded {
+                self.state.status =
+                    "Stopped Play — edits made while playing were discarded".to_string();
+            }
             // Stop must clear the live runtime immediately; do not wait for the
             // document debounce path to reload the Game view.
             if let Some(view) = self.game_view.as_mut() {
@@ -747,6 +756,9 @@ impl EditorApp {
             }
             self.doc_hash = document_hash(&self.workspace);
             self.pending_doc = None;
+            if let Some(view) = self.scene_view.as_mut() {
+                view.mark_dirty();
+            }
         }
         if command == Command::Pause || command == Command::Step {
             self.paused = self.workspace.paused;
