@@ -1046,7 +1046,21 @@ impl ViewportState {
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
             if scroll.abs() > 0.0 {
-                workspace.camera.zoom(scroll);
+                // 缩放到光标（#511）：取光标射线上距离等于 `distance` 的世界点当锚点，
+                // 缩放后它留在原地。相机可能在本帧前面的轨道 / 平移里已经动过，重新取帧。
+                let frame = vm::camera_frame(&workspace.camera);
+                let anchor = response.hover_pos().map(|pos| {
+                    let (x, y) = local_of(pos);
+                    let (origin, direction) =
+                        vm::ray_from_screen(x, y, &frame, rect.width(), rect.height());
+                    let distance = workspace.camera.distance;
+                    [
+                        origin[0] + direction[0] * distance,
+                        origin[1] + direction[1] * distance,
+                        origin[2] + direction[2] * distance,
+                    ]
+                });
+                workspace.camera.zoom_towards(scroll, anchor);
                 self.dirty = true;
             }
         }
