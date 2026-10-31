@@ -92,6 +92,11 @@ pub fn asset_kind(path: &str) -> crate::assets::AssetKind {
     if lower.ends_with(".prefab.json") {
         return AssetKind::Prefab;
     }
+    // `.mat.json` 是材质作者数据（`MaterialDef` / cooker 的 `.mat.json` schema），
+    // 不能落到下面的 `json` 分支变成「数据」（#488）。
+    if lower.ends_with(".mat.json") {
+        return AssetKind::Material;
+    }
     match lower.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("") {
         "fbx" | "obj" | "gltf" | "glb" | "rmesh" | "dae" | "blend" => AssetKind::Model,
         "png" | "jpg" | "jpeg" | "webp" | "tga" | "bmp" | "ktx2" | "rtex" => AssetKind::Texture,
@@ -197,6 +202,38 @@ pub fn file_mtime(root: &Path, relative: &str) -> Option<std::time::SystemTime> 
     fs::metadata(root.join(relative)).ok()?.modified().ok()
 }
 
+/// 资产是否是「按 JSON 手改」的类型（材质 `.mat.json` / `.asset.json`）。
+///
+/// 这两类没有专门的文档模型，编辑器把文件当普通 JSON 值编辑（#488）。
+pub fn is_json_editable_asset(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".mat.json") || lower.ends_with(".asset.json")
+}
+
+/// 读一个 JSON 资产（不解析成任何具体结构，保留未知字段）。
+pub fn read_json_asset(root: &Path, relative: &str) -> io::Result<serde_json::Value> {
+    let text = fs::read_to_string(root.join(relative))?;
+    serde_json::from_str(&text)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+}
+
+/// 原子写入一个 JSON 资产（2 空格缩进 + 末尾换行，和场景文件一致）。
+pub fn write_json_asset(root: &Path, relative: &str, value: &serde_json::Value) -> io::Result<()> {
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut text = serde_json::to_string_pretty(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    text.push('\n');
+    // 材质的校验器是「任意合法 JSON」，不是 `SceneDoc`（#488）。
+    atomic_write_verified(&path, &text, |text| {
+        serde_json::from_str::<serde_json::Value>(text)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
 /// 写回一个文档（自动创建父目录，2 空格缩进，与作者格式一致）。
 ///
 /// 保存必须是**原子**的：先写 `<path>.tmp`、`sync_all`，把旧文件滚成 `<path>.bak`，
@@ -221,6 +258,20 @@ fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
+    // 场景文档的写入要能被原样读回（截断 / 写坏时回滚）。
+    atomic_write_verified(path, text, |text| {
+        serde_json::from_str::<SceneDoc>(text)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// [`atomic_write`] 的通用版本：`verify` 决定「写进去的内容是否可接受」。
+fn atomic_write_verified(
+    path: &Path,
+    text: &str,
+    verify: impl Fn(&str) -> Result<(), String>,
+) -> io::Result<()> {
     use std::io::Write as _;
 
     let tmp = sibling_path(path, ".tmp");
@@ -253,9 +304,7 @@ fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
     let verified = fs::read_to_string(path)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
         .and_then(|text| {
-            serde_json::from_str::<SceneDoc>(&text)
-                .map(|_| ())
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+            verify(&text).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
         });
     if let Err(error) = verified {
         if had_original {
@@ -470,6 +519,29 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn material_json_is_classified_and_round_trips() {
+        assert_eq!(
+            asset_kind("assets/materials/wood.mat.json"),
+            crate::assets::AssetKind::Material
+        );
+        assert!(is_json_editable_asset("assets/materials/wood.mat.json"));
+        assert!(is_json_editable_asset("assets/asset-defs/m.asset.json"));
+        assert!(!is_json_editable_asset("assets/scenes/a.scene.json"));
+
+        let temp = TempProject::new();
+        let value = serde_json::json!({
+            "type": "material",
+            "base_color": [0.8, 0.4, 0.2, 1.0],
+            "metallic": 0.25,
+        });
+        write_json_asset(&temp.root, "assets/materials/wood.mat.json", &value).unwrap();
+        let read = read_json_asset(&temp.root, "assets/materials/wood.mat.json").unwrap();
+        assert_eq!(read["metallic"], serde_json::json!(0.25));
+        // 未知字段必须原样保留（手改过的材质不能被编辑器吃掉）。
+        assert_eq!(read["type"], serde_json::json!("material"));
     }
 
     #[test]

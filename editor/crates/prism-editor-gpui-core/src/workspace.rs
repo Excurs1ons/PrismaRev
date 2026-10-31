@@ -1029,6 +1029,31 @@ impl Workspace {
     }
 
     /// 重新扫描 `assets/` 并重建资产树（新建目录 / 复制 / 移动后调用）。
+    /// 读一个 JSON 资产（材质 `.mat.json` / `.asset.json`）。
+    pub fn read_asset_json(&self, path: &str) -> io::Result<Value> {
+        let root = self
+            .project_root
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根"))?;
+        project::read_json_asset(&root, path)
+    }
+
+    /// 写回一个 JSON 资产（原子写 + 回读校验），并刷新资产表。
+    pub fn write_asset_json(&mut self, path: &str, value: &Value) -> io::Result<()> {
+        let root = self
+            .project_root
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根"))?;
+        project::write_json_asset(&root, path, value)?;
+        self.refresh_assets();
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已保存材质 {path}"),
+        );
+        Ok(())
+    }
+
     pub fn refresh_assets(&mut self) {
         let Some(root) = self.project_root.clone() else {
             return;
@@ -5423,6 +5448,38 @@ mod tests {
             .visible_rows(&expanded)
             .iter()
             .any(|(node, _)| node.name == "meshes"));
+    }
+
+    #[test]
+    fn material_json_saves_and_reloads_through_the_workspace() {
+        let project = TempProject::new("material-json");
+        std::fs::create_dir_all(project.root.join("assets/materials")).unwrap();
+        std::fs::write(
+            project.root.join("assets/materials/wood.mat.json"),
+            r#"{"type":"material","metallic":0.0,"base_color":[1,1,1,1]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        let mut value = workspace
+            .read_asset_json("assets/materials/wood.mat.json")
+            .unwrap();
+        value["metallic"] = serde_json::json!(0.75);
+        workspace
+            .write_asset_json("assets/materials/wood.mat.json", &value)
+            .unwrap();
+
+        let reread = workspace
+            .read_asset_json("assets/materials/wood.mat.json")
+            .unwrap();
+        assert_eq!(reread["metallic"], serde_json::json!(0.75));
+        // 写盘后资产表里的分类也应该是「材质」而不是「数据」。
+        assert!(workspace
+            .assets
+            .iter()
+            .any(|asset| asset.path == "assets/materials/wood.mat.json"
+                && asset.kind == crate::assets::AssetKind::Material));
     }
 
     #[test]

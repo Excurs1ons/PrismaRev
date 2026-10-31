@@ -183,6 +183,7 @@ fn tab_title(tab: &str) -> &str {
         "build" => "Build",
         "problems" => "Problems",
         "prefabOverrides" => "Prefab Overrides",
+        "material" => "Material",
         "tools" => "Tools",
         "shortcuts" => "Shortcuts",
         "about" => "About",
@@ -2254,6 +2255,10 @@ impl EditorApp {
                         self.workspace.show_panel("prefabOverrides");
                         ui.close();
                     }
+                    if ui.button("Material").clicked() {
+                        self.workspace.show_panel("material");
+                        ui.close();
+                    }
                 });
                 ui.separator();
                 self.menu_do(ui, "Capture Window", |app| app.capture_window_now());
@@ -3097,6 +3102,7 @@ impl EditorApp {
                 panels::problems(ui, &module, &self.build_diagnostics, &mut self.state);
             }
             "prefabOverrides" => panels::prefab_overrides(ui, &mut self.workspace, &mut self.state),
+            "material" => panels::material(ui, &mut self.workspace, &mut self.state),
             "tools" => {
                 panels::tools(ui, &mut self.workspace, &mut self.state);
                 if let Some(kind) = self.state.pending_build.take() {
