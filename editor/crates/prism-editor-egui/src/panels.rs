@@ -4,6 +4,9 @@
 //! 文档模型 / schema / 撤销栈），这里只负责画 egui 控件。
 
 use egui::{Align, Color32, Layout, RichText, Sense, Ui, Vec2};
+use prism_editor_core::settings::{
+    matching_fields, SettingsCache, PROFILE_CHOICES, TARGET_CHOICES,
+};
 use prism_editor_core::{
     AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, SceneDoc, Workspace,
     THEME_PRESETS,
@@ -204,6 +207,9 @@ pub struct UiState {
     pub log_sources: Vec<LogSource>,
     pub log_search: String,
     pub log_autoscroll: bool,
+    /// 项目设置面板的搜索词 + 读盘缓存（`#428`：不要每帧读盘）。
+    pub settings_search: String,
+    pub settings_cache: Option<SettingsCache>,
     pub rename: Option<(usize, String)>,
     /// 重命名刚打开的那一帧要抢一次焦点；之后不能每帧抢，否则
     /// TextEdit 永远保持焦点、点空白处不会退出编辑。
@@ -2560,56 +2566,214 @@ pub fn render_graph(
 // 设置类面板
 // ---------------------------------------------------------------------------
 
+/// 项目设置：`assets/settings.ini` 的 13 个键全部可编辑。
+///
+/// 读盘走 [`SettingsCache`]（首次 / mtime 变化才解析），写盘是显式的 Apply，
+/// 所以敲 `output_dir` 不会把中间态逐字符写进文件（#428）。
 pub fn project_settings(ui: &mut Ui, root: Option<&std::path::Path>, state: &mut UiState) {
     let Some(root) = root else {
         ui.label(RichText::new("Open a project directory first.").weak());
         return;
     };
-    let mut settings = match ProjectSettings::read(root) {
-        Ok(settings) => settings,
-        Err(error) => {
-            ui.label(
-                RichText::new(format!("read assets/settings.ini: {error}"))
-                    .color(egui::Color32::from_rgb(232, 96, 96)),
-            );
-            return;
-        }
+    let same_root = state
+        .settings_cache
+        .as_ref()
+        .is_some_and(|cache| cache.root() == root);
+    let mut cache = if same_root {
+        state.settings_cache.take().unwrap()
+    } else {
+        SettingsCache::load(root)
     };
-    let mut changed = false;
-    egui::Grid::new("project-settings")
-        .num_columns(2)
-        .spacing([8.0, 4.0])
-        .show(ui, |ui| {
-            ui.label("App name");
-            changed |= ui.text_edit_singleline(&mut settings.app.name).changed();
-            ui.end_row();
-            ui.label("Window title");
-            changed |= ui
-                .text_edit_singleline(&mut settings.window.title)
-                .changed();
-            ui.end_row();
-            ui.label("Window size");
-            ui.horizontal(|ui| {
-                changed |= ui
-                    .add(egui::DragValue::new(&mut settings.window.width).speed(1.0))
-                    .changed();
-                changed |= ui
-                    .add(egui::DragValue::new(&mut settings.window.height).speed(1.0))
-                    .changed();
-            });
-            ui.end_row();
-            ui.label("Output dir");
-            changed |= ui
-                .text_edit_singleline(&mut settings.build.output_dir)
-                .changed();
-            ui.end_row();
+    cache.refresh();
+    let mut query = std::mem::take(&mut state.settings_search);
+
+    let mut apply = false;
+    let mut revert = false;
+    let mut reset_all = false;
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut query)
+                .hint_text("Search settings…")
+                .desired_width(170.0),
+        );
+        if cache.is_dirty() {
+            ui.label(
+                RichText::new("● unsaved")
+                    .size(11.0)
+                    .color(Color32::from_rgb(226, 178, 84)),
+            );
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            apply = ui
+                .add_enabled(cache.is_dirty(), egui::Button::new("Apply"))
+                .on_hover_text("Write assets/settings.ini")
+                .clicked();
+            revert = ui
+                .add_enabled(cache.is_dirty(), egui::Button::new("Revert"))
+                .clicked();
+            reset_all = ui
+                .button("Reset all")
+                .on_hover_text("Fill every field with the built-in default")
+                .clicked();
         });
-    if changed {
-        match settings.write(root) {
+    });
+    if cache.external_change() {
+        ui.label(
+            RichText::new(
+                "settings.ini changed on disk while you were editing — Revert reloads it.",
+            )
+            .size(11.0)
+            .color(Color32::from_rgb(226, 178, 84)),
+        );
+    }
+    if let Some(error) = cache.error.clone() {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(error)
+                    .size(11.0)
+                    .color(Color32::from_rgb(232, 96, 96)),
+            );
+            if ui.small_button("Reset to defaults").clicked() {
+                reset_all = true;
+            }
+            if ui.small_button("Reload").clicked() {
+                cache.reload_from_disk();
+            }
+        });
+    }
+    if apply {
+        match cache.apply() {
             Ok(()) => state.status = "assets/settings.ini saved".to_string(),
             Err(error) => state.status = format!("settings save failed: {error}"),
         }
     }
+    if revert {
+        cache.revert();
+        state.status = "settings reverted".to_string();
+    }
+    if reset_all {
+        cache.reset_all();
+    }
+    ui.separator();
+
+    let fields = matching_fields(&query);
+    if fields.is_empty() {
+        ui.label(RichText::new("no matching setting").weak());
+    }
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for section in prism_editor_core::settings::SETTINGS_SECTIONS {
+                let rows: Vec<_> = fields
+                    .iter()
+                    .filter(|field| field.section == *section)
+                    .collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(*section).strong().size(12.0));
+                    if ui
+                        .small_button("Reset")
+                        .on_hover_text(format!("Restore [{section}] to its defaults"))
+                        .clicked()
+                    {
+                        cache.reset_section(section);
+                    }
+                });
+                egui::Grid::new(format!("settings-{section}"))
+                    .num_columns(2)
+                    .spacing([10.0, 4.0])
+                    .show(ui, |ui| {
+                        for field in rows {
+                            ui.label(field.label);
+                            settings_field(ui, &mut cache.settings, field);
+                            ui.end_row();
+                        }
+                    });
+                ui.separator();
+            }
+        });
+
+    state.settings_search = query;
+    state.settings_cache = Some(cache);
+}
+
+/// 一个字段的控件（类型由 `(section, key)` 决定，见 [`SettingsField`]）。
+fn settings_field(
+    ui: &mut Ui,
+    settings: &mut ProjectSettings,
+    field: &prism_editor_core::settings::SettingsField,
+) {
+    match (field.section, field.key) {
+        ("app", "company") => {
+            ui.text_edit_singleline(&mut settings.app.company);
+        }
+        ("app", "name") => {
+            ui.text_edit_singleline(&mut settings.app.name);
+        }
+        ("app", "version") => {
+            ui.text_edit_singleline(&mut settings.app.version);
+        }
+        ("window", "title") => {
+            ui.text_edit_singleline(&mut settings.window.title);
+        }
+        ("window", "width") => {
+            ui.add(
+                egui::DragValue::new(&mut settings.window.width)
+                    .speed(1.0)
+                    .range(320..=16_384),
+            );
+        }
+        ("window", "height") => {
+            ui.add(
+                egui::DragValue::new(&mut settings.window.height)
+                    .speed(1.0)
+                    .range(240..=16_384),
+            );
+        }
+        ("window", "resizable") => {
+            ui.checkbox(&mut settings.window.resizable, "");
+        }
+        ("window", "fullscreen") => {
+            ui.checkbox(&mut settings.window.fullscreen, "");
+        }
+        ("window", "vsync") => {
+            ui.checkbox(&mut settings.window.vsync, "");
+        }
+        ("build", "target") => {
+            settings_choice(ui, field.key, &mut settings.build.target, TARGET_CHOICES);
+        }
+        ("build", "profile") => {
+            settings_choice(ui, field.key, &mut settings.build.profile, PROFILE_CHOICES);
+        }
+        ("build", "output_dir") => {
+            ui.text_edit_singleline(&mut settings.build.output_dir);
+        }
+        ("build", "run_after") => {
+            ui.checkbox(&mut settings.build.run_after, "");
+        }
+        _ => {
+            ui.label(RichText::new("?").weak());
+        }
+    }
+}
+
+/// 下拉选择：常用取值 +「当前值不在列表里时」把它自己也列出来。
+fn settings_choice(ui: &mut Ui, id: &str, value: &mut String, choices: &[&str]) {
+    egui::ComboBox::from_id_salt(("settings-choice", id))
+        .selected_text(value.clone())
+        .width(140.0)
+        .show_ui(ui, |ui| {
+            for choice in choices {
+                if ui.selectable_label(value == choice, *choice).clicked() {
+                    *value = (*choice).to_string();
+                }
+            }
+            if !choices.contains(&value.as_str()) {
+                ui.label(RichText::new(value.clone()).weak());
+            }
+        });
 }
 
 pub fn preferences(

@@ -171,6 +171,247 @@ impl ProjectSettings {
     }
 }
 
+/// `[build] target` 的常用取值（下拉里给提示，不限制手写成别的）。
+pub const TARGET_CHOICES: &[&str] = &["windows", "android", "linux"];
+/// `[build] profile` 的常用取值（与 `scripts/build-dist.*` 的 profile 名一致）。
+pub const PROFILE_CHOICES: &[&str] = &["debug", "release", "dist", "tiny"];
+
+/// 「项目设置」面板的一个可编辑字段。
+///
+/// 这张表是**唯一**的字段清单：面板按它渲染，搜索按它过滤。「13 个键都能改」
+/// 这条承诺由 `every_written_key_is_editable` 测试守着 —— 给 `write()` 加键却
+/// 忘了加表项，测试会红。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingsField {
+    pub section: &'static str,
+    pub key: &'static str,
+    pub label: &'static str,
+    /// 额外的搜索词（中文 / 同义词），不显示。
+    pub keywords: &'static str,
+}
+
+pub const SETTINGS_SECTIONS: &[&str] = &["app", "window", "build"];
+
+pub const SETTINGS_FIELDS: &[SettingsField] = &[
+    SettingsField {
+        section: "app",
+        key: "company",
+        label: "Company",
+        keywords: "公司 厂商 publisher",
+    },
+    SettingsField {
+        section: "app",
+        key: "name",
+        label: "App name",
+        keywords: "名字 应用 package",
+    },
+    SettingsField {
+        section: "app",
+        key: "version",
+        label: "Version",
+        keywords: "版本号 版本",
+    },
+    SettingsField {
+        section: "window",
+        key: "title",
+        label: "Window title",
+        keywords: "标题 窗口",
+    },
+    SettingsField {
+        section: "window",
+        key: "width",
+        label: "Window width",
+        keywords: "宽 分辨率 size",
+    },
+    SettingsField {
+        section: "window",
+        key: "height",
+        label: "Window height",
+        keywords: "高 分辨率 size",
+    },
+    SettingsField {
+        section: "window",
+        key: "resizable",
+        label: "Resizable",
+        keywords: "可缩放 拉伸",
+    },
+    SettingsField {
+        section: "window",
+        key: "fullscreen",
+        label: "Fullscreen",
+        keywords: "全屏",
+    },
+    SettingsField {
+        section: "window",
+        key: "vsync",
+        label: "V-Sync",
+        keywords: "垂直同步 同步",
+    },
+    SettingsField {
+        section: "build",
+        key: "target",
+        label: "Build target",
+        keywords: "平台 目标 android windows",
+    },
+    SettingsField {
+        section: "build",
+        key: "profile",
+        label: "Build profile",
+        keywords: "配置 debug release dist tiny",
+    },
+    SettingsField {
+        section: "build",
+        key: "output_dir",
+        label: "Output dir",
+        keywords: "输出 目录 路径",
+    },
+    SettingsField {
+        section: "build",
+        key: "run_after",
+        label: "Run after build",
+        keywords: "运行 启动 play",
+    },
+];
+
+/// 字段是否命中查询（label / key / 段名 / 关键词，大小写不敏感）。
+pub fn field_matches(field: &SettingsField, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    [field.label, field.key, field.section, field.keywords]
+        .iter()
+        .any(|text| text.to_lowercase().contains(&query))
+}
+
+/// 按搜索词过滤字段表；空查询返回全部。
+pub fn matching_fields(query: &str) -> Vec<&'static SettingsField> {
+    SETTINGS_FIELDS
+        .iter()
+        .filter(|field| field_matches(field, query))
+        .collect()
+}
+
+impl ProjectSettings {
+    /// 恢复某一段的默认值（`app` / `window` / `build`）。
+    pub fn reset_section(&mut self, section: &str) {
+        match section {
+            "app" => self.app = AppSettings::default(),
+            "window" => self.window = WindowSettings::default(),
+            "build" => self.build = BuildSettings::default(),
+            _ => {}
+        }
+    }
+}
+
+/// 面板的读盘缓存：只在「首次 / 文件 mtime 变了 / 手动重载」时解析，
+/// 编辑中的值留在这里，显式 Apply 才落盘（#428 的 1、2、5 条）。
+pub struct SettingsCache {
+    root: PathBuf,
+    /// 编辑中的值。
+    pub settings: ProjectSettings,
+    /// 磁盘上的值（Apply 后同步）。
+    saved: ProjectSettings,
+    /// 上次读到的问题（解析/IO），面板顶部展示。
+    pub error: Option<String>,
+    mtime: Option<std::time::SystemTime>,
+    /// 编辑期间磁盘被改过（面板提示，但不覆盖用户输入）。
+    external_change: bool,
+}
+
+impl SettingsCache {
+    pub fn load(root: impl Into<PathBuf>) -> Self {
+        let mut cache = Self {
+            root: root.into(),
+            settings: ProjectSettings::default(),
+            saved: ProjectSettings::default(),
+            error: None,
+            mtime: None,
+            external_change: false,
+        };
+        cache.reload();
+        cache
+    }
+
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.settings != self.saved
+    }
+
+    pub fn external_change(&self) -> bool {
+        self.external_change
+    }
+
+    /// 文件在磁盘上变了就重读一次。有未保存改动时**不覆盖**编辑中的值，
+    /// 只把 `external_change` 立起来让面板提示。
+    pub fn refresh(&mut self) -> bool {
+        let current = mtime(&ProjectSettings::path(&self.root));
+        if current == self.mtime {
+            return false;
+        }
+        if self.is_dirty() {
+            self.external_change = true;
+            self.mtime = current;
+            return false;
+        }
+        self.reload();
+        true
+    }
+
+    fn reload(&mut self) {
+        self.mtime = mtime(&ProjectSettings::path(&self.root));
+        match ProjectSettings::read(&self.root) {
+            Ok(settings) => {
+                self.settings = settings.clone();
+                self.saved = settings;
+                self.error = None;
+                self.external_change = false;
+            }
+            Err(error) => {
+                self.error = Some(format!("read assets/settings.ini: {error}"));
+                self.settings = ProjectSettings::default();
+                self.saved = ProjectSettings::default();
+            }
+        }
+    }
+
+    /// 落盘 + 同步「已保存」快照。
+    pub fn apply(&mut self) -> io::Result<()> {
+        self.settings.write(&self.root)?;
+        self.saved = self.settings.clone();
+        self.error = None;
+        self.external_change = false;
+        self.mtime = mtime(&ProjectSettings::path(&self.root));
+        Ok(())
+    }
+
+    /// 丢掉未保存的改动。
+    pub fn revert(&mut self) {
+        self.settings = self.saved.clone();
+    }
+
+    /// 丢弃未保存改动并整份重读（文件坏了也能用：读到默认值）。
+    pub fn reload_from_disk(&mut self) {
+        self.settings = self.saved.clone();
+        self.reload();
+    }
+
+    pub fn reset_section(&mut self, section: &str) {
+        self.settings.reset_section(section);
+    }
+
+    pub fn reset_all(&mut self) {
+        self.settings = ProjectSettings::default();
+    }
+}
+
+fn mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|meta| meta.modified()).ok()
+}
+
 fn string_or(document: &IniDocument, section: &str, key: &str, fallback: &str) -> String {
     document
         .get_string(section, key)
@@ -216,6 +457,113 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn every_written_key_is_editable() {
+        let temp = TempRoot::new();
+        ProjectSettings::default().write(&temp.root).unwrap();
+        let text = fs::read_to_string(ProjectSettings::path(&temp.root)).unwrap();
+        let document = IniDocument::parse(&text);
+        for section in SETTINGS_SECTIONS {
+            let keys: Vec<&str> = document
+                .sections()
+                .iter()
+                .find(|entry| entry.name == *section)
+                .map(|entry| entry.entries.iter().map(|(key, _)| key.as_str()).collect())
+                .unwrap_or_default();
+            assert!(!keys.is_empty(), "[{section}] is empty");
+            for key in keys {
+                assert!(
+                    SETTINGS_FIELDS
+                        .iter()
+                        .any(|field| field.section == *section && field.key == key),
+                    "[{section}] {key} is written but has no SettingsField entry"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn field_search_matches_labels_keys_and_chinese_keywords() {
+        let hits = matching_fields("vsync");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].key, "vsync");
+
+        assert!(matching_fields("全屏")
+            .iter()
+            .any(|field| field.key == "fullscreen"));
+        assert!(matching_fields("BUILD")
+            .iter()
+            .all(|field| field.section == "build"));
+        assert_eq!(matching_fields("").len(), SETTINGS_FIELDS.len());
+        assert!(matching_fields("nope-nothing").is_empty());
+    }
+
+    #[test]
+    fn cache_only_reloads_when_the_file_changes() {
+        let temp = TempRoot::new();
+        ProjectSettings::default().write(&temp.root).unwrap();
+        let mut cache = SettingsCache::load(&temp.root);
+        assert!(!cache.refresh(), "nothing changed yet");
+
+        let mut settings = ProjectSettings::default();
+        settings.app.company = "Elsewhere".into();
+        settings.write(&temp.root).unwrap();
+        assert!(cache.refresh(), "mtime changed");
+        assert_eq!(cache.settings.app.company, "Elsewhere");
+        assert!(!cache.is_dirty());
+    }
+
+    #[test]
+    fn cache_keeps_unsaved_edits_when_the_file_changes_underneath() {
+        let temp = TempRoot::new();
+        ProjectSettings::default().write(&temp.root).unwrap();
+        let mut cache = SettingsCache::load(&temp.root);
+        cache.settings.app.name = "edited".into();
+        assert!(cache.is_dirty());
+
+        // mtime 的分辨率取决于文件系统：同一 tick 内重写可能读回相同时间戳。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut other = ProjectSettings::default();
+        other.app.name = "external".into();
+        other.write(&temp.root).unwrap();
+        assert!(!cache.refresh(), "unsaved edits win");
+        assert_eq!(cache.settings.app.name, "edited");
+        assert!(cache.external_change());
+
+        cache.revert();
+        assert!(!cache.is_dirty());
+        assert_eq!(cache.settings.app.name, AppSettings::default().name);
+    }
+
+    #[test]
+    fn cache_reset_section_restores_only_that_section() {
+        let temp = TempRoot::new();
+        let mut cache = SettingsCache::load(&temp.root);
+        cache.settings.app.name = "fishing".into();
+        cache.settings.window.width = 800;
+        cache.reset_section("window");
+        assert_eq!(cache.settings.window.width, WindowSettings::default().width);
+        assert_eq!(cache.settings.app.name, "fishing");
+
+        cache.reset_all();
+        assert_eq!(cache.settings, ProjectSettings::default());
+        assert!(!cache.is_dirty());
+    }
+
+    #[test]
+    fn apply_writes_the_edited_values() {
+        let temp = TempRoot::new();
+        let mut cache = SettingsCache::load(&temp.root);
+        cache.settings.build.target = "android".into();
+        cache.settings.window.fullscreen = true;
+        cache.apply().unwrap();
+        assert!(!cache.is_dirty());
+
+        let reread = ProjectSettings::read(&temp.root).unwrap();
+        assert_eq!(reread.build.target, "android");
+        assert!(reread.window.fullscreen);
     }
 
     #[test]
