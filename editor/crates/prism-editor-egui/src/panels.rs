@@ -1079,13 +1079,19 @@ pub fn inspector(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     inspector_single(ui, workspace, state, indices[0]);
 }
 
-fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
+/// Add Component 菜单：`indices` 是这次要作用的实体集合（多选时是全部选中项）。
+fn add_component_menu_for(
+    ui: &mut Ui,
+    workspace: &mut Workspace,
+    state: &mut UiState,
+    indices: &[usize],
+) {
     ui.menu_button("Add Component", |ui| {
         ui.add(egui::TextEdit::singleline(&mut state.add_component_query).hint_text("search"));
         let query = state.add_component_query.to_lowercase();
-        // 只列**当前实体还没挂**的组件：已挂的再点一次会把参数重置成默认值。
+        // 只列**至少一个选中项还没挂**的组件：已挂的再点一次会把参数重置成默认值。
         let attachable: std::collections::HashSet<String> = workspace
-            .component_types()
+            .component_types_for(indices)
             .into_iter()
             .map(|component| component.name.clone())
             .collect();
@@ -1123,7 +1129,7 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
             });
         }
         if let Some(name) = picked {
-            workspace.add_component(&name);
+            workspace.add_component_multi(indices, &name);
         }
     });
 }
@@ -1487,7 +1493,7 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
                 .desired_width(80.0),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            add_component_menu(ui, workspace, state);
+            add_component_menu_for(ui, workspace, state, &[index]);
         });
     });
 
@@ -2051,7 +2057,7 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
     ui.horizontal(|ui| {
         ui.label(RichText::new("Common Components").strong().size(12.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            add_component_menu(ui, workspace, state);
+            add_component_menu_for(ui, workspace, state, indices);
         });
     });
 
