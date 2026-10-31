@@ -178,7 +178,7 @@ fn inspector_components(workspace: &Workspace) -> Vec<Value> {
             "Transform",
             &serde_json::to_value(&entity.transform).unwrap_or(Value::Null),
         ));
-        for (name, value) in &entity.components {
+        for (name, value) in entity.components.iter() {
             components.push(component_node(entity_id, name, value));
         }
         out.push(json!({

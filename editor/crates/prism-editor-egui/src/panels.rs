@@ -1547,6 +1547,12 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         match action {
             widgets::CardAction::Copy(name) => workspace.copy_component_at(index, &name),
             widgets::CardAction::Remove(name) => workspace.remove_component(&name),
+            widgets::CardAction::MoveUp(name) => {
+                workspace.move_component_at(index, &name, -1);
+            }
+            widgets::CardAction::MoveDown(name) => {
+                workspace.move_component_at(index, &name, 1);
+            }
         }
     }
 }
@@ -2107,6 +2113,18 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
             }
             widgets::CardAction::Remove(name) => {
                 workspace.remove_component_multi(indices, &name);
+            }
+            // 多选时没有唯一的「上一格」：顺序按每个实体自己的组件表解释，
+            // 所以各自移动一格（选中集合的顺序另说，见 #507）。
+            widgets::CardAction::MoveUp(name) => {
+                for index in indices {
+                    workspace.move_component_at(*index, &name, -1);
+                }
+            }
+            widgets::CardAction::MoveDown(name) => {
+                for index in indices {
+                    workspace.move_component_at(*index, &name, 1);
+                }
             }
         }
     }
