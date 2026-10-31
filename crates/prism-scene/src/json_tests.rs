@@ -474,3 +474,45 @@ fn an_audio_source_survives_cook_and_decode() {
         .expect("audio listener must apply to the world");
     assert_eq!(listener.gain, 0.8);
 }
+
+#[test]
+fn a_terrain_survives_cook_and_decode() {
+    // 地形组件是「路径 + 若干标量」，RSCN 的位置化编码最容易丢字符串（heightmap）
+    // 和 `[f32; 2]`（size）（#517）。
+    let mut registry = ComponentRegistry::new();
+    register_builtin_components(&mut registry);
+    let scene = SceneJson::parse(
+        r#"{
+            "version": 3,
+            "entities": [{
+                "id": 0,
+                "name": "Terrain",
+                "components": {
+                    "prism_engine::scene::Terrain": {
+                        "heightmap": "heightmaps/terrain.raw",
+                        "size": [512.0, 256.0],
+                        "height_scale": 1.5,
+                        "resolution": 0
+                    }
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let bytes = crate::encode_scene(&scene, &registry).expect("scene with terrain must cook");
+    let decoded = crate::decode_scene(&bytes, &registry).expect("cooked scene must decode");
+
+    let mut world = prism_ecs::World::new();
+    let entity = world.spawn();
+    for component in &decoded.entities[0].components {
+        assert!(registry.apply_object(&mut world, entity, component));
+    }
+    let terrain = world
+        .get::<crate::components::Terrain>(entity)
+        .expect("terrain must apply to the world");
+    assert_eq!(terrain.heightmap, "heightmaps/terrain.raw");
+    assert_eq!(terrain.size, [512.0, 256.0]);
+    assert_eq!(terrain.height_scale, 1.5);
+    assert_eq!(terrain.resolution, 0, "0 = 跟随高度图大小");
+}

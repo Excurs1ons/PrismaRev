@@ -618,6 +618,13 @@ fn default_schedule() -> Schedule {
         crate::scene::systems::animation::keyframe_animation_system(world, dt)
     });
 
+    // ── 地形 ────────────────────────────────────────────────
+    // `Terrain` 只是数据：这里按高度图生成网格并登记到 `ProceduralMeshes`，
+    // 资产解析器在下一帧的上传阶段就能取到（#517 Phase 1）。
+    s.add_system("terrain::mesh", |world, _dt| {
+        crate::scene::systems::terrain::terrain_system(world)
+    });
+
     // ── 粒子模拟 ────────────────────────────────────────────
     // CPU 粒子积分 + 发射（#501 Phase 1）。同样在 `hierarchy_system` 之前，
     // 提取阶段看到的已经是本帧推进后的粒子。

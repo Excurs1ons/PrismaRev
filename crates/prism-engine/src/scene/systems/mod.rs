@@ -16,3 +16,4 @@ pub mod hierarchy;
 pub mod lights;
 pub mod particles;
 pub mod render;
+pub mod terrain;

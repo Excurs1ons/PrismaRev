@@ -216,6 +216,9 @@ impl GpuAssetResolver {
     /// 槽位会记入失败缓存（[`GpuAssetResolver::failed`]），同一坏路径只尝试一次，
     /// 直到路径被改写。
     pub fn prepare_requests(&mut self, world: &World) -> Vec<(Entity, AssetResolveRequest)> {
+        // 运行时生成的网格（地形，#517）：路径以 `__proc/` 开头，直接从世界里的
+        // 表取，不经过 `.pak`。
+        let procedural = world.get_resource::<crate::scene::systems::terrain::ProceduralMeshes>();
         // 收集待处理实体（首个），避免同时借用世界 & self。
         let pending: Vec<PendingRequest> = {
             // 失败缓存只对仍然存在的实体有意义；实体被删除后顺手回收。
@@ -295,7 +298,9 @@ impl GpuAssetResolver {
         for item in pending {
             let mesh = match item.mesh_path.as_deref() {
                 Some(path) => {
-                    let loaded = self.load_mesh_inputs(path);
+                    let loaded = procedural
+                        .and_then(|meshes| meshes.get(path))
+                        .or_else(|| self.load_mesh_inputs(path));
                     if loaded.is_none() {
                         self.record_failure(item.entity, AssetSlot::Mesh, path);
                     }
