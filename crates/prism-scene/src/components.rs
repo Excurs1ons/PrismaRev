@@ -11,6 +11,7 @@
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
 //! | 音频     | `AudioSource`（场景内播放）, `AudioListener`（听者） |
+//! | 地形     | `Terrain`（高度场 → 运行时生成网格） |
 //! | 调试     | `Gizmo` |
 //! | 场景     | `SceneMember` |
 //! | 标识     | `Name` |
@@ -1149,6 +1150,63 @@ impl Default for Gizmo {
             scale: 1.0,
             mode: GizmoMode::Translate,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 地形
+// ---------------------------------------------------------------------------
+
+/// 高度场地形（#517 Phase 1）。
+///
+/// 只是一个数据组件：运行时按 `heightmap`（f32 little-endian 高度数组）+ 网格参数生成
+/// 地形网格，挂到同一实体的 [`MeshRenderer`] 上；材质仍然由 MeshRenderer 决定。
+///
+/// 高度数组是行优先的 `resolution × resolution` 个 f32（`resolution = 0` 按 32 处理），
+/// 世界尺寸是 `size` 米（x / z），`height_scale` 把 `[0, 1]` 的高度放大成米。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Terrain")]
+#[serde(default)]
+pub struct Terrain {
+    /// `.raw` 高度图路径（相对 `assets/`，与其它资产路径一样解析）。
+    pub heightmap: String,
+    /// 水平尺寸（米）：`[x, z]`。
+    pub size: [f32; 2],
+    /// 高度倍数：网格高度 = 高度图数值 × `height_scale`（米）。
+    ///
+    /// heightmap CLI 写出的 `.raw` 已经是米，所以这里的默认值是 `1.0`；
+    /// 归一化到 `[0, 1]` 的高度场可以用它（例如 `100.0`）换算成米。
+    pub height_scale: f32,
+    /// 每边格子数。`0` = 跟随高度图大小（样本数必须是完全平方数）。
+    ///
+    /// 非 `0` 时高度数组长度必须正好是 `resolution * resolution`，否则退回平坦地形并告警。
+    pub resolution: u32,
+}
+
+impl Default for Terrain {
+    fn default() -> Self {
+        Self {
+            heightmap: String::new(),
+            size: [100.0, 100.0],
+            height_scale: 1.0,
+            resolution: 0,
+        }
+    }
+}
+
+impl Terrain {
+    /// 每边格子数：`0` 走默认值，再钳到安全范围。
+    pub fn cells(&self) -> usize {
+        let cells = if self.resolution == 0 {
+            32
+        } else {
+            self.resolution
+        };
+        cells.clamp(2, 1024) as usize
+    }
+
+    pub fn has_heightmap(&self) -> bool {
+        !self.heightmap.trim().is_empty()
     }
 }
 
