@@ -29,6 +29,10 @@ default = ["player", "winit-window"]
 player-core = [
     "dep:prism-app",
     "dep:prism-engine",
+    # `prism-game-api` 默认开 `host`（直接借用宿主 World），会拉进
+    # `prism-engine`；preview-module 只能有 `plugin` 后端，否则 .so 里会带
+    # 第二份引擎。host 只在静态 Player 组合里显式打开。
+    "prism-game-api/host",
     "prism-app/pathtrace",
     "prism-app/ui",
     "prism-app/ibl",
@@ -64,7 +68,16 @@ winit-window = ["prism-app/winit-backend", "prism-app/x11", "prism-app/wayland"]
 # Windows 发布包：Win32 原生窗口，**不链接 winit**（省 ~300 KB）。
 # 用法：`cargo build --release --no-default-features --features player,win32-window`
 win32-window = ["prism-app/win32-native"]
-preview-module = ["dep:prism-project-api"]
+# 组件 schema 必须与编辑器宿主**完全一致**：宿主用默认分组编译，
+# 模块是独立 workspace、拿不到引擎的 feature 统一，所以这里显式打开
+# 三组。少了任何一组，`ProjectModule::load` 的 schema fingerprint 校验
+# 会直接拒绝模块（而且项目自己也无法编码 Style / SpriteRenderer 等组件）。
+preview-module = [
+    "dep:prism-project-api",
+    "prism-scene/group-3d",
+    "prism-scene/group-2d",
+    "prism-scene/group-ui",
+]
 
 [[bin]]
 name = "prisma"
@@ -79,7 +92,9 @@ prism-app = { path = "../../crates/prism-app", optional = true, default-features
 # 必须 default-features = false：文本后端由本 crate 的 ui-fontdue / ui-directwrite
 # 显式选择（Cargo feature 只能加不能减，否则 fontdue 永远进二进制）。
 prism-engine = { path = "../../crates/prism-engine", optional = true, default-features = false }
-prism-game-api = { path = "../../crates/prism-game-api" }
+prism-game-api = { path = "../../crates/prism-game-api", default-features = false, features = [
+    "plugin",
+] }
 prism-project-api = { path = "../../crates/prism-project-api", optional = true }
 # 纯数据层（组件 / UI schema），两种形态都需要。
 prism-scene = { path = "../../crates/prism-scene", default-features = false }

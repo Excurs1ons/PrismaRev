@@ -379,6 +379,12 @@ impl EditorApp {
                 // 新视口从编辑器当前设置出发（网格 / 天空盒），否则首帧会和工具栏不一致。
                 *view.host.settings_mut() = self.render_settings.clone();
                 view.host.set_show_skybox(self.workspace.show_skybox);
+                // Game view 的 Play 执行用户项目代码（Scene view 只跑编辑器预览）。
+                if kind == ViewKind::Game {
+                    if let Some(root) = self.project_root.as_deref() {
+                        view.host.attach_project_module(root);
+                    }
+                }
                 if let Err(error) = view.host.load_scene(&self.preview_scene) {
                     let message = format!("load scene failed: {error}");
                     self.workspace.log(
@@ -488,13 +494,46 @@ impl EditorApp {
             self.pending_doc = None;
             self.write_preview_scene();
             self.ensure_view(ViewKind::Game);
+            let mut play_note = None;
             if let Some(view) = self.game_view.as_mut() {
                 if let Err(error) = view.host.load_scene(&self.preview_scene) {
                     view.error = Some(format!("{error}"));
                 }
+                // 还没编译过项目模块时，按下 Play 立即插队编译一次；编译
+                // 本身仍然在后台线程，不会卡住 UI。
+                let status = view.host.project_module_status();
+                match &status {
+                    Some(status) if status.loaded => {}
+                    Some(status) if status.available => {
+                        if !status.building {
+                            view.host.refresh_project_module();
+                        }
+                        play_note = Some(if status.building {
+                            "Play: project module is compiling — engine systems only for now"
+                                .to_string()
+                        } else {
+                            "Play: compiling project module — engine systems only until it loads"
+                                .to_string()
+                        });
+                    }
+                    _ => {
+                        play_note = Some(
+                            "Play: project has no preview-module — running engine systems only"
+                                .to_string(),
+                        );
+                    }
+                }
                 view.host.set_simulate(true);
                 view.host.set_paused(false);
                 view.mark_dirty();
+            }
+            if let Some(note) = &play_note {
+                self.state.status = note.clone();
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Warn,
+                    note.clone(),
+                );
             }
             if let Some(view) = self.scene_view.as_mut() {
                 view.mark_dirty();
@@ -511,6 +550,7 @@ impl EditorApp {
                 }
                 view.host.set_simulate(false);
                 view.host.set_paused(false);
+                view.reset_forwarded_input();
                 view.mark_dirty();
             }
             self.doc_hash = document_hash(&self.workspace);
@@ -799,6 +839,7 @@ impl EditorApp {
                     .map(|path| path.display().to_string()),
                 "selection": self.workspace.selection.clone(),
                 "status": self.state.status.clone(),
+                "project_module": self.project_module_json(),
             }),
             "capture" => {
                 let target = args
@@ -1249,6 +1290,96 @@ impl EditorApp {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // 用户项目模块（Game View 的 Play）
+    // -----------------------------------------------------------------------
+
+    fn project_module_status(&self) -> Option<crate::project_module::ProjectModuleStatus> {
+        self.game_view
+            .as_ref()
+            .and_then(|view| view.host.project_module_status())
+    }
+
+    fn project_module_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self.project_module_status() {
+            Some(status) => json!({
+                "available": status.available,
+                "loaded": status.loaded,
+                "building": status.building,
+                "auto_refresh": status.auto_refresh,
+                "manifest": status.manifest.as_ref().map(|path| path.display().to_string()),
+                "error": status.error,
+            }),
+            None => serde_json::Value::Null,
+        }
+    }
+
+    /// 每帧把后台编译结果换进 Game view，并推进热重载的 debounce。
+    fn poll_project_module(&mut self) {
+        let playing = self.playing;
+        let events = if let Some(view) = self.game_view.as_mut() {
+            view.host.poll_project_module(playing);
+            view.host.drain_project_events()
+        } else {
+            Vec::new()
+        };
+        for event in events {
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                event.level,
+                event.text,
+            );
+        }
+    }
+
+    /// Ctrl+R / File → Compile Project Module。
+    fn refresh_project_module(&mut self) {
+        let available = if let Some(view) = self.game_view.as_mut() {
+            let available = view
+                .host
+                .project_module_status()
+                .is_some_and(|status| status.available);
+            if available {
+                view.host.refresh_project_module();
+            }
+            available
+        } else {
+            false
+        };
+        if available {
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                prism_editor_core::LogLevel::Info,
+                "project module: compile requested",
+            );
+            self.state.status = "compiling project module…".to_string();
+        } else {
+            self.state.status = "project has no preview-module (see Console)".to_string();
+        }
+    }
+
+    fn project_auto_refresh(&self) -> bool {
+        self.game_view
+            .as_ref()
+            .map(|view| view.host.project_auto_refresh())
+            .unwrap_or(true)
+    }
+
+    fn set_project_auto_refresh(&mut self, enabled: bool) {
+        if let Some(view) = self.game_view.as_mut() {
+            view.host.set_project_auto_refresh(enabled);
+        }
+        self.workspace.log(
+            prism_editor_core::LogSource::System,
+            prism_editor_core::LogLevel::Info,
+            format!(
+                "project module: auto refresh {}",
+                if enabled { "on" } else { "off" }
+            ),
+        );
+    }
+
     fn build_job_running(&self) -> bool {
         self.build
             .as_ref()
@@ -1422,6 +1553,29 @@ impl EditorApp {
                 {
                     self.start_build(crate::build::BuildKind::PlayerRun);
                     ui.close();
+                }
+                let module_available = self
+                    .project_module_status()
+                    .is_some_and(|status| status.available);
+                if ui
+                    .add_enabled(
+                        module_available,
+                        egui::Button::new("Compile Project Module  (Ctrl+R)"),
+                    )
+                    .clicked()
+                {
+                    self.refresh_project_module();
+                    ui.close();
+                }
+                let mut auto_refresh = self.project_auto_refresh();
+                if ui
+                    .add_enabled(
+                        module_available,
+                        egui::Checkbox::new(&mut auto_refresh, "Auto Refresh Project Module"),
+                    )
+                    .changed()
+                {
+                    self.set_project_auto_refresh(auto_refresh);
                 }
                 if ui
                     .add_enabled(!self.build_job_running(), egui::Button::new("Clean Build"))
@@ -2869,6 +3023,15 @@ impl EditorApp {
                     self.start_build(crate::build::BuildKind::PlayerRun);
                 }
             }
+            // Ctrl+R = 重新编译并加载用户项目模块（引擎的 Assets → Refresh）。
+            if ctx.input_mut(|input| {
+                input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::CTRL,
+                    egui::Key::R,
+                ))
+            }) {
+                self.refresh_project_module();
+            }
             if ctx.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
                     egui::Modifiers::CTRL,
@@ -3221,6 +3384,7 @@ impl App for EditorApp {
         self.poll_control(ctx);
         self.drain_engine_logs();
         self.poll_build();
+        self.poll_project_module();
         self.sync_document();
         self.handle_shortcuts(ctx);
 

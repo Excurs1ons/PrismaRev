@@ -9,12 +9,14 @@
 //! 帧节奏：只在「文档变化 / 相机变化 / Play / resize / 首帧」时重渲染，
 //! 静止的视口零 GPU 工作（保留上一帧纹理）。
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use ash::vk;
 use egui::{Rect, Sense};
 use egui_ash::ImageRegistry;
 use prism_editor_core::{viewport_math as vm, TransformJson, Workspace};
+use prism_engine::input::{ElementState, KeyCode, MouseButton};
 
 use crate::engine_host::{EngineHost, ViewKind};
 
@@ -104,6 +106,10 @@ pub struct ViewportState {
     /// 框选起点 / 当前点（视口局部坐标）。
     box_start: Option<egui::Pos2>,
     box_current: Option<egui::Pos2>,
+    /// Game view 转发给引擎 `InputManager` 的按住键（用于合成 release）。
+    forwarded_keys: HashSet<KeyCode>,
+    /// Game view 是否已经把左键当成按住转发（离开视口也能收到 release）。
+    forwarded_left_down: bool,
 }
 
 pub struct ViewportResponse {
@@ -137,6 +143,8 @@ impl ViewportState {
             orbit_last_pos: None,
             box_start: None,
             box_current: None,
+            forwarded_keys: HashSet::new(),
+            forwarded_left_down: false,
         })
     }
 
@@ -148,8 +156,106 @@ impl ViewportState {
         self.flying_camera
     }
 
+    /// 把 egui 的键盘 / 鼠标状态转成引擎 `InputManager` 事件。
+    ///
+    /// Game view 的项目模块通过 `InputSnapshot` 读输入；Scene view 的
+    /// 轨道相机不走这里。只在 Play 中转发，停止 Play 时清空遗留状态。
+    fn forward_game_input(
+        &mut self,
+        ui: &egui::Ui,
+        rect: Rect,
+        response: &egui::Response,
+        scale: f32,
+    ) {
+        if self.kind() != ViewKind::Game || !self.host.is_simulating() {
+            self.forwarded_keys.clear();
+            self.forwarded_left_down = false;
+            return;
+        }
+
+        let ppp = ui.ctx().pixels_per_point();
+        let (mut keys_down, modifiers, hover_pos, primary_down) = ui.input(|input| {
+            let keys = input
+                .keys_down
+                .iter()
+                .filter_map(|key| engine_key(*key))
+                .collect::<HashSet<_>>();
+            (
+                keys,
+                input.modifiers,
+                input.pointer.hover_pos(),
+                input.pointer.primary_down(),
+            )
+        });
+        // egui 的 `Key` 不区分左右修饰键；按修饰状态补成 ABI 的 Left 位。
+        if modifiers.shift {
+            keys_down.insert(KeyCode::ShiftLeft);
+        }
+        if modifiers.ctrl {
+            keys_down.insert(KeyCode::ControlLeft);
+        }
+        if modifiers.alt {
+            keys_down.insert(KeyCode::AltLeft);
+        }
+
+        if let Some(position) = hover_pos {
+            if rect.contains(position) {
+                let local = [
+                    ((position.x - rect.min.x) * ppp * scale) as f64,
+                    ((position.y - rect.min.y) * ppp * scale) as f64,
+                ];
+                self.host.input_mut().set_mouse_position(local);
+            }
+        }
+
+        // 左键：第一次按下必须发生在视口里；一旦开始转发，松开可以在视口外。
+        let held = if self.forwarded_left_down {
+            primary_down
+        } else {
+            primary_down && response.hovered()
+        };
+        if held != self.forwarded_left_down {
+            let state = if held {
+                ElementState::Pressed
+            } else {
+                ElementState::Released
+            };
+            self.host
+                .input_mut()
+                .handle_mouse_button(MouseButton::Left, state);
+            self.forwarded_left_down = held;
+        }
+
+        let pressed: Vec<KeyCode> = keys_down
+            .difference(&self.forwarded_keys)
+            .copied()
+            .collect();
+        let released: Vec<KeyCode> = self
+            .forwarded_keys
+            .difference(&keys_down)
+            .copied()
+            .collect();
+        for key in pressed {
+            self.host
+                .input_mut()
+                .handle_keyboard(key, ElementState::Pressed);
+        }
+        for key in released {
+            self.host
+                .input_mut()
+                .handle_keyboard(key, ElementState::Released);
+        }
+        self.forwarded_keys = keys_down;
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    /// 停止 Play 时清空转发记录：下一次 Play 的按键会重新合成 Pressed。
+    pub fn reset_forwarded_input(&mut self) {
+        self.forwarded_keys.clear();
+        self.forwarded_left_down = false;
     }
 
     /// 重新渲染并（必要时）重新注册纹理。返回是否成功出帧。
@@ -245,6 +351,8 @@ impl ViewportState {
 
         // 2) 采样纹理（同一设备、同一命令缓冲区 → 零拷贝）。
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
+        // Game view 的 Play 把键鼠转发给项目模块（下一帧 tick 读取）。
+        self.forward_game_input(ui, rect, &response, scale);
         let painter = ui.painter_at(rect);
 
         // Project → 场景视口：预制体落到地面（y = 0）生成实例，场景文件则打开文档。
@@ -1000,9 +1108,50 @@ fn pick(
     vm::pick_entity(point, frame, size.x, size.y, &proxies(workspace))
 }
 
+/// egui 键 → 引擎键（ABI 位编号由 `KeyCode::bit_index` 决定）。
+fn engine_key(key: egui::Key) -> Option<KeyCode> {
+    use egui::Key as EguiKey;
+    use prism_engine::input::KeyCode as EngineKey;
+    Some(match key {
+        EguiKey::W => EngineKey::KeyW,
+        EguiKey::A => EngineKey::KeyA,
+        EguiKey::S => EngineKey::KeyS,
+        EguiKey::D => EngineKey::KeyD,
+        EguiKey::Q => EngineKey::KeyQ,
+        EguiKey::E => EngineKey::KeyE,
+        EguiKey::Space => EngineKey::Space,
+        EguiKey::Escape => EngineKey::Escape,
+        EguiKey::Tab => EngineKey::Tab,
+        EguiKey::Enter => EngineKey::Enter,
+        EguiKey::ArrowUp => EngineKey::ArrowUp,
+        EguiKey::ArrowDown => EngineKey::ArrowDown,
+        EguiKey::ArrowLeft => EngineKey::ArrowLeft,
+        EguiKey::ArrowRight => EngineKey::ArrowRight,
+        EguiKey::Num0 => EngineKey::Digit0,
+        EguiKey::Num1 => EngineKey::Digit1,
+        EguiKey::Num2 => EngineKey::Digit2,
+        EguiKey::Num3 => EngineKey::Digit3,
+        EguiKey::Num4 => EngineKey::Digit4,
+        EguiKey::Num5 => EngineKey::Digit5,
+        EguiKey::Num6 => EngineKey::Digit6,
+        EguiKey::Num7 => EngineKey::Digit7,
+        EguiKey::Num8 => EngineKey::Digit8,
+        EguiKey::Num9 => EngineKey::Digit9,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_keys_use_the_engine_abi_mapping() {
+        assert_eq!(engine_key(egui::Key::W), Some(KeyCode::KeyW));
+        assert_eq!(engine_key(egui::Key::Space), Some(KeyCode::Space));
+        assert_eq!(engine_key(egui::Key::Num5), Some(KeyCode::Digit5));
+        assert_eq!(engine_key(egui::Key::F1), None);
+    }
 
     #[test]
     fn extent_follows_scale_and_dpi() {

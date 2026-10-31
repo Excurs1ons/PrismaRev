@@ -91,6 +91,10 @@ MCP 工具        → 读端口文件 → TCP 一行 JSON 请求 / 一行 JSON �
 | `editor_ui` | `action`(`snapshot`/`click`/`set`) `node?` `value?` | UI 节点树：快照 / 按节点点击 / 按节点设值 |
 | `editor_quit` | — | 走正常退出路径（会写 `state.json`） |
 
+`editor_status` 里的 `project_module` 汇报 Game View 的用户项目模块：
+`available` / `loaded` / `building` / `auto_refresh` / `manifest` / `error`。
+模块的编译和热重载由编辑器自己完成（见 `docs/editor-egui.md` §3.2）。
+
 ### UI 节点树（`editor_ui`）
 
 egui 没有 DOM，也拿不到可以外部点击的控件句柄，所以节点树来自**数据模型** +
