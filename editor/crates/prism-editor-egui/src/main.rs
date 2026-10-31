@@ -14,6 +14,7 @@ mod diagnostics;
 mod engine_host;
 mod gpu;
 mod logging;
+mod palette;
 mod panels;
 mod project_module;
 mod screenshot;

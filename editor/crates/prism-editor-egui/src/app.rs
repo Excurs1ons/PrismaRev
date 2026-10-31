@@ -190,6 +190,8 @@ pub struct EditorApp {
     panel_rects: std::collections::BTreeMap<String, egui::Rect>,
     /// 上一帧的 dock leaf：(leaf id, 激活 tab, 所有 tab)。
     dock_leaves: Vec<(String, String, Vec<String>)>,
+    /// 全局搜索弹窗（`Ctrl+K`，见 `palette.rs`）。
+    palette: crate::palette::Palette,
     /// 控制通道排进来的输入事件（自动化 / MCP 驱动 Play）。
     ///
     /// **每帧只消费一个**：`just_pressed` 在这一帧的 tick 里可见，下一帧就被
@@ -306,6 +308,7 @@ impl EditorApp {
             paused: false,
             force_quit: false,
             render_report: None,
+            palette: crate::palette::Palette::new(),
             named_layouts,
             layouts_path,
             build: None,
@@ -749,9 +752,58 @@ impl EditorApp {
             }
             return Ok(format!("open panel {tab}"));
         }
+        if node == "search:open" {
+            self.palette.open(&self.workspace);
+            return Ok("open search".to_string());
+        }
         Err(format!(
-            "unsupported node '{node}' (command:… / panel:… / doc:… / entity:… / asset:…)"
+            "unsupported node '{node}' (command:… / panel:… / doc:… / entity:… / asset:… / search:open)"
         ))
+    }
+
+    /// 执行全局搜索里确认的那一条（选择实体 / 打开文档或资产 / 跑命令）。
+    fn run_palette_action(&mut self, action: prism_editor_core::palette::PaletteAction) {
+        use prism_editor_core::palette::PaletteAction;
+        match action {
+            PaletteAction::RunCommand(command) => self.apply_command(command),
+            PaletteAction::OpenDocument(index) => {
+                self.workspace.set_active(index);
+                self.state.status = format!("opened {}", self.workspace.document().title());
+            }
+            PaletteAction::SelectEntity(index) => {
+                let name = self.workspace.document().doc.entities[index]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("entity {index}"));
+                self.workspace.select(index, false);
+                self.workspace.frame_selection();
+                self.mark_scene_dirty();
+                self.state.status = format!("selected {name}");
+            }
+            PaletteAction::OpenAsset(path) => {
+                if path.ends_with(".scene.json") || path.ends_with(".prefab.json") {
+                    if let Err(error) = self.workspace.open_project_file(&path) {
+                        self.state.status = format!("open {path} failed: {error}");
+                    } else {
+                        self.state.status = format!("opened {path}");
+                    }
+                    return;
+                }
+                // 其它类型：在资产面板里选中，并把它的父目录都展开。
+                if let Some((folder, _)) = path.rsplit_once('/') {
+                    let mut prefix = String::new();
+                    for segment in folder.split('/') {
+                        if !prefix.is_empty() {
+                            prefix.push('/');
+                        }
+                        prefix.push_str(segment);
+                        self.workspace.expanded_assets.insert(prefix.clone());
+                    }
+                }
+                self.state.asset_selection = Some(path.clone());
+                self.state.status = format!("selected asset {path}");
+            }
+        }
     }
 
     /// `ui.set`：目前支持检查器字段 `field:<entity>:<component>:<path>`。
@@ -1773,6 +1825,10 @@ impl EditorApp {
 
             // ---- Edit ----
             ui.menu_button("Edit", |ui| {
+                self.menu_do(ui, "Search… (Ctrl+K)", |app| {
+                    app.palette.open(&app.workspace)
+                });
+                ui.separator();
                 self.menu_item(ui, "Undo", "Ctrl+Z", Command::Undo);
                 self.menu_item(ui, "Redo", "Ctrl+Y", Command::Redo);
                 ui.separator();
@@ -3172,6 +3228,16 @@ impl EditorApp {
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
+        // Ctrl+K：全局搜索（Unity 的习惯；Ctrl+P 已经是 Play）。
+        if ctx.input_mut(|input| {
+            input.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::K))
+        }) {
+            self.palette.toggle(&self.workspace);
+        }
+        // 弹窗开着时按键属于输入框：Esc / ↑↓ / Enter 由 `palette::show` 处理。
+        if self.palette.is_open() {
+            return;
+        }
         if self
             .scene_view
             .as_ref()
@@ -3677,6 +3743,9 @@ impl App for EditorApp {
         // 本次交互压成一步，下一次修改必然开新撤销步。
         if ctx.input(|input| input.pointer.any_released()) {
             self.workspace.end_interaction();
+        }
+        if let Some(action) = self.palette.show(ctx) {
+            self.run_palette_action(action);
         }
         self.poll_control(ctx);
         self.drain_engine_logs();
