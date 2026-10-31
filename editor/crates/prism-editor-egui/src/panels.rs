@@ -8,8 +8,8 @@ use prism_editor_core::settings::{
     matching_fields, SettingsCache, PROFILE_CHOICES, TARGET_CHOICES,
 };
 use prism_editor_core::{
-    AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, SceneDoc, Workspace,
-    THEME_PRESETS,
+    format_bytes, AssetKind, AssetPreview, Locale, LogLevel, LogSource, Preferences,
+    ProjectSettings, SceneDoc, Workspace, THEME_PRESETS,
 };
 use serde_json::{json, Value};
 
@@ -274,6 +274,9 @@ pub struct UiState {
     /// 资产面板里当前选中的资产（引擎的 Project 选择，支持多选）。
     ///
     /// 最后一项是「主项」（Inspector / 详情 / 单路径操作看它）。
+    /// 选中资产上一次算好的详情 + 时间戳：详情会扫磁盘上的文档，不能每帧重算（#514）。
+    pub asset_details: Option<(String, prism_editor_core::AssetDetails)>,
+    pub asset_details_at: Option<std::time::Instant>,
     pub asset_selection: Vec<String>,
     /// 区间选择的锚点：Shift+单击从它选到目标（#486）。
     pub asset_anchor: Option<String>,
@@ -1067,6 +1070,11 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
 pub fn inspector(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let indices = workspace.selection.clone();
     if indices.is_empty() {
+        // 没有选中实体时，Project 面板选中的资产接管检查器（#514）。
+        if !state.asset_selection.is_empty() {
+            asset_inspector(ui, workspace, state);
+            return;
+        }
         ui.centered_and_justified(|ui| {
             ui.label(RichText::new("Select an entity").weak());
         });
@@ -1077,6 +1085,232 @@ pub fn inspector(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         return;
     }
     inspector_single(ui, workspace, state, indices[0]);
+}
+
+#[cfg(test)]
+mod asset_inspector_tests {
+    use super::*;
+    use prism_editor_core::{AssetInfo, Workspace};
+
+    fn render(workspace: &mut Workspace, state: &mut UiState) {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| inspector(ui, workspace, state));
+        });
+    }
+
+    fn workspace_with_asset(path: &str) -> Workspace {
+        let mut workspace = Workspace::sample();
+        workspace.assets.push(AssetInfo {
+            path: path.to_string(),
+            size_bytes: 2048,
+            kind: prism_editor_core::AssetKind::Texture,
+            importer: "ImageImporter".to_string(),
+        });
+        workspace
+    }
+
+    /// #514：没有选中实体、但选了资产时，检查器画资产详情（不写文档）。
+    #[test]
+    fn an_asset_selection_takes_over_the_inspector() {
+        let path = "assets/sprites/fish.png";
+        let mut workspace = workspace_with_asset(path);
+        let mut state = UiState::default();
+        state.asset_selection = vec![path.to_string()];
+
+        render(&mut workspace, &mut state);
+
+        assert!(workspace.selection.is_empty());
+        assert!(
+            workspace.undo_history().is_empty(),
+            "只读的资产检查器不该产生撤销步"
+        );
+        assert!(!workspace.document().dirty);
+    }
+
+    /// 实体选择优先：两者同时存在时仍然是实体检查器。
+    #[test]
+    fn an_entity_selection_keeps_the_entity_inspector() {
+        let mut workspace = workspace_with_asset("assets/sprites/fish.png");
+        workspace.selection = vec![0];
+        let before = workspace.document().doc.clone();
+        let mut state = UiState::default();
+        state.asset_selection = vec!["assets/sprites/fish.png".to_string()];
+
+        render(&mut workspace, &mut state);
+
+        assert_eq!(workspace.document().doc, before);
+        assert_eq!(workspace.selection, vec![0]);
+    }
+
+    /// 选中的资产不在索引里时显示占位，不 panic、不写文档。
+    #[test]
+    fn an_unknown_asset_renders_a_placeholder() {
+        let mut workspace = Workspace::sample();
+        let mut state = UiState::default();
+        state.asset_selection = vec!["assets/missing.png".to_string()];
+
+        render(&mut workspace, &mut state);
+
+        assert!(workspace.undo_history().is_empty());
+    }
+}
+
+/// 资产检查器（#514）：选中资产时替代实体检查器，显示只读事实。
+///
+/// 导入参数（sRGB / 压缩格式 / max size …）还没有存放位置 —— 那份数据目前只存在
+/// cook profile 里，编辑器没有 per-asset 的读写闭环，所以这里先不做可编辑项，
+/// 免得做出一个「改了不生效」的面板。
+fn asset_inspector(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(path) = state.asset_primary().cloned() else {
+        return;
+    };
+    // 详情会读磁盘上的每个文档来数引用，所以按路径缓存 500ms，而不是每帧重算。
+    let stale = state
+        .asset_details
+        .as_ref()
+        .map(|(cached, _)| cached != &path)
+        .unwrap_or(true);
+    let expired = state
+        .asset_details_at
+        .map(|at| at.elapsed() >= std::time::Duration::from_millis(500))
+        .unwrap_or(true);
+    if stale || expired {
+        let details = workspace.asset_details(&path);
+        state.asset_details = details.map(|details| (path.clone(), details));
+        state.asset_details_at = Some(std::time::Instant::now());
+    }
+    let details = state
+        .asset_details
+        .as_ref()
+        .filter(|(cached, _)| cached == &path)
+        .map(|(_, details)| details.clone());
+
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(path.rsplit('/').next().unwrap_or(&path))
+                .strong()
+                .size(13.0),
+        );
+        if state.asset_selection.len() > 1 {
+            ui.label(
+                RichText::new(format!("+{} selected", state.asset_selection.len() - 1))
+                    .weak()
+                    .size(11.0),
+            );
+        }
+    });
+    ui.label(RichText::new(&path).weak().size(10.0));
+    ui.separator();
+
+    let Some(details) = details else {
+        ui.label(RichText::new("asset not in the project index").weak());
+        return;
+    };
+
+    let mut row = |label: &str, value: String| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(label).weak().size(11.0));
+            ui.label(RichText::new(value).size(11.0));
+        });
+    };
+    row("Type", details.asset.kind.label().to_string());
+    row("Size", format_bytes(details.asset.size_bytes));
+    if !details.asset.importer.is_empty() {
+        row("Importer", details.asset.importer.clone());
+    }
+    row("GUID", details.guid.clone());
+    row("References", details.references.len().to_string());
+
+    ui.separator();
+    ui.label(RichText::new("Preview").strong().size(11.0));
+    match &details.preview {
+        AssetPreview::Text { text, truncated } => {
+            let lines: Vec<&str> = text.lines().take(10).collect();
+            ui.add(
+                egui::Label::new(
+                    RichText::new(lines.join(
+                        "
+",
+                    ))
+                    .monospace()
+                    .size(10.0),
+                )
+                .wrap(),
+            );
+            if *truncated {
+                ui.label(RichText::new("… truncated").weak().size(10.0));
+            }
+        }
+        AssetPreview::Image {
+            width,
+            height,
+            bytes,
+        } => {
+            let size = match (width, height) {
+                (Some(width), Some(height)) => format!("{width} × {height}"),
+                _ => "unknown size".to_string(),
+            };
+            ui.label(RichText::new(format!("{size} · {}", format_bytes(*bytes))).size(11.0));
+        }
+        AssetPreview::Document => {
+            ui.label(RichText::new("scene / prefab document").weak().size(11.0));
+        }
+        AssetPreview::None => {
+            ui.label(RichText::new("no preview for this kind").weak().size(11.0));
+        }
+    }
+
+    if !details.references.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("Used by").strong().size(11.0));
+        for reference in details.references.iter().take(12) {
+            ui.label(
+                RichText::new(format!(
+                    "{} · {} · {}",
+                    reference.document, reference.entity_name, reference.field
+                ))
+                .weak()
+                .size(10.0),
+            );
+        }
+        if details.references.len() > 12 {
+            ui.label(
+                RichText::new(format!("+{} more", details.references.len() - 12))
+                    .weak()
+                    .size(10.0),
+            );
+        }
+    }
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Copy Path").clicked() {
+            ui.ctx().copy_text(path.clone());
+            state.status = format!("copied {path}");
+        }
+        let openable = path.ends_with(".scene.json")
+            || path.ends_with(".prefab.json")
+            || prism_editor_core::project::is_json_editable_asset(&path);
+        if openable && ui.button("Open").clicked() {
+            if path.ends_with(".scene.json") || path.ends_with(".prefab.json") {
+                match workspace.open_project_file(&path) {
+                    Ok(()) => state.status = format!("opened {path}"),
+                    Err(error) => state.status = format!("open {path} failed: {error}"),
+                }
+            } else {
+                open_material_asset(workspace, state, &path);
+                workspace.show_panel("material");
+                state.status = format!("opened {path}");
+            }
+        }
+        if ui.button("Show in Explorer").clicked() {
+            state.status = match reveal_asset(workspace, &path) {
+                Ok(()) => format!("revealed {path}"),
+                Err(error) => error,
+            };
+        }
+    });
 }
 
 /// Add Component 菜单：`indices` 是这次要作用的实体集合（多选时是全部选中项）。
@@ -2490,6 +2724,8 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     } else {
                         state.select_asset_only(path.clone());
                     }
+                    // 选中资产就切到资产检查器（#514）：清掉实体选择，两者不并存。
+                    workspace.selection.clear();
                 }
                 if response.double_clicked() {
                     open = Some(path.clone());
