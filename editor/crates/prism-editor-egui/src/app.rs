@@ -265,6 +265,12 @@ impl EditorApp {
             );
             workspace.dock = layout.dock;
             workspace.floating = layout.floating;
+            // 上次最大化的面板（存档里的 tab 可能已经不存在，按 dock 过滤）。
+            workspace.maximized_tab = state.maximized.clone().filter(|tab| {
+                prism_editor_core::dock::collect_tabs(&workspace.dock)
+                    .iter()
+                    .any(|existing| existing == tab)
+            });
             workspace.set_locale(Locale::parse(&state.locale));
             if !state.theme_preset.is_empty() {
                 workspace.set_theme_preset(&state.theme_preset);
@@ -2417,8 +2423,19 @@ impl EditorApp {
     // -----------------------------------------------------------------------
 
     fn dock_tree(&mut self, ui: &mut egui::Ui) {
-        let dock = self.workspace.dock.clone();
         let rect = ui.available_rect_before_wrap();
+        // 最大化：只画那一个 leaf 的 tab bar + body，dock tree 原样留着。
+        if let Some(tab) = self.workspace.maximized_tab.clone() {
+            match prism_editor_core::dock::find_leaf(&self.workspace.dock, &tab) {
+                Some(DockNode::Leaf { id, tabs, .. }) => {
+                    let (id, tabs) = (id.clone(), tabs.clone());
+                    self.dock_leaf(ui, rect, &id, &tabs, &tab);
+                    return;
+                }
+                _ => self.workspace.restore_maximized(),
+            }
+        }
+        let dock = self.workspace.dock.clone();
         self.dock_node(ui, rect, &dock);
     }
 
@@ -2586,6 +2603,10 @@ impl EditorApp {
         let mut activate: Option<String> = None;
         let mut float: Option<String> = None;
         let mut begin_drag: Option<String> = None;
+        let mut maximize: Option<String> = None;
+        let mut close: Option<String> = None;
+        let mut close_others: Option<String> = None;
+        let mut add_tab: Option<String> = None;
         let (bar, _) = child.allocate_exact_size(
             Vec2::new(child.available_width(), TAB_BAR_HEIGHT),
             egui::Sense::hover(),
@@ -2605,19 +2626,63 @@ impl EditorApp {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         bar_ui.set_clip_rect(bar);
+        // `Add Tab` 菜单要列出所有面板（去掉本 leaf 已有的）。
+        let addable: Vec<(String, String)> = self
+            .workspace
+            .known_panels()
+            .into_iter()
+            .filter(|id| !tabs.iter().any(|tab| tab == id))
+            .map(|id| {
+                let title = self.workspace.panel_title(&id);
+                (id, title)
+            })
+            .collect();
+        let maximized = self.workspace.maximized_tab.clone();
         for tab in tabs {
             let selected = tab == active;
             let response = dock_tab(&mut bar_ui, &tab_title(tab), selected, &colors);
             if response.clicked() {
                 activate = Some(tab.clone());
+                self.state.focused_panel = Some(tab.clone());
+            }
+            // 双击标签 = 最大化 / 还原（Unity 的 DockArea 行为）。
+            if response.double_clicked() {
+                maximize = Some(tab.clone());
             }
             if response.drag_started() {
                 begin_drag = Some(tab.clone());
             }
             response.context_menu(|ui| {
+                let is_maximized = maximized.as_deref() == Some(tab.as_str());
+                if ui
+                    .button(if is_maximized { "Restore" } else { "Maximize" })
+                    .clicked()
+                {
+                    maximize = Some(tab.clone());
+                    ui.close();
+                }
                 if tabs.len() > 1 && ui.button("Float panel").clicked() {
                     float = Some(tab.clone());
                     ui.close();
+                }
+                ui.separator();
+                if tabs.len() > 1 && ui.button("Close tab").clicked() {
+                    close = Some(tab.clone());
+                    ui.close();
+                }
+                if tabs.len() > 1 && ui.button("Close others").clicked() {
+                    close_others = Some(tab.clone());
+                    ui.close();
+                }
+                if !addable.is_empty() {
+                    ui.menu_button("Add tab", |ui| {
+                        for (id, title) in &addable {
+                            if ui.button(title).clicked() {
+                                add_tab = Some(id.clone());
+                                ui.close();
+                            }
+                        }
+                    });
                 }
             });
         }
@@ -2684,6 +2749,18 @@ impl EditorApp {
         }
         if let Some(tab) = float {
             self.workspace.float_panel(&tab, 260.0, 160.0);
+        }
+        if let Some(tab) = maximize {
+            self.workspace.toggle_maximized(&tab);
+        }
+        if let Some(tab) = close {
+            self.workspace.close_panel(&tab);
+        }
+        if let Some(tab) = close_others {
+            self.workspace.close_other_panels(&tab);
+        }
+        if let Some(tab) = add_tab {
+            self.workspace.add_tab_to_leaf(leaf_id, &tab);
         }
     }
 
@@ -3172,6 +3249,14 @@ impl EditorApp {
         let wants_keyboard = ctx.memory(|memory| memory.focused()).is_some();
         // W / E / R 工具、X 世界/局部、G 网格（文本输入时不抢键）。
         if !wants_keyboard {
+            // Shift+Space：最大化 / 还原焦点面板（Unity 的 Maximize 习惯）。
+            if ctx.input(|input| input.key_pressed(egui::Key::Space) && input.modifiers.shift) {
+                if self.workspace.maximized_tab.is_some() {
+                    self.workspace.restore_maximized();
+                } else if let Some(tab) = self.state.focused_panel.clone() {
+                    self.workspace.toggle_maximized(&tab);
+                }
+            }
             use crate::viewport::GizmoTool;
             if ctx.input(|input| input.key_pressed(egui::Key::W)) {
                 self.set_gizmo_tool(GizmoTool::Translate);
@@ -3491,6 +3576,8 @@ impl EditorApp {
         let layout = prism_editor_core::DockLayout::from_json(value, &known, 1440.0, 900.0);
         self.workspace.dock = layout.dock;
         self.workspace.floating = layout.floating;
+        // 布局整体换掉时，最大化指向的面板可能已经不在树里。
+        self.workspace.maximized_tab = None;
     }
 
     fn save_named_layout(&mut self, name: &str) {

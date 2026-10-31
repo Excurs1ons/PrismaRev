@@ -326,6 +326,10 @@ pub struct Workspace {
     pub panels: Vec<PanelInfo>,
     pub dock: DockNode,
     pub floating: Vec<FloatPanel>,
+    /// 被最大化显示的 tab（`None` = 正常布局）。
+    ///
+    /// 只影响绘制：dock tree 原样保留，所以还原时不会丢布局。
+    pub maximized_tab: Option<String>,
     pub selection: Vec<usize>,
     pub expanded: HashSet<u32>,
     pub clipboard: Option<ComponentClipboard>,
@@ -405,6 +409,7 @@ impl Workspace {
             panels: default_panels(),
             dock: dock::default_dock(),
             floating: Vec::new(),
+            maximized_tab: None,
             selection: Vec::new(),
             expanded: HashSet::new(),
             clipboard: None,
@@ -2656,6 +2661,55 @@ impl Workspace {
         self.dock = dock::activate_tab(&self.dock, leaf_id, tab);
     }
 
+    /// 最大化 / 还原一个 tab（tab 双击与右键菜单共用）。
+    ///
+    /// 只改 [`Workspace::maximized_tab`]，不动 dock tree。
+    pub fn toggle_maximized(&mut self, tab: &str) {
+        self.maximized_tab = if self.maximized_tab.as_deref() == Some(tab) {
+            None
+        } else {
+            Some(tab.to_string())
+        };
+    }
+
+    pub fn restore_maximized(&mut self) {
+        self.maximized_tab = None;
+    }
+
+    /// 关掉 dock 里的一个 tab（浮动窗口里的同一面板也一起关）。
+    ///
+    /// 关掉**最后**一个面板是 no-op：否则整块布局会变成空白。
+    pub fn close_panel(&mut self, tab: &str) {
+        if dock::collect_tabs(&self.dock).len() <= 1 {
+            return;
+        }
+        if let Some(next) = remove_panel(&self.dock, tab) {
+            self.dock = next;
+        }
+        self.floating.retain(|panel| panel.tab != tab);
+        if self.maximized_tab.as_deref() == Some(tab) {
+            self.maximized_tab = None;
+        }
+    }
+
+    /// 只留这一个 tab：其它面板从 dock 里移除，浮窗一并清掉。
+    pub fn close_other_panels(&mut self, tab: &str) {
+        if dock::find_leaf(&self.dock, tab).is_none() {
+            return;
+        }
+        self.dock = dock::leaf([tab]);
+        self.floating.clear();
+        if self.maximized_tab.as_deref() != Some(tab) {
+            self.maximized_tab = None;
+        }
+    }
+
+    /// 把面板加进指定 leaf（`Add Tab` 菜单项）。
+    pub fn add_tab_to_leaf(&mut self, leaf_id: &str, tab: &str) {
+        self.dock = insert_panel(&self.dock, leaf_id, tab, DockZone::Center, 0.5, None);
+        self.floating.retain(|panel| panel.tab != tab);
+    }
+
     /// 拖拽结束：中心 = 合并成 tab；边缘 = 新开分屏。
     pub fn dock_tab(&mut self, tab: &str, target_leaf: &str, zone: DockZone) {
         self.dock = insert_panel(&self.dock, target_leaf, tab, zone, 0.5, None);
@@ -2701,6 +2755,7 @@ impl Workspace {
         if let Some(node) = dock::layout_preset(id) {
             self.dock = node;
             self.floating.clear();
+            self.maximized_tab = None;
             self.layout_preset = id.to_string();
         }
     }
@@ -4513,6 +4568,93 @@ mod tests {
             json!(30.0)
         );
         assert_eq!(workspace.undo_history().len(), undo_before);
+    }
+
+    #[test]
+    fn maximize_toggles_without_touching_the_dock_tree() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let before = workspace.dock.clone();
+
+        workspace.toggle_maximized("inspector");
+        assert_eq!(workspace.maximized_tab.as_deref(), Some("inspector"));
+        assert_eq!(
+            workspace.dock, before,
+            "maximize must not rewrite the layout"
+        );
+
+        // 再切到别的面板 = 转移最大化，不是取消。
+        workspace.toggle_maximized("log");
+        assert_eq!(workspace.maximized_tab.as_deref(), Some("log"));
+
+        workspace.toggle_maximized("log");
+        assert_eq!(workspace.maximized_tab, None);
+
+        // 切换布局预设 / 还原都要清掉最大化。
+        workspace.toggle_maximized("inspector");
+        workspace.restore_maximized();
+        assert_eq!(workspace.maximized_tab, None);
+        workspace.toggle_maximized("inspector");
+        workspace.set_layout_preset("2by3");
+        assert_eq!(workspace.maximized_tab, None);
+    }
+
+    #[test]
+    fn close_panel_drops_the_tab_and_clears_maximize() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.show_panel("problems");
+        assert!(workspace.docked_tabs().iter().any(|tab| tab == "problems"));
+
+        workspace.toggle_maximized("problems");
+        workspace.close_panel("problems");
+
+        assert!(!workspace.docked_tabs().iter().any(|tab| tab == "problems"));
+        assert_eq!(workspace.maximized_tab, None);
+        assert!(
+            workspace.leaf_of("inspector").is_some(),
+            "dock must survive"
+        );
+
+        // 关掉最后一个面板是 no-op（否则整块布局会变成空白）。
+        workspace.close_other_panels("inspector");
+        assert_eq!(workspace.docked_tabs(), vec!["inspector".to_string()]);
+        workspace.close_panel("inspector");
+        assert_eq!(
+            workspace.docked_tabs(),
+            vec!["inspector".to_string()],
+            "closing the only remaining panel must be a no-op"
+        );
+    }
+
+    #[test]
+    fn close_other_panels_keeps_only_the_chosen_tab() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.float_panel("log", 10.0, 10.0);
+        workspace.toggle_maximized("inspector");
+
+        workspace.close_other_panels("inspector");
+
+        assert_eq!(workspace.docked_tabs(), vec!["inspector".to_string()]);
+        assert!(workspace.floating.is_empty());
+        // 关掉的是「别的面板」，被留下的那个仍然最大化。
+        assert_eq!(workspace.maximized_tab.as_deref(), Some("inspector"));
+    }
+
+    #[test]
+    fn add_tab_to_leaf_merges_instead_of_splitting() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let leaf = workspace.leaf_of("inspector").unwrap();
+        workspace.add_tab_to_leaf(&leaf, "shortcuts");
+
+        let target = dock::find_leaf(&workspace.dock, "shortcuts").unwrap();
+        assert_eq!(target.id(), leaf);
+        assert_eq!(
+            workspace
+                .docked_tabs()
+                .iter()
+                .filter(|tab| *tab == "shortcuts")
+                .count(),
+            1
+        );
     }
 
     #[test]

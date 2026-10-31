@@ -87,6 +87,9 @@ pub struct EditorState {
     /// Scene 视图 / 渲染设置（`#[serde(default)]` 保证旧 `state.json` 仍能读）。
     #[serde(default)]
     pub scene: SceneSettings,
+    /// 被最大化的面板 tab（`#[serde(default)]`：旧存档 = 正常布局）。
+    #[serde(default)]
+    pub maximized: Option<String>,
 }
 
 fn default_locale() -> String {
@@ -123,6 +126,7 @@ impl EditorState {
                 gizmo_tool: "Translate".to_string(),
                 render: None,
             },
+            maximized: workspace.maximized_tab.clone(),
         }
     }
 
@@ -187,6 +191,15 @@ impl EditorState {
             "Local" | "local" => crate::viewport_math::GizmoSpace::Local,
             _ => crate::viewport_math::GizmoSpace::World,
         };
+        // 面板可能已经被删掉（旧存档 / 面板改名），指向不存在的 tab 会让整个
+        // dock 区空白，所以这里按当前 dock 过滤一次。
+        let maximized = self.maximized.clone().filter(|tab| {
+            crate::dock::collect_tabs(&workspace.dock)
+                .iter()
+                .any(|t| t == tab)
+        });
+        workspace.maximized_tab = maximized;
+
         *preferences = self.preferences.clone();
         preferences.max_log_lines = preferences.max_log_lines.clamp(500.0, 20_000.0);
     }
@@ -233,6 +246,25 @@ mod tests {
 
     fn workspace() -> Workspace {
         Workspace::sample()
+    }
+
+    #[test]
+    fn maximized_panel_survives_a_state_round_trip() {
+        let mut source = workspace();
+        source.toggle_maximized("sceneView");
+
+        let state = EditorState::capture(&source, &Preferences::default());
+        let mut target = Workspace::sample();
+        let mut prefs = Preferences::default();
+        state.apply(&mut target, &mut prefs);
+
+        assert_eq!(target.maximized_tab.as_deref(), Some("sceneView"));
+
+        // 存档里的面板已经不存在（改名 / 布局变了）：不能把整个 dock 区变成空白。
+        let mut stale = state.clone();
+        stale.maximized = Some("no-such-panel".to_string());
+        stale.apply(&mut target, &mut prefs);
+        assert_eq!(target.maximized_tab, None);
     }
 
     #[test]
