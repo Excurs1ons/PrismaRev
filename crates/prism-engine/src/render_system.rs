@@ -16,6 +16,26 @@ use prism_render::{
     SkyboxSettings, UiOverlayInput, GPU_LIGHT_KIND_POINT, GPU_LIGHT_KIND_SPOT, PT_LIGHT_MAX,
 };
 use prism_scene::CameraClearFlags;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// 上一次提示的「被忽略相机」数量。
+static LAST_IGNORED_CAMERAS: AtomicUsize = AtomicUsize::new(0);
+
+/// 场景里有比主相机更多的启用相机时提示一次（#461）。
+///
+/// 整条渲染链是单相机的，只有 `depth` 最大的那台会出图。以前这件事完全不吭声，
+/// 用户在编辑器里加第二台相机、调 `depth` / `clear_flags` / 背景色都看不到变化，
+/// 很容易以为是自己参数错了。每帧都 warn 会刷屏，所以只在数量**变多**时提示。
+fn warn_ignored_cameras(world: &World) {
+    let ignored = scene::systems::camera::ignored_cameras(world).len();
+    let previous = LAST_IGNORED_CAMERAS.swap(ignored, Ordering::Relaxed);
+    if ignored > previous {
+        log::warn!(
+            "{ignored} extra enabled camera(s) are ignored: this build renders only the \
+             highest-`depth` camera (see #461)"
+        );
+    }
+}
 
 /// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
 /// 勒克斯（或坎德拉）在 CPU 上乘以此因子，使着色器直接接收有效辐射度。
@@ -201,6 +221,7 @@ fn collect_scene_changes_into(
 
     // 1. 相机 — 真正会被渲染的那台（`active_camera`：`depth` 最大的可渲染启用相机）。
     //    取景、清屏、aspect 写回都是同一个实体，不会各挑一次。
+    warn_ignored_cameras(world);
     let (view_proj, eye, view, projection, exposure, has_camera, camera_entity) = {
         // 宽高比写到**将被渲染**的相机上（`active_camera` 与下面的取景选择一致）。
         if let Some(cam_entity) = scene::systems::camera::active_camera(world) {

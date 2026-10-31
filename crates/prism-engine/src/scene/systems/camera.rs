@@ -49,6 +49,20 @@ pub fn main_camera(world: &World) -> Option<prism_ecs::Entity> {
     all_cameras(world).pop()
 }
 
+/// 本次帧里**不会被渲染**的相机（除主相机之外的所有启用相机）。
+///
+/// 目前整条渲染链（forward / shadow / skybox / post / PT / sprite / UI）都是
+/// 单相机：一台相机取景、一次清屏、一张图。额外的相机既不参与合成也不会报错，
+/// 所以在编辑器里加第二台相机、改它的 `depth` 或 `clear_flags` 看不到任何变化。
+///
+/// 这个函数就是用来把「被忽略的相机」暴露出来的 —— `render_system` 用它决定
+/// 要不要提示用户，而不是让人对着不生效的参数发呆（#461）。
+pub fn ignored_cameras(world: &World) -> Vec<prism_ecs::Entity> {
+    let mut cameras = all_cameras(world);
+    cameras.pop(); // 主相机（`depth` 最大）会画出来
+    cameras
+}
+
 /// 真正会被渲染的相机 = `depth` 最大的启用相机里，第一台**有 `LocalToWorld`** 的。
 ///
 /// 取景、清屏、宽高比写回、飞行输入都走这一处：只要大家用同一个选择函数，
