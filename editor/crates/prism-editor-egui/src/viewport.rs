@@ -751,16 +751,11 @@ impl ViewportState {
             if let (Some(start), Some(end)) = (self.box_start.take(), self.box_current.take()) {
                 let selection_rect = egui::Rect::from_two_pos(start, end);
                 if selection_rect.width() > 3.0 || selection_rect.height() > 3.0 {
-                    let local_start = (
-                        selection_rect.min.x - rect.min.x,
-                        selection_rect.min.y - rect.min.y,
-                    );
-                    let local_end = (
-                        selection_rect.max.x - rect.min.x,
-                        selection_rect.max.y - rect.min.y,
-                    );
+                    // `box_select` 要的是视口像素坐标，egui 给的是屏幕坐标（#422）。
+                    let local =
+                        vm::local_box((start.x, start.y), (end.x, end.y), (rect.min.x, rect.min.y));
                     let hits = vm::box_select(
-                        (local_start.0, local_start.1, local_end.0, local_end.1),
+                        local,
                         &frame,
                         rect.width(),
                         rect.height(),

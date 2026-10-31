@@ -662,6 +662,22 @@ fn transformed_corners(transform: &TransformJson) -> [[f32; 3]; 8] {
     corners
 }
 
+/// 把屏幕上的拖拽框换算成视口像素坐标 `(min_x, min_y, max_x, max_y)`。
+///
+/// [`box_select`] 和 `pick_entity` 都以**视口左上角**为原点，而 egui 给的是屏幕坐标：
+/// 视口左边有层级面板时原点不为零。忘了减原点，框选就会恒从视口左上角开始，
+/// 把光标上方的所有物体一起选中（#422）。反方向拖拽也会在这里归一化成 min/max。
+pub fn local_box(start: (f32, f32), end: (f32, f32), origin: (f32, f32)) -> (f32, f32, f32, f32) {
+    let start = (start.0 - origin.0, start.1 - origin.1);
+    let end = (end.0 - origin.0, end.1 - origin.1);
+    (
+        start.0.min(end.0),
+        start.1.min(end.1),
+        start.0.max(end.0),
+        start.1.max(end.1),
+    )
+}
+
 /// 框选：实体旋转后的包围盒投影成屏幕 AABB，与矩形**相交**即选中。
 ///
 /// 矩形是 `(min_x, min_y, max_x, max_y)`（视口像素坐标）；索引按文档顺序返回。
@@ -1062,6 +1078,24 @@ mod tests {
             vec![0, 1]
         );
         assert!(box_select((0.0, 0.0, 4.0, 4.0), &frame, 800.0, 600.0, &entities).is_empty());
+    }
+
+    #[test]
+    fn box_select_starts_where_the_drag_started_not_at_the_viewport_origin() {
+        // 视口左边有层级面板时原点不为零（#422）：屏幕坐标必须先减去它。
+        let origin = (300.0, 120.0);
+        assert_eq!(
+            local_box((700.0, 500.0), (720.0, 520.0), origin),
+            (400.0, 380.0, 420.0, 400.0)
+        );
+    }
+
+    #[test]
+    fn local_box_normalizes_a_reverse_drag() {
+        assert_eq!(
+            local_box((720.0, 520.0), (700.0, 500.0), (300.0, 120.0)),
+            (400.0, 380.0, 420.0, 400.0)
+        );
     }
 
     #[test]
