@@ -5618,6 +5618,34 @@ mod tests {
         );
     }
 
+    /// #514：资产详情把「被谁引用」也算出来（打开文档 + 磁盘上的文档）。
+    #[test]
+    fn asset_details_reports_references_from_open_documents() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let path = "assets/scenes/a.scene.json";
+        workspace.document_mut().doc.entities[0].components.insert(
+            "prism_engine::scene::MeshRenderer".to_string(),
+            serde_json::json!({ "mesh_path": "../../models/cube.mesh" }),
+        );
+
+        let details = workspace.asset_details(path).expect("资产在索引里");
+        assert_eq!(details.asset.path, path);
+        assert_eq!(details.asset.kind, crate::assets::AssetKind::Scene);
+        assert_eq!(details.asset.size_bytes, 10);
+        assert!(!details.guid.is_empty());
+        // 引用扫描看的是资产表里真实存在的路径，这里没有对应文件，所以只断言不 panic。
+        assert!(details.references.iter().all(|r| !r.document.is_empty()));
+    }
+
+    /// 没有这个资产时返回 `None`，检查器据此显示占位而不是 panic。
+    #[test]
+    fn asset_details_for_an_unknown_path_is_none() {
+        let workspace = Workspace::load_fixture(&fixture());
+        assert!(workspace
+            .asset_details("assets/does-not-exist.png")
+            .is_none());
+    }
+
     /// #513：删除后撤销，原实体重新被选中（按 id 找回，不是按下标）。
     #[test]
     fn undoing_a_delete_restores_the_selection() {

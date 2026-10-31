@@ -38,7 +38,9 @@ pub mod undo;
 pub mod viewport_math;
 pub mod workspace;
 
-pub use assets::{AssetInfo, AssetKind, AssetQuery, AssetTree};
+pub use assets::{
+    format_bytes, AssetDetails, AssetInfo, AssetKind, AssetPreview, AssetQuery, AssetTree,
+};
 pub use build::{copy_artifacts, plan_build, ArtifactCopy, BuildPlan, BuildStep};
 pub use components::ComponentMap;
 pub use doc::{EntityJson, SceneDoc, TransformJson};
