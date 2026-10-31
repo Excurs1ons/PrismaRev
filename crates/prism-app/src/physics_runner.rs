@@ -11,8 +11,13 @@
 //!
 //! # 状态：骨架（未接线）
 //!
-//! 线程/消息骨架已就位，但尚未被 `App` 启动与消费；
-//! 待 ECS 物理系统接入后再启用。保留以抑制 dead_code 警告。
+//! 线程/消息骨架已就位，但**没有被 `App` 启动或消费** ——
+//! `physics_thread_main` 全仓库没有调用点。场景里可创作的 `Collider` / `Rigidbody`
+//! 目前只服务查询（`prism_engine::physics::raycast`），不会产生刚体积分。
+//!
+//! 接线顺序（#522）：`App` 建 channel + spawn → 每固定步发变化的实体 →
+//! 在 `hierarchy_system` 之前把结果写回 `LocalTransform`；
+//! 接上之后这段 `allow(dead_code)` 与 `Subsystem::Physics` 的告警一起删。
 
 #![allow(dead_code)]
 

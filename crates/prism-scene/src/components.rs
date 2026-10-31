@@ -12,6 +12,7 @@
 //! | 天空盒   | `Skybox` |
 //! | 音频     | `AudioSource`（场景内播放）, `AudioListener`（听者） |
 //! | 地形     | `Terrain`（高度场 → 运行时生成网格） |
+//! | 物理     | `Collider`（形状 + 查询层）, `Rigidbody`（Static/Kinematic/Dynamic） |
 //! | 调试     | `Gizmo` |
 //! | 场景     | `SceneMember` |
 //! | 标识     | `Name` |
@@ -1149,6 +1150,169 @@ impl Default for Gizmo {
             enabled: true,
             scale: 1.0,
             mode: GizmoMode::Translate,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 物理
+// ---------------------------------------------------------------------------
+
+/// 碰撞体形状 = `ColliderShape`。
+///
+/// 尺寸都是**本地空间**的（再乘实体缩放）；Phase 1 只做形状/射线查询，
+/// 还没有真正的刚体积分（见 #522 的后续步骤）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ColliderShape {
+    /// 轴对齐盒：`half_extents` 是三个方向上的半尺寸。
+    #[default]
+    Box,
+    /// 球：`radius` 是半径。
+    Sphere,
+    /// 胶囊：沿本地 **+Y**，`radius` + `half_height`（圆柱段半高）。
+    Capsule,
+}
+
+impl ReflectType for ColliderShape {
+    fn field_type() -> FieldType {
+        FieldType::U8
+    }
+
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        Some(&["Box", "Sphere", "Capsule"])
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(match self {
+            Self::Box => 0,
+            Self::Sphere => 1,
+            Self::Capsule => 2,
+        })
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        match value.as_u64()? {
+            0 => Ok(Self::Box),
+            1 => Ok(Self::Sphere),
+            2 => Ok(Self::Capsule),
+            other => Err(ReflectError::BadData(format!(
+                "invalid ColliderShape discriminant {other}"
+            ))),
+        }
+    }
+}
+
+/// 刚体类型 = `BodyType`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BodyType {
+    /// 不动，只参与碰撞/查询（地板、墙）。
+    #[default]
+    Static,
+    /// 由动画/代码移动，推开动态物体，自己不被推。
+    Kinematic,
+    /// 受重力与碰撞影响。
+    Dynamic,
+}
+
+impl ReflectType for BodyType {
+    fn field_type() -> FieldType {
+        FieldType::U8
+    }
+
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        Some(&["Static", "Kinematic", "Dynamic"])
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(match self {
+            Self::Static => 0,
+            Self::Kinematic => 1,
+            Self::Dynamic => 2,
+        })
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        match value.as_u64()? {
+            0 => Ok(Self::Static),
+            1 => Ok(Self::Kinematic),
+            2 => Ok(Self::Dynamic),
+            other => Err(ReflectError::BadData(format!(
+                "invalid BodyType discriminant {other}"
+            ))),
+        }
+    }
+}
+
+/// 碰撞体 = `Collider`。
+///
+/// 形状由 [`ColliderShape`] 决定，具体尺寸用下面三个字段（彼此独立，按形状取用）：
+/// 盒用 `half_extents`，球用 `radius`，胶囊用 `radius` + `half_height`。
+/// 所有尺寸都在**本地空间**，世界空间大小再乘实体缩放。
+///
+/// Phase 1（#522）落地的是「可创作 + 可用射线查询」：场景/编辑器里能加、
+/// 能改，引擎的 `physics::raycast` 已经按真实形状求交；rapier 刚体积分、
+/// 触发器回调、碰撞网格仍待接线。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Collider")]
+#[serde(default)]
+pub struct Collider {
+    pub shape: ColliderShape,
+    /// 形状中心相对实体原点的偏移（本地空间）。
+    pub center: [f32; 3],
+    /// 盒的三个半尺寸。
+    pub half_extents: [f32; 3],
+    /// 球 / 胶囊半径。
+    pub radius: f32,
+    /// 胶囊圆柱段的半高（不含两端半球）。
+    pub half_height: f32,
+    /// 触发器：参与查询但**不阻挡**刚体（还没有回调，等物理步接线）。
+    pub is_trigger: bool,
+    pub friction: f32,
+    pub restitution: f32,
+    /// 查询用的层掩码位；`raycast` 只命中与掩码相与非 0 的碰撞体。
+    pub layer: u32,
+}
+
+impl Default for Collider {
+    fn default() -> Self {
+        Self {
+            shape: ColliderShape::Box,
+            center: [0.0, 0.0, 0.0],
+            half_extents: [0.5, 0.5, 0.5],
+            radius: 0.5,
+            half_height: 0.5,
+            is_trigger: false,
+            friction: 0.5,
+            restitution: 0.0,
+            layer: 1,
+        }
+    }
+}
+
+/// 刚体 = `Rigidbody`。
+///
+/// 只有作者参数；真正的积分/求解（rapier 线程）还没有接到 `App`（#522）。
+/// 有 `Collider` 没有 `Rigidbody` 的实体按静态障碍处理。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Rigidbody")]
+#[serde(default)]
+pub struct Rigidbody {
+    pub body_type: BodyType,
+    /// 质量（公斤）；`Dynamic` 才有意义。
+    pub mass: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub use_gravity: bool,
+}
+
+impl Default for Rigidbody {
+    fn default() -> Self {
+        Self {
+            body_type: BodyType::Dynamic,
+            mass: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.05,
+            use_gravity: true,
         }
     }
 }
