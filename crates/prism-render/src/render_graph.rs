@@ -474,6 +474,10 @@ pub struct GraphFrame<'a> {
     /// 色调映射 众数 for `PostPass` (Reinhard / ACES / ...). Forwarded so
     /// `PostPass::execute` reads it from the 图 context.
     pub tonemap_mode: u32,
+    /// Post-process anti-aliasing mode for `PostPass` (0 = off, 1 = FXAA).
+    /// Requires no extra targets: FXAA runs inside the tonemap pass, so the
+    /// offscreen (editor viewport) and swapchain paths get the same result.
+    pub aa_mode: u32,
     /// PostPass 调试 render-target viewer (Tab 调 0 = 法线 tonemapped
     /// 高动态范围 1 = linearized 深度 2 = view-space 法线 PostPass picks which
     /// published 视图 to 样本 based on this.

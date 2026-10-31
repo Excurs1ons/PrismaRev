@@ -4225,6 +4225,7 @@ fn render_settings_json(
     serde_json::json!({
         "debugFlags": settings.debug_flags,
         "tonemapMode": settings.tonemap_mode,
+        "aaMode": settings.aa_mode,
         "debugRt": settings.debug_rt,
         "pathTrace": settings.render_mode == RenderMode::PathTrace,
         "ptMaxBounces": settings.pt_max_bounces,
@@ -4262,6 +4263,7 @@ fn render_settings_from_json(
     prism_engine::render_settings::RenderSettings {
         debug_flags: u32_field("debugFlags", base.debug_flags),
         tonemap_mode: u32_field("tonemapMode", base.tonemap_mode),
+        aa_mode: u32_field("aaMode", base.aa_mode),
         debug_rt: u32_field("debugRt", base.debug_rt),
         render_mode: if path_trace {
             RenderMode::PathTrace

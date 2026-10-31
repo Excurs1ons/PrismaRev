@@ -11,7 +11,7 @@ pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
 pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
 /// Push-constant block size in bytes (reflected).
-pub const PUSH_CONSTANT_SIZE: u32 = 4;
+pub const PUSH_CONSTANT_SIZE: u32 = 16;
 
 // --- descriptor set 0 ---
 pub const HDR_TEX_SET: u32 = 0;
@@ -20,11 +20,15 @@ pub const HDR_TEX_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
 /// Push-constant struct (auto-generated from Slang `PostPush`).
 ///
 /// Field offsets are the reflected std140 ones — alignment holes are emitted as
-/// explicit `_pad_*` fillers, so `size_of` is 4 bytes and every field sits
+/// explicit `_pad_*` fillers, so `size_of` is 16 bytes and every field sits
 /// where the shader expects it.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PostPush {
     /// offset 0, size 4
     pub tonemapMode: u32,
+    /// offset 4, size 4
+    pub aaMode: u32,
+    /// offset 8, size 8
+    pub invTexelSize: [f32; 2],
 }

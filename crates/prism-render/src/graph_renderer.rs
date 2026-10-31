@@ -98,6 +98,10 @@ pub struct FrameInput<'a> {
     pub inv_projection: [[f32; 4]; 4],
     pub debug_flags: u32,
     pub tonemap_mode: u32,
+    /// Post-process anti-aliasing mode (0 = off, 1 = FXAA). Runs inside
+    /// `PostPass`, so it costs no extra render targets and works identically for
+    /// the swapchain and offscreen (editor viewport) paths.
+    pub aa_mode: u32,
     pub debug_rt: u32,
     pub proj22: f32,
     pub proj32: f32,
@@ -1728,6 +1732,7 @@ impl GraphRenderer {
             inv_projection,
             debug_flags,
             tonemap_mode,
+            aa_mode,
             debug_rt,
             proj22,
             proj32,
@@ -1752,6 +1757,7 @@ impl GraphRenderer {
         let inv_projection = *inv_projection;
         let debug_flags = *debug_flags;
         let tonemap_mode = *tonemap_mode;
+        let aa_mode = *aa_mode;
         let debug_rt = *debug_rt;
         let proj22 = *proj22;
         let proj32 = *proj32;
@@ -1808,6 +1814,7 @@ impl GraphRenderer {
                 lights,
                 ao_view,
                 tonemap_mode,
+                aa_mode,
                 debug_rt,
                 proj22,
                 proj32,
@@ -2105,6 +2112,7 @@ impl GraphRenderer {
         inv_projection: [[f32; 4]; 4],
         debug_flags: u32,
         tonemap_mode: u32,
+        aa_mode: u32,
         debug_rt: u32,
         proj22: f32,
         proj32: f32,
@@ -2130,6 +2138,7 @@ impl GraphRenderer {
             inv_projection,
             debug_flags,
             tonemap_mode,
+            aa_mode,
             debug_rt,
             proj22,
             proj32,

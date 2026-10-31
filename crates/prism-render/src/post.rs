@@ -1,9 +1,14 @@
-//! 后处理通道——HDR 场景色调映射 → sRGB 交换链
+//! 后处理通道——HDR 场景色调映射（+ 可选 FXAA）→ sRGB 交换链
 //!
 //! 全屏三角形片元通道，对 ForwardPass 的 HDR 中间颜色附件进行采样，
 //! 应用 Reinhard 或 ACES 色调映射（根据 `tonemap_mode`），
 //! 并将结果写入交换链图像。取代了之前位于 `scene_frag.slang` 中的内联色调映射，
 //! 使场景输出保持线性 HDR（可被未来的后处理效果使用：泛光、时域抗锯齿等）。
+//!
+//! `aa_mode = 1` 时在色调映射之后再做一遍 FXAA（后处理抗锯齿，见 #494）：
+//! 只在本通道内多采样几次已经色调映射过的颜色，**不改任何管线状态**，也
+//! 不需要多采样目标 / resolve，因此交换链与离屏（编辑器视口）路径拿到的是
+//! 同一份结果。调试图（`debug_rt != 0`）会强制关掉它。
 //!
 //! ## 资源
 //! - 一个描述符集，将 HDR 颜色绑定为组合图像采样器
@@ -584,9 +589,10 @@ impl RenderPassNode for PostPass {
         // (which changes the 视图 triggers a rewrite automatically.
         self.set_input(ctx.device, ctx.frame_index, input_view, image_layout);
 
-        // The generated PostPush only 包含 tonemapMode (the post 着色器
-        // selects Reinhard vs ACES via this field). debug_rt, proj22/proj32,
-        // near/far etc. are consumed on the Rust side 输入 绑定 selection,
+        // The generated PostPush carries tonemapMode (Reinhard / ACES /
+        // passthrough), aaMode (0 = off, 1 = FXAA) and invTexelSize (one texel in
+        // UV units, used by the FXAA taps). debug_rt, proj22/proj32, near/far
+        // etc. are consumed on the Rust side 输入 绑定 selection,
         // 深度 linearization) and are NOT part of the GPU 推送 常量
         // proj22/proj32/near/far 深度 linearization values are still computed
         // here as a 引用 for future 着色器 extensions.
@@ -604,6 +610,19 @@ impl RenderPassNode for PostPass {
         };
         let push = shader_bindings::post::PostPush {
             tonemapMode: ctx.frame.tonemap_mode,
+            aaMode: effective_aa_mode(ctx.frame.debug_rt, ctx.frame.aa_mode),
+            invTexelSize: [
+                if self.extent.width > 0 {
+                    1.0 / self.extent.width as f32
+                } else {
+                    0.0
+                },
+                if self.extent.height > 0 {
+                    1.0 / self.extent.height as f32
+                } else {
+                    0.0
+                },
+            ],
         };
         self.execute(
             ctx.device,
@@ -707,6 +726,20 @@ fn _memory_type_for_hdr(context: &VulkanContext, mem_type_bits: u32) -> anyhow::
     .context("PostPass: no suitable memory type for HDR image")
 }
 
+/// Anti-aliasing mode actually handed to the shader.
+///
+/// The debug render-target viewer (`debug_rt` 1 = depth, 2 = view-space normal)
+/// shows a diagnostic image: FXAA would blend neighbouring texels and hide
+/// exactly the stair-stepping those views exist to expose, so it is forced off
+/// there.
+pub(crate) fn effective_aa_mode(debug_rt: u32, aa_mode: u32) -> u32 {
+    if debug_rt == 0 {
+        aa_mode
+    } else {
+        0
+    }
+}
+
 /// Helper to select the input resource handle and expected image layout for PostPass.
 ///
 /// In path-trace mode we read PT_COLOR_H instead of FORWARD_COLOR_H, unless no usable camera
@@ -770,6 +803,25 @@ mod tests {
         let (handle, layout) = select_input_target(0, true, false, false);
         assert_eq!(handle, FORWARD_COLOR_H);
         assert_eq!(layout, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    #[test]
+    fn test_effective_aa_mode_is_off_for_debug_views() {
+        assert_eq!(effective_aa_mode(0, 0), 0);
+        assert_eq!(effective_aa_mode(0, 1), 1);
+        // Depth / view-space normal debug views stay unfiltered on purpose.
+        assert_eq!(effective_aa_mode(1, 1), 0);
+        assert_eq!(effective_aa_mode(2, 1), 0);
+    }
+
+    #[test]
+    fn test_post_push_layout_matches_the_shader() {
+        use shader_bindings::post::{PostPush, PUSH_CONSTANT_SIZE};
+        assert_eq!(std::mem::offset_of!(PostPush, tonemapMode), 0);
+        assert_eq!(std::mem::offset_of!(PostPush, aaMode), 4);
+        assert_eq!(std::mem::offset_of!(PostPush, invTexelSize), 8);
+        assert_eq!(std::mem::size_of::<PostPush>(), 16);
+        assert_eq!(PUSH_CONSTANT_SIZE, 16);
     }
 
     #[test]
