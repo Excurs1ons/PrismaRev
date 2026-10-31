@@ -297,6 +297,32 @@ impl OrbitCamera {
         self.distance = (self.distance * (1.0 - delta * 0.001)).clamp(0.2, 500.0);
     }
 
+    /// 缩放到光标（#511）：`anchor` 是光标射线上的世界点，缩放后它仍在同一屏幕位置。
+    ///
+    /// 与 Unity `SceneViewMotion.HandleScrollWheel` 一致：先按 [`Self::zoom`] 改
+    /// `distance`，再按 `1 - new/old` 的比例把 `target` 拉向锚点。推导上这是精确的
+    /// ——锚点始终在自己的射线上（透视）或自己那条平行线上（正交），所以屏幕位置不变。
+    ///
+    /// `anchor` 为 `None` 或含非有限值时就退化成画面中心缩放。
+    pub fn zoom_towards(&mut self, delta: f32, anchor: Option<[f32; 3]>) {
+        let before = self.distance;
+        self.zoom(delta);
+        let Some(anchor) = anchor.filter(|anchor| anchor.iter().all(|value| value.is_finite()))
+        else {
+            return;
+        };
+        if !before.is_finite() || before <= 0.0 {
+            return;
+        }
+        let percentage = 1.0 - self.distance / before;
+        if !percentage.is_finite() {
+            return;
+        }
+        for (target, anchor) in self.target.iter_mut().zip(anchor) {
+            *target += (anchor - *target) * percentage;
+        }
+    }
+
     pub fn focus(&mut self, point: [f32; 3], radius: f32) {
         self.target = point;
         if self.orthographic {
@@ -4425,6 +4451,100 @@ mod tests {
         assert!(camera.ortho_half_height().is_none());
         camera.orbit(50.0, 0.0);
         assert!(camera.yaw.abs() > 1e-6, "退出 2D 后轨道恢复");
+    }
+
+    /// #511：滚轮缩放到光标 —— 锚点（光标射线上的世界点）缩放前后屏幕位置不变。
+    fn anchor_point(camera: &OrbitCamera, x: f32, y: f32, width: f32, height: f32) -> [f32; 3] {
+        let frame = crate::viewport_math::camera_frame(camera);
+        let (origin, direction) =
+            crate::viewport_math::ray_from_screen(x, y, &frame, width, height);
+        let distance = camera.distance;
+        [
+            origin[0] + direction[0] * distance,
+            origin[1] + direction[1] * distance,
+            origin[2] + direction[2] * distance,
+        ]
+    }
+
+    fn screen_of(camera: &OrbitCamera, point: [f32; 3], width: f32, height: f32) -> (f32, f32) {
+        let frame = crate::viewport_math::camera_frame(camera);
+        let (x, y, _depth) =
+            crate::viewport_math::project(point, &frame, width, height).expect("on screen");
+        (x, y)
+    }
+
+    #[test]
+    fn zooming_towards_the_cursor_keeps_the_anchor_on_screen() {
+        let mut camera = OrbitCamera {
+            target: [1.0, 0.5, -2.0],
+            yaw: 0.4,
+            pitch: 0.3,
+            distance: 14.0,
+            orthographic: false,
+        };
+        let before = camera;
+        let anchor = anchor_point(&camera, 640.0, 180.0, 800.0, 600.0);
+        let (x0, y0) = screen_of(&camera, anchor, 800.0, 600.0);
+
+        camera.zoom_towards(240.0, Some(anchor));
+
+        assert!(camera.distance < before.distance, "wheel forward zooms in");
+        // pivot 朝锚点移动了 1 - new/old 的比例。
+        let percentage = 1.0 - camera.distance / before.distance;
+        for axis in 0..3 {
+            let expected = before.target[axis] + (anchor[axis] - before.target[axis]) * percentage;
+            assert!((camera.target[axis] - expected).abs() < 1e-4);
+        }
+
+        let (x1, y1) = screen_of(&camera, anchor, 800.0, 600.0);
+        assert!(
+            (x1 - x0).abs() < 0.05 && (y1 - y0).abs() < 0.05,
+            "anchor moved on screen: ({x0}, {y0}) -> ({x1}, {y1})"
+        );
+    }
+
+    #[test]
+    fn zooming_towards_the_cursor_works_in_the_2d_view() {
+        let mut camera = OrbitCamera::default();
+        camera.set_2d(true);
+        let before = camera;
+        let anchor = anchor_point(&camera, 720.0, 120.0, 800.0, 600.0);
+        let (x0, y0) = screen_of(&camera, anchor, 800.0, 600.0);
+
+        camera.zoom_towards(300.0, Some(anchor));
+
+        assert!(camera.distance < before.distance);
+        let (x1, y1) = screen_of(&camera, anchor, 800.0, 600.0);
+        assert!(
+            (x1 - x0).abs() < 0.05 && (y1 - y0).abs() < 0.05,
+            "2D anchor moved on screen: ({x0}, {y0}) -> ({x1}, {y1})"
+        );
+    }
+
+    #[test]
+    fn zooming_without_a_cursor_keeps_the_target() {
+        let mut camera = OrbitCamera::default();
+        let before = camera;
+        camera.zoom_towards(200.0, None);
+        assert_eq!(camera.target, before.target);
+        assert!(camera.distance < before.distance);
+
+        // 非有限锚点（射线退化）同样退回画面中心缩放。
+        let mut camera = OrbitCamera::default();
+        camera.zoom_towards(200.0, Some([f32::NAN, 0.0, 0.0]));
+        assert_eq!(camera.target, before.target);
+    }
+
+    #[test]
+    fn zooming_towards_the_cursor_respects_the_distance_limits() {
+        let mut camera = OrbitCamera {
+            distance: 500.0,
+            ..OrbitCamera::default()
+        };
+        // 继续拉远也只会停在 500，此时 percentage == 0，target 不动。
+        camera.zoom_towards(-500.0, Some([10.0, 10.0, 0.0]));
+        assert_eq!(camera.distance, 500.0);
+        assert_eq!(camera.target, [0.0, 0.0, 0.0]);
     }
 
     #[test]
