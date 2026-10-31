@@ -336,25 +336,28 @@ impl Cooker for TextureCooker {
 
         let mips_rgba = Self::generate_mips(w, h, rgba);
 
-        // Decide 格式 byte — only RGBA8 is currently supported.
-        let (format, mips): (u8, Vec<(u32, u32, Vec<u8>)>) = match ctx.settings.texture.compression
-        {
+        // 格式 byte：只有 RGBA8 有编码器。块压缩（BC / ASTC / ETC2）还没实现，
+        // 所以 profile 里声明的桌面 / 移动格式仍然回退 —— 但**运行时**已经能读
+        // BC1 / BC3 / BC5 / BC6H（#519），编码器接上就能直接用。
+        let (format, mips, block_compressed) = match ctx.settings.texture.compression {
             profile::TextureCompression::Rgba8 | profile::TextureCompression::None => {
-                (RTEX_FORMAT_RGBA8, mips_rgba)
+                (RTEX_FORMAT_RGBA8, mips_rgba, false)
             }
             other => {
-                tracing::warn!("Compression format {other:?} 已实现, falling back to RGBA8");
-                (RTEX_FORMAT_RGBA8, mips_rgba)
+                tracing::warn!(
+                    "Compression format {other:?} not implemented yet, falling back to RGBA8"
+                );
+                (RTEX_FORMAT_RGBA8, mips_rgba, false)
             }
         };
 
         let cooked_data = Self::write_rtex(&mips, format);
 
-        // Textures with mip chains should NOT be separately compressed —
-        // the mip data is already tightly packed.
+        // 块压缩的 mip 数据已经够紧凑，再套一层 zstd 收益很小；未压缩的 RGBA8
+        // 像素很好压（一般能省 30~50% 体积），所以让它进 pak 的压缩流程（#519）。
         Ok(CookResult {
             cooked_data,
-            compress: false,
+            compress: !block_compressed,
         })
     }
 }

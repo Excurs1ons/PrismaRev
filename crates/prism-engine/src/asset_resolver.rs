@@ -18,7 +18,9 @@
 use std::collections::{HashMap, HashSet};
 
 use prism_asset::core::AssetId;
-use prism_asset::formats::{RTEX_FORMAT_BC5, RTEX_FORMAT_BC6H, RTEX_FORMAT_RGBA8};
+use prism_asset::formats::{
+    RTEX_FORMAT_BC1, RTEX_FORMAT_BC3, RTEX_FORMAT_BC5, RTEX_FORMAT_BC6H, RTEX_FORMAT_RGBA8,
+};
 use prism_asset::runtime::{MaterialAsset, MeshAsset, ResourceManager, TextureAsset};
 use prism_ecs::Entity;
 use prism_ecs::World;
@@ -38,6 +40,12 @@ fn texture_format_for(rtex_format: u8, srgb: bool) -> Option<TextureFormat> {
     match rtex_format {
         RTEX_FORMAT_RGBA8 if srgb => Some(TextureFormat::Rgba8Srgb),
         RTEX_FORMAT_RGBA8 => Some(TextureFormat::Rgba8),
+        // 块压缩格式的颜色空间同样由槽位决定（albedo/emissive = sRGB，
+        // normal/MR/AO = 线性），与 RGBA8 一致（#519）。
+        RTEX_FORMAT_BC1 if srgb => Some(TextureFormat::Bc1Srgb),
+        RTEX_FORMAT_BC1 => Some(TextureFormat::Bc1Unorm),
+        RTEX_FORMAT_BC3 if srgb => Some(TextureFormat::Bc3Srgb),
+        RTEX_FORMAT_BC3 => Some(TextureFormat::Bc3Unorm),
         RTEX_FORMAT_BC5 => Some(TextureFormat::Bc5Unorm),
         RTEX_FORMAT_BC6H => Some(TextureFormat::Bc6HUfloat),
         _ => None,
@@ -1094,12 +1102,30 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_rtex_formats_fall_back() {
-        use prism_asset::formats::{RTEX_FORMAT_BC1, RTEX_FORMAT_BC3};
+    fn bc1_and_bc3_follow_the_slot_colour_space() {
+        // 颜色贴图要 sRGB 采样，法线 / MR 这类要保持线性（#519）。
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_BC1, true),
+            Some(TextureFormat::Bc1Srgb)
+        );
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_BC1, false),
+            Some(TextureFormat::Bc1Unorm)
+        );
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_BC3, true),
+            Some(TextureFormat::Bc3Srgb)
+        );
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_BC3, false),
+            Some(TextureFormat::Bc3Unorm)
+        );
+    }
 
-        assert_eq!(texture_format_for(RTEX_FORMAT_BC1, true), None);
-        assert_eq!(texture_format_for(RTEX_FORMAT_BC3, true), None);
+    #[test]
+    fn unsupported_rtex_formats_fall_back() {
         assert_eq!(texture_format_for(99, false), None);
+        assert_eq!(texture_format_for(99, true), None);
     }
 }
 

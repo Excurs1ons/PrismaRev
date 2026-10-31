@@ -119,10 +119,27 @@ fn decode_rtex_maps_block_formats() {
 }
 
 #[test]
-fn decode_rtex_rejects_formats_without_a_texture_format() {
+fn decode_rtex_accepts_bc1_and_bc3_block_data() {
+    // 块压缩贴图能直接上传（#519）：BC1 是 8 字节 / 块，BC3 是 16 字节 / 块。
     let bc1 = rtex_blob(4, 4, RTEX_FORMAT_BC1, &[vec![0u8; 8]]);
-    let err = decode_rtex(&bc1).unwrap_err().to_string();
-    assert!(err.contains("BC1/BC3"), "unexpected error: {err}");
+    let decoded = decode_rtex(&bc1).expect("BC1 payload decodes");
+    assert_eq!(decoded.width, 4);
+    assert_eq!(
+        decoded.pixels.len(),
+        8,
+        "BC1 keeps the 8-byte block payload"
+    );
+    assert_eq!(decoded.format, TextureFormat::Bc1Srgb);
+
+    let bc3 = rtex_blob(4, 4, RTEX_FORMAT_BC3, &[vec![0u8; 16]]);
+    assert!(decode_rtex(&bc3).is_ok(), "BC3 payload decodes");
+}
+
+#[test]
+fn decode_rtex_rejects_unknown_format_codes() {
+    let unknown = rtex_blob(4, 4, 99, &[vec![0u8; 8]]);
+    let err = decode_rtex(&unknown).unwrap_err().to_string();
+    assert!(err.contains("unknown format"), "unexpected error: {err}");
 }
 
 #[test]

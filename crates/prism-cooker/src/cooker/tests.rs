@@ -220,8 +220,57 @@ fn texture_cooker_generates_mips() {
     // Mip1: 2*2*4 = 16 字节
     assert_eq!(mip2_off, 30 + 64 + 16);
 
-    // Not compressible (mip-packed).
-    assert!(!result.compress);
+    // RGBA8 mip 链仍然值得交给 pak 的 zstd（#519）。
+    assert!(result.compress);
+}
+
+#[test]
+fn rgba8_textures_are_marked_for_pak_compression() {
+    // 未压缩的像素很好压（zstd 一般省 30~50%）；只有块压缩的那些才应该跳过
+    // 外层压缩。以前一律 `compress: false` 是 #519 记的那条问题。
+    let pixels = std::iter::repeat_n([16u8, 128, 240, 255], 4 * 4)
+        .flatten()
+        .collect::<Vec<_>>();
+    let intermediate = make_texture_intermediate(4, 4, &pixels);
+    let id = AssetId::from_raw((1u64 << 32) | 100);
+    let record =
+        crate::db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+
+    let settings = profile::CookSettings::default();
+    let ctx = CookContext {
+        record: &record,
+        imported_data: &intermediate,
+        settings: &settings,
+    };
+    let result = TextureCooker.cook(&ctx).unwrap();
+    assert!(
+        result.compress,
+        "RGBA8 payloads should go through the pak zstd path"
+    );
+}
+
+#[test]
+fn an_unimplemented_compression_profile_still_falls_back_to_rgba8() {
+    // profile 说 BC7（desktop 默认），但编码器还没实现：必须是 RGBA8 + 可压缩，
+    // 而不是产出运行时读不懂的块数据。
+    let pixels = std::iter::repeat_n([200u8, 40, 90, 255], 4 * 4)
+        .flatten()
+        .collect::<Vec<_>>();
+    let intermediate = make_texture_intermediate(4, 4, &pixels);
+    let id = AssetId::from_raw((1u64 << 32) | 101);
+    let record =
+        crate::db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+    let mut settings = profile::CookSettings::default();
+    settings.texture.compression = profile::TextureCompression::Bc7;
+    let ctx = CookContext {
+        record: &record,
+        imported_data: &intermediate,
+        settings: &settings,
+    };
+    let result = TextureCooker.cook(&ctx).unwrap();
+    // RTEX format byte 在 header 的固定偏移上（4 magic + 1 version + 4 w + 4 h + 4 levels）。
+    assert_eq!(result.cooked_data[17], 0, "RGBA8 format byte");
+    assert!(result.compress);
 }
 
 #[test]

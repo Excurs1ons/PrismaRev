@@ -63,6 +63,12 @@ pub enum TextureFormat {
     /// and must NOT apply a manual `pow(2.2)`. Used for albedo / emissive.
     Rgba8Srgb,
     // ── 块压缩格式（DESIGN §7.2）：离线编码，运行时直接上传压缩块 ──
+    /// BC1 / DXT1（RGB，4×4 块 8 字节）。
+    Bc1Unorm,
+    Bc1Srgb,
+    /// BC3 / DXT5（RGBA，4×4 块 16 字节）。
+    Bc3Unorm,
+    Bc3Srgb,
     Bc7Unorm,
     Bc7Srgb,
     Bc5Unorm,
@@ -82,6 +88,8 @@ impl TextureFormat {
         match self {
             TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => 4,
             // 块压缩格式按像素平均字节数近似（仅用于估算，精确大小用 compressed_byte_len）
+            TextureFormat::Bc1Unorm | TextureFormat::Bc1Srgb => 1, // 0.5B/px，向上取整
+            TextureFormat::Bc3Unorm | TextureFormat::Bc3Srgb => 1,
             TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb => 1, // 4x4 block 16B = 1B/px
             TextureFormat::Bc5Unorm => 1,
             TextureFormat::Bc4Unorm => 1, // 实际 0.5B/px，这里取整用于校验宽松
@@ -103,7 +111,9 @@ impl TextureFormat {
             TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => {
                 (width as usize) * (height as usize) * 4
             }
-            TextureFormat::Bc7Unorm
+            TextureFormat::Bc3Unorm
+            | TextureFormat::Bc3Srgb
+            | TextureFormat::Bc7Unorm
             | TextureFormat::Bc7Srgb
             | TextureFormat::Bc5Unorm
             | TextureFormat::Bc6HUfloat => {
@@ -111,7 +121,7 @@ impl TextureFormat {
                 let bh = (height + 3) / 4;
                 (bw as usize) * (bh as usize) * 16
             }
-            TextureFormat::Bc4Unorm => {
+            TextureFormat::Bc4Unorm | TextureFormat::Bc1Unorm | TextureFormat::Bc1Srgb => {
                 let bw = (width + 3) / 4;
                 let bh = (height + 3) / 4;
                 (bw as usize) * (bh as usize) * 8
@@ -144,6 +154,10 @@ impl TextureFormat {
         match self {
             TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
             TextureFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
+            TextureFormat::Bc1Unorm => vk::Format::BC1_RGBA_UNORM_BLOCK,
+            TextureFormat::Bc1Srgb => vk::Format::BC1_RGBA_SRGB_BLOCK,
+            TextureFormat::Bc3Unorm => vk::Format::BC3_UNORM_BLOCK,
+            TextureFormat::Bc3Srgb => vk::Format::BC3_SRGB_BLOCK,
             TextureFormat::Bc7Unorm => vk::Format::BC7_UNORM_BLOCK,
             TextureFormat::Bc7Srgb => vk::Format::BC7_SRGB_BLOCK,
             TextureFormat::Bc5Unorm => vk::Format::BC5_UNORM_BLOCK,
@@ -318,6 +332,21 @@ impl RenderTextureManager {
         graphics_queue: vk::Queue,
         input: &TextureUploadInput,
     ) -> anyhow::Result<AssetTextureHandle> {
+        // 块压缩能不能采样由设备决定（很多移动 GPU 没有 BC，桌面没有 ASTC）。
+        // 不先查就会变成 VUID 刷屏 + 上传失败；这里明确报错，调用方（引擎的
+        // 资产解析）会退化成洋红占位（#519）。
+        if input.format.is_compressed()
+            && !texture_format_supported(
+                &context.instance,
+                context.physical_device,
+                input.format.vk_format(),
+            )
+        {
+            anyhow::bail!(
+                "device cannot sample {:?}; compressed texture rejected",
+                input.format
+            );
+        }
         let expected = if input.format.is_compressed() {
             input.format.compressed_byte_len(input.width, input.height)
         } else {
@@ -524,6 +553,25 @@ impl Drop for RenderTextureManager {
             "RenderTextureManager dropped without explicit destroy()"
         );
     }
+}
+
+/// 设备能否按 `optimalTiling` 采样某种格式（含块压缩的 `BLOCK_COMPRESSION` 位）。
+///
+/// `vkGetPhysicalDeviceFormatProperties` 是纯查询、没有同步问题，所以每次上传都查；
+/// 贴图上传本来就很少发生，不值得为此维护缓存。
+pub fn texture_format_supported(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    format: vk::Format,
+) -> bool {
+    let properties =
+        unsafe { instance.get_physical_device_format_properties(physical_device, format) };
+    // Vulkan 没有「块压缩」特性位：某个格式能不能采样，就是看它自己的
+    // `optimalTilingFeatures` 有没有 `SAMPLED_IMAGE`（桌面普遍支持 BC，ASTC/ETC2
+    // 只有移动 GPU 有）。
+    properties
+        .optimal_tiling_features
+        .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
 }
 
 #[cfg(test)]
