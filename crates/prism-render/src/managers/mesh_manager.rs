@@ -203,16 +203,23 @@ impl Drop for RenderMeshManager {
 /// textures).
 fn build_vertices(input: &MeshUploadInput) -> Vec<crate::mesh::Vertex> {
     let n = input.positions.len();
+    // 导入网格的切线是常量占位（中间格式没有切线槽位，#515），这里按 UV 现算一份；
+    // 自己带了真切线的网格（图元、手写网格）原样使用。
+    let generated = if crate::tangents::are_placeholders(&input.tangents, n) {
+        crate::tangents::generate(&input.positions, &input.normals, &input.uvs, &input.indices)
+    } else {
+        None
+    };
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let pos = input.positions.get(i).copied().unwrap_or([0.0, 0.0, 0.0]);
         let normal = input.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
         let color = input.colors.get(i).copied().unwrap_or([1.0, 1.0, 1.0]);
         let uv = input.uvs.get(i).copied().unwrap_or([0.0, 0.0]);
-        let tangent = input
-            .tangents
-            .get(i)
-            .copied()
+        let tangent = generated
+            .as_ref()
+            .and_then(|tangents| tangents.get(i).copied())
+            .or_else(|| input.tangents.get(i).copied())
             .unwrap_or([1.0, 0.0, 0.0, 1.0]);
         out.push(crate::mesh::Vertex {
             position: pos,
@@ -257,5 +264,42 @@ mod bounds_tests {
     fn an_empty_or_broken_mesh_has_no_bounds() {
         assert!(input(Vec::new()).bounds().is_none());
         assert!(input(vec![[f32::INFINITY, 0.0, 0.0]]).bounds().is_none());
+    }
+
+    /// #515：导入路径给每个顶点写 `[1,0,0,1]`，上传时要按 UV 换成真切线。
+    #[test]
+    fn placeholder_tangents_are_regenerated_from_the_uvs() {
+        let mut mesh = MeshUploadInput {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            normals: vec![[0.0, 0.0, 1.0]; 4],
+            colors: Vec::new(),
+            // U 轴沿 +Y、V 轴沿 −X：真切线是 +Y。
+            uvs: vec![[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+            tangents: vec![[1.0, 0.0, 0.0, 1.0]; 4],
+            indices: vec![0, 1, 2, 0, 2, 3],
+        };
+        let vertices = build_vertices(&mesh);
+        for vertex in &vertices {
+            assert!(
+                (vertex.tangent[1] - 1.0).abs() < 1e-5,
+                "expected the UV-derived +Y tangent, got {:?}",
+                vertex.tangent
+            );
+        }
+
+        // 自己带了真切线（不统一）的网格不被覆盖。
+        mesh.tangents = vec![
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0, -1.0],
+        ];
+        let vertices = build_vertices(&mesh);
+        assert_eq!(vertices[2].tangent, [0.0, 0.0, 1.0, 1.0]);
     }
 }
