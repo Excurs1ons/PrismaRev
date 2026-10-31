@@ -276,6 +276,7 @@ pub fn panel_title(tab: &str) -> &'static str {
         "renderGraph" => "Render Graph",
         "build" => "Build Settings",
         "problems" => "Problems",
+        "prefabOverrides" => "Prefab Overrides",
         "tools" => "Offline Tools",
         "settings" => "Project Settings",
         "preferences" => "Preferences",
