@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use libloading::{Library, Symbol};
 use prism_project_api::{
     GetProjectApi, HostApi, ProjectApi, ABI_VERSION, BUFFER_TOO_SMALL, HOST_CAP_ASSET,
-    HOST_CAP_COMPONENTS, HOST_CAP_DRAW, HOST_CAP_LOGGING, HOST_CAP_WORLD_COMMANDS,
+    HOST_CAP_COMPONENTS, HOST_CAP_DRAW, HOST_CAP_LOGGING, HOST_CAP_STATE, HOST_CAP_WORLD_COMMANDS,
     INVALID_ARGUMENT, SUCCESS, UNKNOWN_TYPE,
 };
 use prism_reflect::rtti_bin;
@@ -100,6 +100,10 @@ struct CommandContext<'a> {
     asset: &'a dyn AssetIo,
     /// `read_asset_file` 的返回缓冲：指针只在下次宿主调用前有效。
     asset_bytes: Vec<u8>,
+    /// 引擎自带的场景存档（#484）。宿主注入，**本 crate 不依赖 prism-engine**，
+    /// 所以走函数指针而不是直接调用。
+    save_state: Option<fn(&prism_ecs::World)>,
+    load_state: Option<fn(&mut prism_ecs::World) -> bool>,
 }
 
 /// 把宿主世界包装成 [`HostApi`] 函数表。
@@ -123,6 +127,8 @@ impl<'a> WorldCommands<'a> {
                 input: InputSnapshot::default(),
                 asset: &NO_ASSETS,
                 asset_bytes: Vec::new(),
+                save_state: None,
+                load_state: None,
             },
         }
     }
@@ -130,6 +136,19 @@ impl<'a> WorldCommands<'a> {
     /// 注入松散资产访问（宿主实现 `AssetIo`）。
     pub fn with_assets(mut self, asset: &'a dyn AssetIo) -> Self {
         self.context.asset = asset;
+        self
+    }
+
+    /// 注入引擎自带的场景存档实现（宿主传 `prism_engine::scene_state::*`）。
+    ///
+    /// 本 crate 不能依赖 `prism-engine`（会带进第二份引擎），所以只能收函数指针。
+    pub fn with_scene_state(
+        mut self,
+        save: fn(&prism_ecs::World),
+        load: fn(&mut prism_ecs::World) -> bool,
+    ) -> Self {
+        self.context.save_state = Some(save);
+        self.context.load_state = Some(load);
         self
     }
 
@@ -152,7 +171,12 @@ impl<'a> WorldCommands<'a> {
                 | HOST_CAP_WORLD_COMMANDS
                 | HOST_CAP_COMPONENTS
                 | HOST_CAP_ASSET
-                | HOST_CAP_DRAW,
+                | HOST_CAP_DRAW
+                | if self.context.save_state.is_some() && self.context.load_state.is_some() {
+                    HOST_CAP_STATE
+                } else {
+                    0
+                },
             scene_generation: self.context.scene_generation,
             user_data: (&mut self.context as *mut CommandContext).cast(),
             input: self.context.input,
@@ -161,6 +185,8 @@ impl<'a> WorldCommands<'a> {
             set_entity_name: Some(host_set_entity_name),
             asset_exists: Some(host_asset_exists),
             read_asset_file: Some(host_read_asset_file),
+            save_scene_state: Some(host_save_scene_state),
+            load_scene_state: Some(host_load_scene_state),
             query_entities: Some(host_query_entities),
             get_component: Some(host_get_component),
             set_component: Some(host_set_component),
@@ -452,6 +478,31 @@ unsafe extern "C" fn host_draw_quad(user_data: *mut std::ffi::c_void, quad: UiQu
     SUCCESS
 }
 
+/// 把引擎自带的场景存档写盘（#484）。项目代码通过 `GameWorld::save_scene_state` 调用。
+unsafe extern "C" fn host_save_scene_state(user_data: *mut std::ffi::c_void) -> i32 {
+    let Some(context) = (unsafe { (user_data as *mut CommandContext<'_>).as_mut() }) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    match context.save_state {
+        Some(save) => {
+            save(context.world);
+            prism_project_api::SUCCESS
+        }
+        None => prism_project_api::UNSUPPORTED,
+    }
+}
+
+/// 读取场景存档：1 = 已恢复，0 = 没有存档。
+unsafe extern "C" fn host_load_scene_state(user_data: *mut std::ffi::c_void) -> i32 {
+    let Some(context) = (unsafe { (user_data as *mut CommandContext<'_>).as_mut() }) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    match context.load_state {
+        Some(load) => i32::from(load(context.world)),
+        None => prism_project_api::UNSUPPORTED,
+    }
+}
+
 unsafe extern "C" fn host_asset_exists(
     user_data: *mut std::ffi::c_void,
     path: *const u8,
@@ -711,6 +762,34 @@ mod tests {
                 Err(std::io::Error::new(std::io::ErrorKind::NotFound, path))
             }
         }
+    }
+
+    /// #484：存档能力是可选注入的，没注入时不宣称支持。
+    #[test]
+    fn scene_state_capability_requires_an_injected_implementation() {
+        fn save(_world: &prism_ecs::World) {}
+        fn load(_world: &mut prism_ecs::World) -> bool {
+            true
+        }
+
+        let mut world = prism_ecs::World::new();
+        let registry = registry();
+
+        let mut plain = WorldCommands::new(&mut world, &registry, 1);
+        let api = plain.api();
+        assert_eq!(api.capabilities & HOST_CAP_STATE, 0);
+        // 回调本身总是在的（宿主统一实现），但没有注入时明确报 UNSUPPORTED。
+        let callback = api.save_scene_state.expect("callback");
+        assert_eq!(
+            unsafe { callback(api.user_data) },
+            prism_project_api::UNSUPPORTED
+        );
+
+        let mut wired = WorldCommands::new(&mut world, &registry, 1).with_scene_state(save, load);
+        let api = wired.api();
+        assert_ne!(api.capabilities & HOST_CAP_STATE, 0);
+        let callback = api.load_scene_state.expect("callback");
+        assert_eq!(unsafe { callback(api.user_data) }, 1);
     }
 
     /// 项目模块拿到的松散资产访问与宿主同一份实现（走 `HOST_CAP_ASSET`）。

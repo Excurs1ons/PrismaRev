@@ -261,6 +261,12 @@ impl App {
             );
         }
 
+        // 存档目录跟随工程 `[app] company/name`（AppConfig 已从 settings 读好）。
+        // 以前 `scene_state_path()` 用默认配置，所有项目共用一个目录（#484）。
+        if let Some(dir) = prism_engine::config::app_data_dir_for(&config) {
+            engine.set_save_directory(dir);
+        }
+
         // 运行时 startup callbacks
         engine.runtime_initialize();
 

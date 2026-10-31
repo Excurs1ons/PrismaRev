@@ -132,6 +132,32 @@ impl<'a> GameWorld<'a> {
         }
     }
 
+    /// 保存引擎自带的场景存档（相机 / 灯光 / 变换，`scene_state.json`）。
+    ///
+    /// 存档路径由宿主决定（宿主按工程 `[app] company/name` 设置）；返回是否成功。
+    /// 没有宿主回调时返回 `false` 并 warn 一次（#484）。
+    pub fn save_scene_state(&self) -> bool {
+        match &self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => {
+                prism_engine::scene_state::save_scene_state(world);
+                true
+            }
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.save_scene_state(),
+        }
+    }
+
+    /// 读取场景存档：`true` = 已恢复，`false` = 没有存档或宿主不支持。
+    pub fn load_scene_state(&mut self) -> bool {
+        match &mut self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => prism_engine::scene_state::load_scene_state(world),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.load_scene_state(),
+        }
+    }
+
     /// 读取松散文本资产。
     pub fn read_asset_text(&self, relative: &str) -> std::io::Result<String> {
         match &self.backend {
@@ -520,6 +546,22 @@ impl PluginBackend<'_> {
         unsafe { callback(self.api.user_data, relative.as_ptr(), relative.len()) == 1 }
     }
 
+    fn save_scene_state(&self) -> bool {
+        let Some(callback) = self.api.save_scene_state else {
+            log::warn!("host does not expose scene-state saving (HOST_CAP_STATE)");
+            return false;
+        };
+        unsafe { callback(self.api.user_data) == SUCCESS }
+    }
+
+    fn load_scene_state(&self) -> bool {
+        let Some(callback) = self.api.load_scene_state else {
+            log::warn!("host does not expose scene-state loading (HOST_CAP_STATE)");
+            return false;
+        };
+        unsafe { callback(self.api.user_data) == 1 }
+    }
+
     fn read_asset_text(&self, relative: &str) -> std::io::Result<String> {
         let Some(callback) = self.api.read_asset_file else {
             return Err(std::io::Error::new(
@@ -575,6 +617,21 @@ mod tests {
                 Err(std::io::Error::new(std::io::ErrorKind::NotFound, path))
             }
         }
+    }
+
+    /// #484：宿主没注入存档实现时，`save/load_scene_state` 明确返回 `false`。
+    #[cfg(feature = "plugin")]
+    #[test]
+    fn scene_state_is_unavailable_without_a_host_callback() {
+        let mut world = World::new();
+        let mut components = prism_scene::ComponentRegistry::new();
+        prism_scene::register_builtin_components(&mut components);
+        let mut commands = prism_runtime_host::WorldCommands::new(&mut world, &components, 1);
+        let host = commands.api();
+        let mut api = GameWorld::plugin(&host, components.type_registry());
+
+        assert!(!api.save_scene_state());
+        assert!(!api.load_scene_state());
     }
 
     /// 插件后端通过 `HOST_CAP_ASSET` 读松散资产，签名与 host 后端一致。

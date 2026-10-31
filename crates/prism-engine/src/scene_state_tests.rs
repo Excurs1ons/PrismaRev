@@ -359,3 +359,88 @@ fn v4_ignores_saved_transforms_for_missing_entities() {
         "已删除实体的记录不能把位姿挤给别的实体（老实现会按顺序错位）"
     );
 }
+
+/// #484：存档文件名 / 目录由宿主决定。
+#[test]
+fn the_save_path_follows_the_host_directory_and_slot() {
+    let base = std::path::Path::new("C:/games/save");
+    assert_eq!(
+        scene_state_path_in(Some(base), None),
+        std::path::PathBuf::from("C:/games/save/scene_state.json")
+    );
+    assert_eq!(
+        scene_state_path_in(Some(base), Some(3)),
+        std::path::PathBuf::from("C:/games/save/scene_state-3.json")
+    );
+    // 没有任何目录时退化成当前目录（不再 panic）。
+    let bare = scene_state_path_in(None, None);
+    assert!(bare.to_string_lossy().ends_with("scene_state.json"));
+}
+
+/// #484：`SaveDirectory` resource 覆盖默认目录，槽位互不覆盖。
+#[test]
+fn slots_round_trip_through_the_save_directory() {
+    let dir = std::env::temp_dir().join(format!("prism-scene-state-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut world = World::new();
+    world.insert_resource(SaveDirectory(dir.clone()));
+
+    let entity = world.spawn();
+    world.insert(
+        entity,
+        LocalTransform {
+            position: Vec3::new(1.0, 2.0, 3.0),
+            ..Default::default()
+        },
+    );
+    world.insert(entity, SceneEntityId(11));
+
+    save_scene_state_slot(&world, 1);
+    assert!(dir.join("scene_state-1.json").is_file());
+    assert_eq!(scene_state_path(&world), dir.join("scene_state.json"));
+
+    world.get_mut::<LocalTransform>(entity).unwrap().position = Vec3::new(9.0, 9.0, 9.0);
+    assert!(load_scene_state_slot(&mut world, 1));
+    assert_eq!(
+        world.get::<LocalTransform>(entity).unwrap().position,
+        Vec3::new(1.0, 2.0, 3.0)
+    );
+
+    // 不存在的槽位 = 没有存档，不能悄悄成功。
+    assert!(!load_scene_state_slot(&mut world, 7));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #484：显式路径原语（「另存存档」/ 测试用）。
+#[test]
+fn explicit_paths_work_without_a_save_directory_resource() {
+    let dir = std::env::temp_dir().join(format!("prism-scene-state-x-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("custom/test.json");
+
+    let mut world = World::new();
+    let entity = world.spawn();
+    world.insert(
+        entity,
+        LocalTransform {
+            position: Vec3::new(4.0, 5.0, 6.0),
+            ..Default::default()
+        },
+    );
+    world.insert(entity, SceneEntityId(3));
+
+    save_scene_state_to(&world, &path);
+    assert!(path.is_file(), "父目录要自动创建");
+
+    world.get_mut::<LocalTransform>(entity).unwrap().position = Vec3::ZERO;
+    assert!(load_scene_state_from(&mut world, &path));
+    assert_eq!(
+        world.get::<LocalTransform>(entity).unwrap().position,
+        Vec3::new(4.0, 5.0, 6.0)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

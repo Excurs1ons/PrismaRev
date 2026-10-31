@@ -41,7 +41,7 @@ pub mod keys {
     pub const OTHER_BASE: usize = 30;
 }
 
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
@@ -51,6 +51,8 @@ pub const TICK_FAILED: i32 = 3;
 pub const UNKNOWN_TYPE: i32 = 4;
 /// 输出缓冲区太小；`out_count` 已写入所需长度。
 pub const BUFFER_TOO_SMALL: i32 = 5;
+/// 宿主没有提供这项能力（`HostApi` 里对应回调为 `None`）。
+pub const UNSUPPORTED: i32 = 6;
 
 /// 在 ABI 边界上兜住 Rust 的 panic。
 ///
@@ -77,6 +79,8 @@ pub const HOST_CAP_WORLD_COMMANDS: u64 = 1 << 1;
 pub const HOST_CAP_ASSET: u64 = 1 << 4;
 pub const HOST_CAP_COMPONENTS: u64 = 1 << 2;
 pub const HOST_CAP_DRAW: u64 = 1 << 3;
+/// 引擎自带的场景存档（`save_scene_state` / `load_scene_state`，#484）。
+pub const HOST_CAP_STATE: u64 = 1 << 5;
 
 // ---------------------------------------------------------------------------
 // POD payloads
@@ -185,6 +189,12 @@ pub type ReadAssetFile = unsafe extern "C" fn(
     out_ptr: *mut *const u8,
     out_len: *mut usize,
 ) -> i32;
+
+/// 保存引擎场景存档；返回 [`SUCCESS`] 或错误码。
+pub type SaveSceneState = unsafe extern "C" fn(user_data: *mut core::ffi::c_void) -> i32;
+
+/// 读取场景存档：返回 1 = 已恢复，0 = 没有存档，负数为错误。
+pub type LoadSceneState = unsafe extern "C" fn(user_data: *mut core::ffi::c_void) -> i32;
 
 pub type LogMessage = unsafe extern "C" fn(
     user_data: *mut core::ffi::c_void,
@@ -298,6 +308,9 @@ pub struct HostApi {
     pub draw_quad: Option<DrawQuad>,
     pub asset_exists: Option<AssetExists>,
     pub read_asset_file: Option<ReadAssetFile>,
+    /// 引擎自带存档（#484）。缺失时项目模块拿不到持久化能力。
+    pub save_scene_state: Option<SaveSceneState>,
+    pub load_scene_state: Option<LoadSceneState>,
 }
 
 impl HostApi {
@@ -328,6 +341,8 @@ impl HostApi {
             draw_quad: None,
             asset_exists: None,
             read_asset_file: None,
+            save_scene_state: None,
+            load_scene_state: None,
         }
     }
 }

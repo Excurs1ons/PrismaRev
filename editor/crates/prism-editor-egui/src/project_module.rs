@@ -331,6 +331,12 @@ impl ProjectModuleDriver {
 
         let mut commands =
             WorldCommands::new(world, &self.components, scene_generation).with_assets(&self.assets);
+        // 项目代码可以调 `GameWorld::save_scene_state()`（#484）；引擎在这里，
+        // runtime-host 只持有函数指针。
+        commands = commands.with_scene_state(
+            prism_engine::scene_state::save_scene_state,
+            prism_engine::scene_state::load_scene_state,
+        );
         commands.set_input(input_snapshot(input, screen));
         let host = commands.api();
         let result = session.tick(&host, dt.max(0.000_5));
