@@ -26,6 +26,7 @@ use prism_render::asset_bridge::{AssetResolveRequest, MaterialResolveData};
 use prism_render::managers::{MeshUploadInput, TextureFormat, TextureUploadInput};
 
 use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer, SpriteRef, SpriteRenderer};
+use crate::scene::systems::render::MeshBounds;
 
 /// 把 RTEX 头的 `format` byte 与槽位颜色空间映射成渲染层 [`TextureFormat`]。
 ///
@@ -80,6 +81,12 @@ pub struct GpuAssetResolver {
     /// 最近一次解析的精灵路径。项目只改 `sprite_path`，这里发现不一致就重新解析，
     /// 不再要求调用方手动把 `SpriteRef::generation` 清零。
     sprite_paths: HashMap<Entity, String>,
+    /// 已投递、但句柄还没回写的网格局部包围盒（`entity → AABB`）。
+    ///
+    /// CPU 段已经在手里有顶点位置，所以包围盒在上传请求发出前就算好；句柄回来
+    /// （[`Self::apply_results`]）之后连同句柄一起写进 [`MeshBounds`]，渲染提取
+    /// 就能按主相机剔除（#491）。
+    pending_bounds: HashMap<Entity, prism_render::culling::Aabb>,
 }
 
 /// 引用断裂只报一次（每个路径），并且是 `error` 而不是 `warn`。
@@ -111,6 +118,7 @@ impl GpuAssetResolver {
             enqueued: HashSet::new(),
             failed: HashMap::new(),
             sprite_paths: HashMap::new(),
+            pending_bounds: HashMap::new(),
         }
     }
 
@@ -213,6 +221,9 @@ impl GpuAssetResolver {
             // 失败缓存只对仍然存在的实体有意义；实体被删除后顺手回收。
             self.sprite_paths
                 .retain(|entity, _| world.get::<SpriteRenderer>(*entity).is_some());
+            // 实体在上传途中被删除时，包围盒也不该留在表里。
+            self.pending_bounds
+                .retain(|entity, _| world.get::<MeshRef>(*entity).is_some());
             self.failed.retain(|(entity, _), _| {
                 world.get::<MeshRenderer>(*entity).is_some()
                     || world.get::<SpriteRenderer>(*entity).is_some()
@@ -312,6 +323,11 @@ impl GpuAssetResolver {
                 }
                 None => None,
             };
+            // 包围盒在请求发出前算好：GPU 上传后句柄才回来，而 CPU 段此刻
+            // 已经解出顶点位置了（#491）。
+            if let Some(bounds) = mesh.as_ref().and_then(MeshUploadInput::bounds) {
+                self.pending_bounds.insert(item.entity, bounds);
+            }
             reqs.push((
                 item.entity,
                 AssetResolveRequest {
@@ -342,6 +358,16 @@ impl GpuAssetResolver {
                 if let Some(h) = result.mesh_handle {
                     mr.render_handle = h;
                     mr.generation = 1;
+                }
+            }
+            if let Some(bounds) = self.pending_bounds.remove(entity) {
+                if let Some(handle) = result.mesh_handle {
+                    if world.get_resource::<MeshBounds>().is_none() {
+                        world.insert_resource(MeshBounds::default());
+                    }
+                    if let Some(registry) = world.get_resource_mut::<MeshBounds>() {
+                        registry.insert(handle, bounds);
+                    }
                 }
             }
             if let Some(mr) = world.get_mut::<MaterialRef>(*entity) {
@@ -986,5 +1012,65 @@ mod tests {
         assert_eq!(texture_format_for(RTEX_FORMAT_BC1, true), None);
         assert_eq!(texture_format_for(RTEX_FORMAT_BC3, true), None);
         assert_eq!(texture_format_for(99, false), None);
+    }
+}
+
+#[cfg(test)]
+mod mesh_bounds_tests {
+    use super::*;
+    use crate::scene::systems::render::MeshBounds;
+    use prism_render::managers::MeshHandle;
+    use prism_scene::SceneAssetId;
+
+    #[test]
+    fn the_mesh_bounds_land_in_the_registry_with_the_handle() {
+        // 内置立方体不需要 `.pak`，但走的是同一条 prepare → upload → 写回路径。
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            MeshRenderer {
+                mesh_path: "__builtin/box".into(),
+                ..Default::default()
+            },
+        );
+        world.insert(
+            entity,
+            MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: MeshHandle::default(),
+                generation: 0,
+            },
+        );
+
+        let mut resolver = GpuAssetResolver::new();
+        let requests = resolver.prepare_requests(&world);
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].1.mesh.is_some());
+
+        let handle = MeshHandle::default();
+        resolver.apply_results(
+            &mut world,
+            &[(
+                entity,
+                prism_render::asset_bridge::AssetResolveResult {
+                    mesh_handle: Some(handle),
+                    material_slot: None,
+                    texture_slot: None,
+                    texture_size: None,
+                },
+            )],
+        );
+
+        let registry = world
+            .get_resource::<MeshBounds>()
+            .expect("bounds registry must be created on the first upload");
+        let bounds = registry.get(handle).expect("box bounds must be registered");
+        // 单位立方体（边长 1，居中在原点）。
+        assert!((bounds.min[0] + 0.5).abs() < 1e-5);
+        assert!((bounds.max[1] - 0.5).abs() < 1e-5);
+
+        // 再投递一次不会重复：句柄已写回（`generation = 1`）。
+        assert!(resolver.prepare_requests(&world).is_empty());
     }
 }

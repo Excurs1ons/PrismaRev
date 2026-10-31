@@ -159,9 +159,13 @@ pub fn extract_frame_packet_into(
 
     // 2. Build the flat draw list and ECS-authored render helpers.
     let scene_view = scene::SceneReadView::new(world);
+    // 视锥剔除（#491）：main-pass 只提交主相机视锥内的实体。退化矩阵
+    // （`Frustum::from_view_proj` 返回 `None`）时自动退回「不剔除」。
+    let frustum =
+        prism_render::culling::Frustum::from_view_proj(&packet.scene.view_proj.to_cols_array_2d());
     // 引擎的 `renderQueue` 顺序：不透明段按队列升序，透明段按距离从远到近。
     // 排序必须在提交给渲染器之前完成（`ForwardPass` 只按列表顺序绘制）。
-    scene_view.draw_items_into(&mut packet.draw_items);
+    scene_view.draw_items_with_frustum_into(frustum.as_ref(), &mut packet.draw_items);
     prism_render::sort_draw_items(&mut packet.draw_items, packet.scene.eye.to_array());
     scene_view.gizmo_instances_into(&mut packet.gizmos);
     // 只有 `clearFlags == Skybox` 时才绘制天空盒：其余清屏方式（纯色 /

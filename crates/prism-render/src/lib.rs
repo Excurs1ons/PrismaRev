@@ -42,6 +42,7 @@ pub mod buffer;
 pub mod capabilities;
 pub mod compute;
 pub mod context;
+pub mod culling;
 pub mod descriptor;
 /// pass 级 feature（`shadows` / `gtao`）关闭时的 1×1 占位资源。
 #[cfg(any(not(feature = "shadows"), not(feature = "gtao")))]
