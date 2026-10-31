@@ -484,10 +484,9 @@ pub fn distance_point_segment(point: (f32, f32), a: (f32, f32), b: (f32, f32)) -
 }
 
 /// gizmo 轴的世界长度：保持屏幕上的长度近似恒定。
-pub fn gizmo_world_length(camera: &OrbitCamera) -> f32 {
-    let height: f32 = 600.0;
+pub fn gizmo_world_length(camera: &OrbitCamera, viewport_height: f32) -> f32 {
     let tan_half = 30.0f32.to_radians().tan();
-    camera.distance * GIZMO_SCREEN_PIXELS / height.max(1.0) * 2.0 * tan_half
+    camera.distance * GIZMO_SCREEN_PIXELS / viewport_height.max(1.0) * 2.0 * tan_half
 }
 
 /// 一条 gizmo 轴的屏幕端点 `(start, end, 每世界单位像素)`。
@@ -832,10 +831,23 @@ mod tests {
     }
 
     #[test]
+    fn gizmo_world_length_follows_the_viewport_height() {
+        let camera = camera();
+        let short = gizmo_world_length(&camera, 600.0);
+        let tall = gizmo_world_length(&camera, 1200.0);
+        // 屏幕像素长度固定，视口越高，同样的像素对应的世界长度越小。
+        assert!((short - tall * 2.0).abs() < 1e-4);
+        assert!(
+            gizmo_world_length(&camera, 0.0).is_finite(),
+            "退化高度不能除零"
+        );
+    }
+
+    #[test]
     fn gizmo_axis_pick_and_pixel_scale() {
         let camera = camera();
         let frame = camera_frame(&camera);
-        let length = gizmo_world_length(&camera);
+        let length = gizmo_world_length(&camera, 600.0);
         let (start, end, px_per_unit) =
             axis_screen_segment(&frame, [0.0, 0.0, 0.0], 0, length, 800.0, 600.0).unwrap();
         assert!(px_per_unit > 1.0);
@@ -870,7 +882,7 @@ mod tests {
     fn ring_pick_and_angle_helpers() {
         let camera = camera();
         let frame = camera_frame(&camera);
-        let radius = gizmo_world_length(&camera);
+        let radius = gizmo_world_length(&camera, 600.0);
         let (cx, cy, screen_radius) =
             ring_screen_radius(&frame, [0.0, 0.0, 0.0], 1, radius, 800.0, 600.0).unwrap();
         assert!(screen_radius > 10.0);
@@ -930,7 +942,7 @@ mod tests {
         let camera = camera();
         let frame = camera_frame(&camera);
         let basis = basis_from_quat(quat_axis_angle(2, 0.6));
-        let length = gizmo_world_length(&camera);
+        let length = gizmo_world_length(&camera, 600.0);
         let (start, end, _) =
             axis_screen_segment_oriented(&frame, [0.0, 0.0, 0.0], basis[0], length, 800.0, 600.0)
                 .unwrap();
