@@ -380,9 +380,12 @@ impl App {
                 // 渲染在 resumed() 时条件创建
             }
             Subsystem::Physics => {
-                // 物理线程在 resumed() 后条件启动
-                // 当前骨架：待 ECS 物理系统接入后实现
-                log::info!("physics subsystem requested (skeleton — 已接线)");
+                // 还没有物理步进：`prism_app::physics_runner` 的 rapier 线程没有接进
+                // `App`，场景里可创作的 `Collider` / `Rigidbody` 目前只用于查询
+                // （`prism_engine::physics::raycast`）。见 #522。
+                log::warn!(
+                    "physics subsystem requested but nothing steps bodies yet —                      colliders are query-only (prism_engine::physics::raycast)"
+                );
             }
             Subsystem::Audio => {
                 #[cfg(feature = "audio")]
@@ -399,11 +402,15 @@ impl App {
                      rebuild with `--features audio` to enable sound"
                 );
             }
-            Subsystem::Network | Subsystem::Scene | Subsystem::Asset => {
-                log::warn!("{:?} subsystem requested — 已实现, ignoring", subsystem)
+            Subsystem::Network | Subsystem::AI => {
+                log::warn!(
+                    "{:?} subsystem requested — not implemented yet, ignoring",
+                    subsystem
+                )
             }
-            Subsystem::AI | Subsystem::UI | Subsystem::Animation => {
-                log::warn!("{:?} subsystem requested — 已实现, ignoring", subsystem)
+            Subsystem::Scene | Subsystem::Asset | Subsystem::UI | Subsystem::Animation => {
+                // 场景/资产/UI/动画本来就是常开的引擎能力，没有单独的开关要拨。
+                log::debug!("{:?} subsystem is always on — nothing to start", subsystem)
             }
         }
         self

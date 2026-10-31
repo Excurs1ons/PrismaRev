@@ -476,6 +476,63 @@ fn an_audio_source_survives_cook_and_decode() {
 }
 
 #[test]
+fn physics_components_survive_cook_and_decode() {
+    // 物理组件的两个枚举（ColliderShape / BodyType）走的是「JSON 用变体名、RSCN 用小整数」
+    // 的手写 ReflectType，最容易在往返里错位（#522）。
+    let mut registry = ComponentRegistry::new();
+    register_builtin_components(&mut registry);
+    let scene = SceneJson::parse(
+        r#"{
+            "version": 3,
+            "entities": [{
+                "id": 0,
+                "name": "Crate",
+                "components": {
+                    "prism_engine::scene::Collider": {
+                        "shape": "Sphere",
+                        "center": [0.0, 1.0, 0.0],
+                        "radius": 0.75,
+                        "is_trigger": true,
+                        "layer": 4
+                    },
+                    "prism_engine::scene::Rigidbody": {
+                        "body_type": "Kinematic",
+                        "mass": 12.5,
+                        "use_gravity": false
+                    }
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let bytes = crate::encode_scene(&scene, &registry).expect("scene with physics must cook");
+    let decoded = crate::decode_scene(&bytes, &registry).expect("cooked scene must decode");
+
+    let mut world = prism_ecs::World::new();
+    let entity = world.spawn();
+    for component in &decoded.entities[0].components {
+        assert!(registry.apply_object(&mut world, entity, component));
+    }
+
+    let collider = world
+        .get::<crate::components::Collider>(entity)
+        .expect("collider must apply");
+    assert_eq!(collider.shape, crate::components::ColliderShape::Sphere);
+    assert_eq!(collider.radius, 0.75);
+    assert_eq!(collider.center, [0.0, 1.0, 0.0]);
+    assert!(collider.is_trigger);
+    assert_eq!(collider.layer, 4);
+
+    let body = world
+        .get::<crate::components::Rigidbody>(entity)
+        .expect("rigidbody must apply");
+    assert_eq!(body.body_type, crate::components::BodyType::Kinematic);
+    assert_eq!(body.mass, 12.5);
+    assert!(!body.use_gravity);
+}
+
+#[test]
 fn a_terrain_survives_cook_and_decode() {
     // 地形组件是「路径 + 若干标量」，RSCN 的位置化编码最容易丢字符串（heightmap）
     // 和 `[f32; 2]`（size）（#517）。

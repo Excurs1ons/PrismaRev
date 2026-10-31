@@ -24,6 +24,7 @@ pub mod engine;
 pub mod input;
 pub mod input_facade;
 pub mod launch_config;
+pub mod physics;
 pub mod render_settings;
 pub mod render_system;
 pub mod scene;
