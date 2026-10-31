@@ -362,6 +362,9 @@ pub struct Workspace {
     pub snap: SnapSettings,
     /// Scene View 是否画世界网格。
     pub show_grid: bool,
+    /// Scene View 是否给选中对象画轮廓（#487）。选中反馈弱时唯一的线索是 gizmo，
+    /// 密集场景里容易改错对象。
+    pub show_selection_outline: bool,
     /// Scene View 是否用场景的天空盒当背景（关闭时退回纯色）。
     ///
     /// 对应引擎的 `SceneViewState.showSkybox`（默认开）。
@@ -440,6 +443,7 @@ impl Workspace {
             gizmo_space: GizmoSpace::World,
             snap: SnapSettings::default(),
             show_grid: true,
+            show_selection_outline: true,
             show_skybox: true,
             playing: false,
             paused: false,

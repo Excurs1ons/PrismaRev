@@ -657,6 +657,10 @@ impl ViewportState {
         let frame = vm::camera_frame(&workspace.camera);
         let mut icon_hits: Vec<(usize, egui::Pos2)> = Vec::new();
         if self.kind() == ViewKind::Scene {
+            // 选中描边画在图标 / gizmo 之下：它属于对象本身，不该盖住手柄。
+            if workspace.show_selection_outline {
+                self.draw_selection_outline(&painter, rect, workspace, &frame);
+            }
             // 引擎的 SceneView Gizmos：相机画视锥、光源画图标（点选图标 = 选中对象）。
             icon_hits = self.draw_component_icons(&painter, rect, workspace, &frame);
             self.draw_gizmo(&painter, rect, workspace, &frame);
@@ -1019,6 +1023,83 @@ impl ViewportState {
         );
 
         ViewportResponse { document_changed }
+    }
+
+    /// 选中对象的包围盒线框（#487 的低成本版）。
+    ///
+    /// Unity 用 `Handles.DrawOutline` 做真正的描边（需要引擎侧 pass）；这里先用
+    /// 世界代理立方体的 12 条边解决「看得出选中了谁」：
+    /// - 直接选中的实体画强调色（与应用内选中色一致）；
+    /// - 与选中项有父子关系、但自己没被选中的实体画更暗的辅助色，能看出层级方向；
+    /// - 子级线框略细，父级略粗，多选时不会糊成一团。
+    ///
+    /// 任何一个角落在相机背后就整块跳过（`vm::projected_box_edges` 返回 `None`），
+    /// 避免画出穿透屏幕的线。
+    fn draw_selection_outline(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        workspace: &Workspace,
+        frame: &vm::CameraFrame,
+    ) {
+        use egui::Color32;
+
+        if workspace.selection.is_empty() {
+            return;
+        }
+        let doc = &workspace.document().doc;
+        let selected: std::collections::HashSet<usize> =
+            workspace.selection.iter().copied().collect();
+
+        // 父级 / 子级：给层级关系一个颜色区分（Unity 也同时画父与子）。
+        let mut related: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for index in &selected {
+            let mut current = doc.entities.get(*index).and_then(|entity| entity.parent);
+            while let Some(id) = current {
+                let Some(parent) = doc.index_of_id(id) else {
+                    break;
+                };
+                if !selected.contains(&parent) {
+                    related.insert(parent);
+                }
+                current = doc.entities.get(parent).and_then(|entity| entity.parent);
+            }
+            for child in doc.descendants(*index) {
+                if !selected.contains(&child) {
+                    related.insert(child);
+                }
+            }
+        }
+
+        let accent = Color32::from_rgb(255, 154, 60);
+        let helper = Color32::from_rgb(255, 154, 60).gamma_multiply(0.45);
+
+        for (index, transform) in proxies(workspace) {
+            let is_selected = selected.contains(&index);
+            let is_related = related.contains(&index);
+            if !is_selected && !is_related {
+                continue;
+            }
+            let Some(edges) =
+                vm::projected_box_edges(&transform, frame, rect.width(), rect.height())
+            else {
+                continue;
+            };
+            let stroke = if is_selected {
+                egui::Stroke::new(1.6_f32, accent)
+            } else {
+                egui::Stroke::new(1.0_f32, helper)
+            };
+            for (a, b) in edges {
+                painter.line_segment(
+                    [
+                        rect.min + egui::vec2(a.0, a.1),
+                        rect.min + egui::vec2(b.0, b.1),
+                    ],
+                    stroke,
+                );
+            }
+        }
     }
 
     /// 引擎的 SceneView Gizmos：相机画视锥、光源画图标与范围。
