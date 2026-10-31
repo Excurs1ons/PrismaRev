@@ -28,6 +28,8 @@ pub struct BuildPlan {
     pub steps: Vec<BuildStep>,
     pub copies: Vec<ArtifactCopy>,
     pub output_dir: PathBuf,
+    /// 没有它就算构建失败（可执行文件）；`copies` 里缺 `scenes.pak` 之类只跳过。
+    pub required: Vec<PathBuf>,
 }
 
 /// 游戏 crate 的 manifest：仓库布局优先 `projects/prisma`，否则项目根本身。
@@ -48,11 +50,51 @@ fn target_profile(settings: &ProjectSettings) -> &'static str {
     }
 }
 
-fn exe_name() -> &'static str {
+/// 可执行文件名：Windows 带 `.exe`。
+pub fn exe_name() -> &'static str {
     if cfg!(windows) {
         "prisma.exe"
     } else {
         "prisma"
+    }
+}
+
+/// 从用户工程的 `Cargo.toml` 里读 `[package] name`（读不到就退回 `prisma`）。
+///
+/// 玩家 crate 的名字不一定叫 `prisma`（`projects/fishing` 就不是），产物路径要跟着它走。
+pub fn game_binary_name(manifest: &Path) -> String {
+    let stem = std::fs::read_to_string(manifest)
+        .ok()
+        .and_then(|text| {
+            let mut in_package = false;
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_package = line == "[package]";
+                    continue;
+                }
+                if !in_package {
+                    continue;
+                }
+                let Some(rest) = line.strip_prefix("name") else {
+                    continue;
+                };
+                let rest = rest.trim_start();
+                let Some(value) = rest.strip_prefix('=') else {
+                    continue;
+                };
+                let value = value.trim().trim_matches(['"', '\'']);
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| "prisma".to_string());
+    if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem
     }
 }
 
@@ -64,6 +106,9 @@ pub fn plan_build(root: &Path, settings: &ProjectSettings) -> BuildPlan {
         "build".to_string(),
         "--manifest-path".to_string(),
         manifest.to_string_lossy().into_owned(),
+        // 编辑器把这两路输出解析成 Problems 面板条目；`cargo run` 不加（会污染游戏 stdout）。
+        "--message-format".to_string(),
+        "json-render-diagnostics".to_string(),
     ];
     if release {
         build_args.push("--release".to_string());
@@ -71,6 +116,12 @@ pub fn plan_build(root: &Path, settings: &ProjectSettings) -> BuildPlan {
 
     let output_dir = {
         let configured = PathBuf::from(settings.build.output_dir.trim());
+        // 留空不能退化成「项目根」——那会把 assets/ 拷到它自己身上。
+        let configured = if configured.as_os_str().is_empty() {
+            PathBuf::from("build/player")
+        } else {
+            configured
+        };
         if configured.is_absolute() {
             configured
         } else {
@@ -83,18 +134,22 @@ pub fn plan_build(root: &Path, settings: &ProjectSettings) -> BuildPlan {
         .unwrap_or(root)
         .join("target")
         .join(target_profile(settings));
+    // 产物布局必须让 `asset_paths` 认得出 `assets/`：可执行文件放在 `output_dir/`，
+    // 资源放在 `output_dir/assets/`（和 Web 编辑器、以及游戏目录的打包布局一致）。
+    let binary = game_binary_name(&manifest);
+    let exe = output_dir.join(&binary);
     let copies = vec![
         ArtifactCopy {
-            from: game_target.join(exe_name()),
-            to: output_dir.join(exe_name()),
+            from: game_target.join(&binary),
+            to: exe.clone(),
         },
         ArtifactCopy {
             from: root.join("assets/scenes.pak"),
-            to: output_dir.join("scenes.pak"),
+            to: output_dir.join("assets/scenes.pak"),
         },
         ArtifactCopy {
             from: root.join("assets/settings.ini"),
-            to: output_dir.join("settings.ini"),
+            to: output_dir.join("assets/settings.ini"),
         },
     ];
 
@@ -121,6 +176,15 @@ pub fn plan_build(root: &Path, settings: &ProjectSettings) -> BuildPlan {
         ],
         copies,
         output_dir,
+        required: vec![exe],
+    }
+}
+
+/// 两个路径是否指向同一个文件（按 canonicalize 比较；任一侧不存在就不算）。
+fn same_file(from: &Path, to: &Path) -> bool {
+    match (from.canonicalize(), to.canonicalize()) {
+        (Ok(from), Ok(to)) => from == to,
+        _ => from == to,
     }
 }
 
@@ -129,6 +193,10 @@ pub fn copy_artifacts(copies: &[ArtifactCopy]) -> io::Result<Vec<String>> {
     let mut copied = Vec::new();
     for copy in copies {
         if !copy.from.is_file() {
+            continue;
+        }
+        // 目标就是源（`output_dir` 指回项目根）时拷自己会报错，跳过即可。
+        if same_file(&copy.from, &copy.to) {
             continue;
         }
         if let Some(parent) = copy.to.parent() {
@@ -193,6 +261,45 @@ mod tests {
             plan.copies[0].from,
             root.join("target/debug").join(exe_name())
         );
+        assert_eq!(plan.required, vec![plan.copies[0].to.clone()]);
+    }
+
+    /// 产物必须落在 `output_dir/assets/`：引擎只认 `<root>/assets/`，
+    /// 平铺成 `output_dir/scenes.pak` 的话双击 exe 会报 "no assets directory"。
+    #[test]
+    fn assets_are_staged_into_an_assets_subdirectory() {
+        let root = temp_dir("layout");
+        let plan = plan_build(&root, &settings("debug", "build/windows"));
+        let out = root.join("build/windows");
+        assert_eq!(plan.copies[0].to, out.join(exe_name()));
+        assert_eq!(plan.copies[1].to, out.join("assets/scenes.pak"));
+        assert_eq!(plan.copies[2].to, out.join("assets/settings.ini"));
+    }
+
+    #[test]
+    fn the_binary_name_follows_the_game_crate() {
+        let root = temp_dir("binary-name");
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let manifest = root.join("projects/Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]
+name = \"fishing\"
+version = \"0.1.0\"
+",
+        )
+        .unwrap();
+        let expected = if cfg!(windows) {
+            "fishing.exe"
+        } else {
+            "fishing"
+        };
+        assert_eq!(game_binary_name(&manifest), expected);
+        assert_eq!(
+            game_binary_name(&root.join("nope/Cargo.toml")),
+            exe_name(),
+            "读不到清单就退回 prisma"
+        );
     }
 
     #[test]
@@ -208,6 +315,27 @@ mod tests {
             root.join("projects/prisma/target/release").join(exe_name())
         );
         assert_eq!(plan.output_dir, out);
+    }
+
+    #[test]
+    fn a_blank_output_dir_does_not_stage_into_the_project_root() {
+        let root = temp_dir("blank-output");
+        let plan = plan_build(&root, &settings("debug", "   "));
+        assert_eq!(plan.output_dir, root.join("build/player"));
+    }
+
+    #[test]
+    fn copying_a_file_onto_itself_is_skipped() {
+        let root = temp_dir("same-file");
+        let from = root.join("assets/scenes.pak");
+        std::fs::create_dir_all(from.parent().unwrap()).unwrap();
+        std::fs::write(&from, b"pak").unwrap();
+        let copies = vec![ArtifactCopy {
+            from: from.clone(),
+            to: from.clone(),
+        }];
+        assert!(copy_artifacts(&copies).unwrap().is_empty());
+        assert_eq!(std::fs::read(&from).unwrap(), b"pak");
     }
 
     #[test]

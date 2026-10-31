@@ -98,8 +98,8 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
   `file:line:col`，点一行用默认编辑器打开（先试 `code -g`，没有 `code` 就交给
   系统默认处理程序）。编译成功时 warning 也保留；失败时第一条 error 同时进 Console。
   面板有两段：**Project module**（Game View 的 `preview-module`）和
-  **Player build**（`File → Build Player` 的 `cargo build`，它只在这一步加
-  `--message-format`，`Build And Run` 的 `cargo run` 不加，否则会污染游戏 stdout）。
+  **Player build**（`File → Build Player` / `Build And Run` 的 `cargo build`，
+  它加 `--message-format`）。
 - Play 前如果模块已加载但源码有未编译改动（Auto Refresh 关、或上一次 build 被 Play
   挡住），会先补编一次，避免试玩跑旧代码。
 - Play 每帧先 `ProjectSession::tick(WorldCommands)`，再跑引擎 system：项目写入的
@@ -165,6 +165,14 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
 | Component | schema 分类 ▸ 组件列表 |
 | Window | General ▸ 面板开关 / Layouts ▸ 预设 + 命名布局（Load/Delete）+ Save Layout… + Save·Load Layout to File… + Reset All Layouts / Reset Layout |
 | Help | Shortcuts / Editor Guide / About |
+
+**玩家构建（`Build Player` / `Ctrl+B` = `Build And Run`）**按 `assets/settings.ini` 的
+`[build]` 段走：`profile` 选 `debug` / `release`（`cargo build [--release]`），然后
+`prism-build-pipeline build-scenes` 刷新 `scenes.pak`，再把可执行文件摆到
+`<output_dir>/<exe>`、产物摆到 `<output_dir>/assets/{scenes.pak,settings.ini}`
+（引擎只认 `<root>/assets/`，平铺在 `output_dir/` 根下双击会报 “no assets directory”）。
+`Build And Run` 运行的是这份**摆好的产物**，不是 `cargo run` 的调试版；
+非 0 退出、产物缺失都让状态栏显示 `build failed:`，完整 stderr 留在 Console。
 
 `Build*` / `Cook Active Scene` / `Clean Build` 通过子进程调用 `prism-build-pipeline`
 或 `cargo`（编辑器仍然不链接 cooker），输出进 Console。

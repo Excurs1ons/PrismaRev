@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::diagnostics::{parse_cargo_line, Diagnostic, MAX_DIAGNOSTICS};
+use prism_editor_core::build::{copy_artifacts, plan_build, BuildPlan};
+use prism_editor_core::settings::ProjectSettings;
 
 /// 一次构建任务。
 pub struct BuildJob {
@@ -26,6 +28,8 @@ pub struct BuildJob {
     cancel: Arc<AtomicBool>,
     /// `cargo build` 的 JSON 诊断；Console 仍然收到一行摘要，Problems 面板拿结构化数据。
     diagnostics: Arc<Mutex<Vec<Diagnostic>>>,
+    /// 有没有步骤失败（非 0 退出 / 产物缺失 / spawn 失败）。
+    failed: Arc<AtomicBool>,
 }
 
 pub enum BuildKind {
@@ -33,9 +37,10 @@ pub enum BuildKind {
     ScenePack,
     /// `prism-build-pipeline cook <scene>`（单个 `.scene.json` → `.rscn`）。
     Cook(PathBuf),
-    /// `cargo build` 用户项目（`projects/<p>/Cargo.toml`，存在才跑）。
+    /// 构建用户项目（`File → Build Player`）：按 `[build]` 设置选 profile，
+    /// 再 cook 场景包、按 `output_dir` 摆好 exe + `assets/`。
     Player,
-    /// `cargo run` 用户项目（引擎的 Build And Run）。
+    /// 同 [`BuildKind::Player`]，构建完直接跑 `output_dir/<exe>`（`Build And Run`）。
     PlayerRun,
     /// `cargo clean` 玩家工程（引擎的 Clean Build）。
     ///
@@ -84,13 +89,19 @@ fn pipeline_manifest_path(root: &Path) -> Option<PathBuf> {
     None
 }
 
+/// 读 `[build]` 设置并生成玩家构建计划；设置文件坏了就用默认值（debug + `build/`）。
+fn player_plan(root: &Path) -> BuildPlan {
+    let settings = ProjectSettings::read(root).unwrap_or_default();
+    plan_build(root, &settings)
+}
+
 impl BuildKind {
     pub fn label(&self) -> String {
         match self {
             BuildKind::ScenePack => "build-scenes".to_string(),
             BuildKind::Cook(path) => format!("cook {}", path.display()),
-            BuildKind::Player => "build-scenes + cargo build".to_string(),
-            BuildKind::PlayerRun => "build-scenes + build and run".to_string(),
+            BuildKind::Player => "player build".to_string(),
+            BuildKind::PlayerRun => "player build + run".to_string(),
             BuildKind::Clean => "cargo clean (player)".to_string(),
             BuildKind::CleanEngine => "cargo clean (engine)".to_string(),
             BuildKind::BakeGi {
@@ -106,6 +117,16 @@ impl BuildKind {
             } => format!("heightmap {width}x{height} → {output}"),
             BuildKind::ScenePackCustom { output, .. } => format!("build-scenes → {output}"),
         }
+    }
+
+    /// 玩家构建（需要 cook + 摆产物 + 可选运行）而不是单纯的 cargo 步骤。
+    pub fn is_player_build(&self) -> bool {
+        matches!(self, BuildKind::Player | BuildKind::PlayerRun)
+    }
+
+    /// 这个任务构建完要不要直接启动产物。
+    pub fn runs_after_build(&self) -> bool {
+        matches!(self, BuildKind::PlayerRun)
     }
 
     /// 这个任务要顺序执行的 cargo 命令。玩家构建先刷新 `scenes.pak`，
@@ -125,24 +146,19 @@ impl BuildKind {
             args.extend(extra.iter().map(|arg| arg.to_string()));
             Ok(args)
         };
-        let player = |verb: &str| {
-            let mut args = vec![
-                verb.to_string(),
-                "--manifest-path".to_string(),
-                game_manifest_path(root).display().to_string(),
-            ];
-            // `cargo run` 的 stdout 是游戏自己的输出，不能混进 JSON。
-            if verb == "build" {
-                args.push("--message-format".to_string());
-                args.push("json-render-diagnostics".to_string());
-            }
-            args
+        // 玩家构建复用数据层的 `BuildPlan`（profile / output_dir / 产物布局都在那里），
+        // 这里只是把它的步骤翻译成 cargo 参数。
+        let player_commands = || -> Result<Vec<Vec<String>>, String> {
+            Ok(player_plan(root)
+                .steps
+                .into_iter()
+                .map(|step| step.args)
+                .collect())
         };
         Ok(match self {
             BuildKind::ScenePack => vec![pipeline(&["build-scenes"])?],
             BuildKind::Cook(path) => vec![pipeline(&["cook", &path.display().to_string()])?],
-            BuildKind::Player => vec![pipeline(&["build-scenes"])?, player("build")],
-            BuildKind::PlayerRun => vec![pipeline(&["build-scenes"])?, player("run")],
+            BuildKind::Player | BuildKind::PlayerRun => player_commands()?,
             BuildKind::Clean => vec![vec![
                 "clean".to_string(),
                 "--manifest-path".to_string(),
@@ -278,11 +294,14 @@ impl BuildJob {
         let worker_cancel = Arc::clone(&cancel);
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
         let worker_diagnostics = Arc::clone(&diagnostics);
+        let failed = Arc::new(AtomicBool::new(false));
+        let worker_failed = Arc::clone(&failed);
         std::thread::spawn(move || {
             let commands = match kind.commands(&root) {
                 Ok(commands) => commands,
                 Err(error) => {
                     let _ = tx.send(error);
+                    worker_failed.store(true, Ordering::Relaxed);
                     return;
                 }
             };
@@ -302,6 +321,7 @@ impl BuildJob {
                     Ok(child) => child,
                     Err(error) => {
                         let _ = tx.send(format!("failed to spawn cargo: {error}"));
+                        worker_failed.store(true, Ordering::Relaxed);
                         return;
                     }
                 };
@@ -351,6 +371,7 @@ impl BuildJob {
                         Ok(None) => std::thread::sleep(Duration::from_millis(50)),
                         Err(error) => {
                             let _ = tx.send(format!("cannot wait for cargo: {error}"));
+                            worker_failed.store(true, Ordering::Relaxed);
                             cancelled = true;
                             break;
                         }
@@ -370,7 +391,65 @@ impl BuildJob {
                 // 前一步失败就不再跑后面的步骤（例如 cook 失败时不要打包旧场景）。
                 if !status.map(|status| status.success()).unwrap_or(false) {
                     let _ = tx.send("build stopped: step failed".to_string());
+                    worker_failed.store(true, Ordering::Relaxed);
                     return;
+                }
+            }
+
+            // 玩家构建：把 exe / `assets/` 摆到 `[build].output_dir`，需要时直接运行产物。
+            if kind.is_player_build() {
+                let plan = player_plan(&root);
+                let _ = tx.send(format!(
+                    "staging artifacts into {}",
+                    plan.output_dir.display()
+                ));
+                match copy_artifacts(&plan.copies) {
+                    Ok(copied) => {
+                        for line in copied {
+                            let _ = tx.send(format!("copied {line}"));
+                        }
+                    }
+                    Err(error) => {
+                        let _ = tx.send(format!("cannot stage artifacts: {error}"));
+                        worker_failed.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+                let missing: Vec<String> = plan
+                    .required
+                    .iter()
+                    .filter(|path| !path.is_file())
+                    .map(|path| path.display().to_string())
+                    .collect();
+                if !missing.is_empty() {
+                    let _ = tx.send(format!(
+                        "build stopped: missing artifact {}",
+                        missing.join(", ")
+                    ));
+                    worker_failed.store(true, Ordering::Relaxed);
+                    return;
+                }
+                if kind.runs_after_build() {
+                    let exe = plan
+                        .required
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| plan.output_dir.clone());
+                    match std::process::Command::new(&exe)
+                        .current_dir(&plan.output_dir)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                    {
+                        Ok(child) => {
+                            let _ =
+                                tx.send(format!("launched {} (pid {})", exe.display(), child.id()));
+                        }
+                        Err(error) => {
+                            let _ = tx.send(format!("cannot launch {}: {error}", exe.display()));
+                            worker_failed.store(true, Ordering::Relaxed);
+                        }
+                    }
                 }
             }
         });
@@ -380,6 +459,7 @@ impl BuildJob {
             running: true,
             cancel,
             diagnostics,
+            failed,
         }
     }
 
@@ -404,6 +484,11 @@ impl BuildJob {
     /// 这次任务是否被用户取消（`cancel()` 之后为 true）。
     pub fn was_cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// 有没有步骤真的失败（非 0 退出 / 产物缺失 / spawn 失败）。
+    pub fn failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
     }
 
     /// 取走新输出（`None` = 任务已结束）。
@@ -507,32 +592,65 @@ mod tests {
             .any(|pair| pair[0] == "--compression" && pair[1] == "7"));
     }
 
+    /// 建一个带 `assets/settings.ini` 的临时工程根（构建计划读它取 profile / output_dir）。
+    fn project_root(name: &str, build_section: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("prism-egui-build-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(
+            root.join("assets/settings.ini"),
+            format!(
+                "[build]
+{build_section}
+"
+            ),
+        )
+        .unwrap();
+        root
+    }
+
     #[test]
     fn player_builds_refresh_the_scene_pack_first() {
-        let root = repo_root();
+        let root = project_root("player-steps", "profile = debug");
         for kind in [BuildKind::Player, BuildKind::PlayerRun] {
             let commands = kind.commands(&root).unwrap();
             assert_eq!(commands.len(), 2, "player builds need two steps");
+            assert_eq!(commands[0][0], "build", "first step builds the player");
             assert!(
-                mentions(&commands[0], "build-scenes"),
-                "first step must cook scenes"
+                commands[0].iter().any(|arg| arg.contains("Cargo.toml")),
+                "the build step needs a manifest"
             );
             assert!(
-                mentions(&commands[1], "prisma"),
-                "second step must target the player workspace"
+                mentions(&commands[1], "build-scenes"),
+                "the second step refreshes the scene pack"
             );
         }
-        assert_eq!(BuildKind::PlayerRun.commands(&root).unwrap()[1][0], "run");
-        assert_eq!(BuildKind::Player.commands(&root).unwrap()[1][0], "build");
+    }
+
+    /// `[build].profile` 决定 `--release`：以前 Build Player 永远构建 debug 版。
+    #[test]
+    fn the_release_profile_survives_the_trip_from_settings() {
+        let debug_root = project_root("profile-debug", "profile = debug");
+        let debug = BuildKind::Player.commands(&debug_root).unwrap();
+        assert!(!mentions(&debug[0], "--release"));
+
+        let release_root = project_root("profile-release", "profile = release");
+        let release = BuildKind::Player.commands(&release_root).unwrap();
+        assert!(
+            mentions(&release[0], "--release"),
+            "release profile must reach cargo: {:?}",
+            release[0]
+        );
     }
 
     #[test]
     fn player_build_targets_project_root_manifest() {
         let repo = repo_root();
-        let root = repo.join("projects/fishing");
+        let root = project_root("manifest", "profile = debug");
         // 没有 `projects/prisma` 的用户工程回落到自己的 manifest。
         assert_eq!(
-            BuildKind::Player.commands(&root).unwrap()[1],
+            BuildKind::Player.commands(&root).unwrap()[0],
             vec![
                 "build".to_string(),
                 "--manifest-path".to_string(),
@@ -547,16 +665,47 @@ mod tests {
         );
     }
 
-    /// 玩家构建要 JSON 诊断；`cargo run` 不能加（游戏自己的 stdout 会被污染）。
+    /// 玩家构建要 JSON 诊断（Problems 面板）；打包/cook 步骤不能加。
     #[test]
     fn only_the_player_build_asks_for_json_diagnostics() {
-        let repo = repo_root();
-        let build = BuildKind::Player.commands(&repo).unwrap();
-        assert!(mentions(&build[1], "json-render-diagnostics"));
-        let run = BuildKind::PlayerRun.commands(&repo).unwrap();
-        assert!(!mentions(&run[1], "json-render-diagnostics"));
-        let pack = BuildKind::ScenePack.commands(&repo).unwrap();
+        let root = project_root("diagnostics", "profile = debug");
+        for kind in [BuildKind::Player, BuildKind::PlayerRun] {
+            let commands = kind.commands(&root).unwrap();
+            assert!(mentions(&commands[0], "json-render-diagnostics"));
+        }
+        // 打包步骤走真实仓库根（临时根里没有 pipeline workspace）。
+        let pack = BuildKind::ScenePack.commands(&repo_root()).unwrap();
         assert!(!mentions(&pack[0], "json-render-diagnostics"));
+    }
+
+    /// `Build And Run` 运行的是**摆好的产物**，不是 `cargo run` 的调试版。
+    #[test]
+    fn build_and_run_launches_the_staged_binary() {
+        assert!(BuildKind::PlayerRun.is_player_build());
+        assert!(BuildKind::PlayerRun.runs_after_build());
+        assert!(BuildKind::Player.is_player_build());
+        assert!(!BuildKind::Player.runs_after_build());
+        let root = project_root(
+            "staged",
+            "profile = release
+output_dir = build/win",
+        );
+        let plan = player_plan(&root);
+        assert_eq!(plan.output_dir, root.join("build/win"));
+        assert_eq!(
+            plan.required,
+            vec![plan.output_dir.join(prism_editor_core::build::exe_name())]
+        );
+        assert!(plan
+            .copies
+            .iter()
+            .any(|copy| copy.to.ends_with("assets/scenes.pak")));
+        let local = if cfg!(windows) {
+            "prisma.exe"
+        } else {
+            "prisma"
+        };
+        assert_eq!(plan.required[0].file_name().unwrap().to_str(), Some(local));
     }
 
     #[test]
