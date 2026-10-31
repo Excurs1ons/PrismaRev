@@ -404,8 +404,9 @@ impl EditorApp {
         let created = ViewportState::new(kind, self.gpu.context.clone(), size.0, size.1);
         match created {
             Ok(mut view) => {
-                // 新视口从编辑器当前设置出发（网格 / 天空盒），否则首帧会和工具栏不一致。
-                *view.host.settings_mut() = self.render_settings.clone();
+                // 新视口启动设置：Scene 从编辑器当前设置出发（网格 / 天空盒），
+                // Game **不继承**编辑器调试开关（见 `initial_view_settings`）。
+                *view.host.settings_mut() = initial_view_settings(kind, &self.render_settings);
                 // Game view 代表「独立构建跑起来的样子」：渲染默认值必须来自工程
                 // 自己的 `assets/settings.ini [render]`，否则曝光 / 色调映射和产物不一致。
                 if kind == ViewKind::Game {
@@ -4150,6 +4151,31 @@ mod tests {
         Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(400.0, 300.0))
     }
 
+    /// #454：编辑器的调试开关不能漏进 Game view。
+    #[test]
+    fn game_view_never_inherits_the_editor_debug_toggles() {
+        use prism_engine::render_settings::{RenderMode, RenderSettings};
+        let editor = RenderSettings {
+            show_grid: true,
+            debug_flags: 0b1010,
+            debug_rt: 2,
+            render_mode: RenderMode::PathTrace,
+            tonemap_mode: 2,
+            ..Default::default()
+        };
+
+        let game = initial_view_settings(ViewKind::Game, &editor);
+        assert!(!game.show_grid, "grid is a scene-view helper");
+        assert_eq!(game.debug_flags, 0, "PBR isolate is a scene-view helper");
+        assert_eq!(game.debug_rt, 0, "debug RT is a scene-view helper");
+
+        // Scene view 反过来：它就该从工具栏当前状态出发。
+        let scene = initial_view_settings(ViewKind::Scene, &editor);
+        assert!(scene.show_grid);
+        assert_eq!(scene.debug_flags, 0b1010);
+        assert_eq!(scene.debug_rt, 2);
+    }
+
     #[test]
     fn dock_zone_uses_quarter_bands() {
         use prism_editor_core::dock::DockZone;
@@ -4244,6 +4270,27 @@ fn main_window_hwnd(window: &egui_ash::winit::window::Window) -> Option<isize> {
 /// 独立构建启动时走的正是这条链路：`AppConfig { render }` → `RenderSettings`
 /// （`prism_app::App::build`）。Game View 用同一份默认值，Play 看到的画面才和
 /// 打包产物一致。文件不存在（老工程）时保持引擎默认值，不报错。
+/// 新视口启动时的渲染设置。
+///
+/// Game view 是「独立构建跑起来的样子」：**不**继承编辑器视口的调试开关——
+/// 网格（`show_grid`）、PBR 分量 isolate（`debug_flags`）、debug RT（`debug_rt`）
+/// 以及调试用的 `render_mode` 都只属于 Scene 视图。否则在编辑器里打开网格，
+/// 按 Play 之后运行时画面里也有网格，和发布产物对不上（#454）。
+fn initial_view_settings(
+    kind: ViewKind,
+    editor: &prism_engine::render_settings::RenderSettings,
+) -> prism_engine::render_settings::RenderSettings {
+    match kind {
+        ViewKind::Scene => editor.clone(),
+        // `pt_*` 是真实渲染参数，由工程 `settings.ini` 或引擎默认值决定；
+        // 这里从默认值出发，`apply_project_render_defaults` 再套工程配置。
+        ViewKind::Game => prism_engine::render_settings::RenderSettings {
+            // 只有「两边都该有」的调试项才继承：目前一个都没有。
+            ..Default::default()
+        },
+    }
+}
+
 fn apply_project_render_defaults(
     host: &mut crate::engine_host::EngineHost,
     project_root: Option<&Path>,

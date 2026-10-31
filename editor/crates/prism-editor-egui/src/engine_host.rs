@@ -88,7 +88,17 @@ pub struct EngineHost {
     pak_mtime: Option<std::time::SystemTime>,
 }
 
-#[allow(dead_code)]
+/// 编辑器地面网格只在 Scene 视图出现。
+///
+/// Game 视图代表独立构建跑起来的样子：网格是编辑器的辅助对象，不属于游戏画面
+/// （#454）。这里再挡一层，避免「设置通过别的路径漏进来」时又画上去。
+fn editor_grid_visible(
+    kind: ViewKind,
+    settings: &prism_engine::render_settings::RenderSettings,
+) -> bool {
+    kind == ViewKind::Scene && settings.show_grid
+}
+
 impl EngineHost {
     pub fn new(
         kind: ViewKind,
@@ -556,7 +566,7 @@ impl EngineHost {
             clear_color: scene.clear_color,
             shadows_enabled: scene.shadows_enabled,
             ui_overlay: Some(&self.packet.ui_overlay),
-            show_grid: self.settings.show_grid,
+            show_grid: editor_grid_visible(self.kind, &self.settings),
         };
 
         let Some(ctx) = self.renderer.begin_frame()? else {
@@ -629,6 +639,19 @@ mod tests {
         assert_eq!(ViewKind::Scene.icon(), "🎬");
         assert_eq!(ViewKind::Game.icon(), "🎮");
         assert_ne!(ViewKind::Scene, ViewKind::Game);
+    }
+
+    /// #454：网格是 Scene 视图的辅助对象，Game 视图永远不画。
+    #[test]
+    fn the_editor_grid_never_reaches_the_game_view() {
+        let mut settings = prism_engine::render_settings::RenderSettings::default();
+        settings.show_grid = true;
+        assert!(editor_grid_visible(ViewKind::Scene, &settings));
+        assert!(!editor_grid_visible(ViewKind::Game, &settings));
+
+        settings.show_grid = false;
+        assert!(!editor_grid_visible(ViewKind::Scene, &settings));
+        assert!(!editor_grid_visible(ViewKind::Game, &settings));
     }
 
     #[test]
