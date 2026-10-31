@@ -1968,6 +1968,25 @@ impl Workspace {
         self.selection.sort_unstable();
     }
 
+    /// 右键菜单的目标（Unity 的 `TreeView` 行为，#524）。
+    ///
+    /// - 右键**未选中**的实体：先把选择换成它一个（菜单动作、检查器、`Parent to
+    ///   Selection` 因此指向同一行）；
+    /// - 右键**已选中**的实体：保留整个选择集合（多选时把右键项当作菜单目标）；
+    /// - 右键空白处由调用方走 [`Workspace::clear_selection_in`]。
+    ///
+    /// 返回选择是否被改过。
+    pub fn select_for_context(&mut self, index: usize) -> bool {
+        if self.selection.contains(&index) {
+            return false;
+        }
+        if index >= self.document().doc.entities.len() {
+            return false;
+        }
+        self.select_with(index, SelectMode::Replace);
+        true
+    }
+
     /// 按 [`SelectMode`] 写入单选语义（视口单击、层级单击共用）。
     ///
     /// 与 [`Workspace::select`] 的区别：`Remove` 只删不加，`Add` 只加不删，
@@ -5494,6 +5513,33 @@ mod tests {
         assert_eq!(workspace.selection, vec![1], "移除未选中项是空操作");
         workspace.select_with(2, SelectMode::Replace);
         assert_eq!(workspace.selection, vec![2], "普通点击替换");
+    }
+
+    /// #524：右键未选中的行先把它选成唯一目标，菜单动作与检查器才一致。
+    #[test]
+    fn right_clicking_an_unselected_entity_selects_only_it() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select_with(0, SelectMode::Replace);
+        assert!(workspace.select_for_context(1), "未选中 → 换选择");
+        assert_eq!(workspace.selection, vec![1]);
+        assert_eq!(workspace.primary_selection(), Some(1));
+    }
+
+    /// 右键多选里的某项：保留整个集合，右键项就是菜单目标。
+    #[test]
+    fn right_clicking_a_selected_entity_keeps_the_whole_selection() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select_many(&[0, 1, 2], false);
+        assert!(!workspace.select_for_context(1), "已选中 → 不动选择");
+        assert_eq!(workspace.selection, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn right_clicking_a_stale_index_leaves_the_selection_alone() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select_with(0, SelectMode::Replace);
+        assert!(!workspace.select_for_context(999));
+        assert_eq!(workspace.selection, vec![0]);
     }
 
     #[test]
