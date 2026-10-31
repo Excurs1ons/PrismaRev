@@ -104,6 +104,10 @@ pub struct Document {
     pub doc: SceneDoc,
     pub undo: crate::undo::UndoStack,
     pub dirty: bool,
+    /// 上一次读 / 写这份文件时它的 mtime；`None` = 还没落过盘。
+    pub saved_mtime: Option<std::time::SystemTime>,
+    /// 磁盘上的版本已经和 `saved_mtime` 不一致，且用户还没处理（#452）。
+    pub externally_modified: bool,
 }
 
 impl Document {
@@ -114,7 +118,20 @@ impl Document {
             doc,
             undo: crate::undo::UndoStack::new(),
             dirty: false,
+            saved_mtime: None,
+            externally_modified: false,
         }
+    }
+
+    /// 记下「刚读过 / 刚写过」这个文件的 mtime。
+    pub fn note_disk_state(&mut self, root: Option<&std::path::Path>) {
+        let (Some(root), Some(path)) = (root, self.path.as_deref()) else {
+            self.saved_mtime = None;
+            self.externally_modified = false;
+            return;
+        };
+        self.saved_mtime = project::file_mtime(root, path);
+        self.externally_modified = false;
     }
 
     pub fn title(&self) -> String {
@@ -353,6 +370,8 @@ pub struct Workspace {
     pub paused: bool,
     pub play_time_s: f32,
     pub status: String,
+    /// 保存被「磁盘已改动」挡下时记下文档下标，由 UI 弹冲突对话框（#452）。
+    pub pending_save_conflict: Option<usize>,
     pub layout_preset: String,
     /// 项目根（含 `assets/`）；`None` = 纯 fixture / 内置样例模式。
     pub project_root: Option<PathBuf>,
@@ -426,6 +445,7 @@ impl Workspace {
             paused: false,
             play_time_s: 0.0,
             status: String::new(),
+            pending_save_conflict: None,
             layout_preset: "default".to_string(),
             project_root: None,
             project_files: Vec::new(),
@@ -586,7 +606,11 @@ impl Workspace {
         let mut opened: Vec<Document> = Vec::new();
         for file in &files {
             match project::read_document(&root, &file.path) {
-                Ok(doc) => opened.push(Document::new(file.kind, Some(file.path.clone()), doc)),
+                Ok(doc) => {
+                    let mut document = Document::new(file.kind, Some(file.path.clone()), doc);
+                    document.note_disk_state(Some(&root));
+                    opened.push(document);
+                }
                 Err(error) => self.log(
                     LogSource::Editor,
                     LogLevel::Warn,
@@ -1057,8 +1081,9 @@ impl Workspace {
         } else {
             DocKind::Scene
         };
-        self.docs
-            .push(Document::new(kind, Some(relative.to_string()), doc));
+        let mut document = Document::new(kind, Some(relative.to_string()), doc);
+        document.note_disk_state(Some(&root));
+        self.docs.push(document);
         self.active = self.docs.len() - 1;
         self.selection.clear();
         self.expanded.clear();
@@ -1078,7 +1103,104 @@ impl Workspace {
     }
 
     /// 保存指定文档（可以是未激活标签）；返回写入的相对路径。
+    /// 保存前检查「磁盘上的这份文件是不是被别人改过了」（#452）。
+    ///
+    /// 返回冲突的文档路径。文件被删除也算冲突——盲写会把它变回我们的版本。
+    pub fn save_conflict(&self, index: usize) -> Option<String> {
+        let root = self.project_root.as_deref()?;
+        let document = self.docs.get(index)?;
+        let path = document.path.as_deref()?;
+        if document.externally_modified {
+            return Some(path.to_string());
+        }
+        let saved = document.saved_mtime?;
+        match project::file_mtime(root, path) {
+            Some(current) if current == saved => None,
+            _ => Some(path.to_string()),
+        }
+    }
+
+    /// 重新比对每个已落盘文档的 mtime；返回本次新发现「被外部改过」的文档数。
+    ///
+    /// 窗口回到前台时调用一次即可，不需要文件监听（#452 的建议 3）。
+    pub fn check_external_changes(&mut self) -> usize {
+        let Some(root) = self.project_root.clone() else {
+            return 0;
+        };
+        let mut changed = 0;
+        for document in &mut self.docs {
+            if document.externally_modified {
+                continue;
+            }
+            let Some(path) = document.path.clone() else {
+                continue;
+            };
+            let differs = match (document.saved_mtime, project::file_mtime(&root, &path)) {
+                (None, None) => false,
+                (Some(saved), Some(current)) => saved != current,
+                _ => true,
+            };
+            if differs {
+                document.externally_modified = true;
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Warn,
+                format!("{changed} 个文档在磁盘上被修改过（保存前会提示）"),
+            );
+        }
+        changed
+    }
+
+    /// 丢弃内存里的版本，按磁盘内容重载（冲突对话框的「重新载入」）。
+    pub fn reload_document_from_disk(&mut self, index: usize) -> io::Result<()> {
+        let root = self
+            .project_root
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根"))?;
+        let path = self
+            .docs
+            .get(index)
+            .and_then(|document| document.path.clone())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "文档还没有路径"))?;
+        let doc = project::read_document(&root, &path)?;
+        {
+            let document = self.docs.get_mut(index).expect("checked above");
+            document.doc = doc;
+            document.undo = crate::undo::UndoStack::new();
+            document.dirty = false;
+            document.note_disk_state(Some(&root));
+        }
+        self.hydrate_documents();
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已按磁盘内容重新载入 {path}"),
+        );
+        Ok(())
+    }
+
+    /// 保存文档；磁盘上的版本变过就拒绝（由 UI 弹「覆盖 / 重新载入 / 取消」）。
     pub fn save_document(&mut self, index: usize) -> io::Result<String> {
+        if let Some(path) = self.save_conflict(index) {
+            self.pending_save_conflict = Some(index);
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("{path} 在磁盘上已被修改"),
+            ));
+        }
+        self.write_document_now(index)
+    }
+
+    /// 忽略冲突，直接覆盖磁盘（冲突对话框的「覆盖保存」）。
+    pub fn save_document_forced(&mut self, index: usize) -> io::Result<String> {
+        self.write_document_now(index)
+    }
+
+    fn write_document_now(&mut self, index: usize) -> io::Result<String> {
         let root = self
             .project_root
             .clone()
@@ -1100,6 +1222,7 @@ impl Workspace {
             let document = self.docs.get_mut(index).expect("checked above");
             document.path = Some(path.clone());
             document.dirty = false;
+            document.note_disk_state(Some(&root));
         }
         self.refresh_project_files();
         self.log(LogSource::Editor, LogLevel::Info, format!("已保存 {path}"));
@@ -4777,6 +4900,105 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn saving_after_an_external_edit_is_refused_until_forced() {
+        let project = TempProject::new("save-conflict");
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        let index = workspace
+            .docs
+            .iter()
+            .position(|doc| doc.path.as_deref() == Some("assets/scenes/main.scene.json"))
+            .unwrap();
+
+        // 头一次保存：磁盘上的版本就是我们读进来的那份，允许写。
+        workspace.docs[index].dirty = true;
+        workspace.save_document(index).unwrap();
+
+        // 模拟 `git checkout`：别人改了文件。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[{"id":1,"name":"Theirs","parent":null,"transform":{"position":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},"components":{}}]}"#,
+        )
+        .unwrap();
+
+        assert!(workspace.check_external_changes() >= 1);
+        assert!(workspace.save_conflict(index).is_some());
+        assert!(workspace.save_document(index).is_err());
+
+        // 覆盖保存：确实把我们的版本写回去了。
+        workspace.docs[index].dirty = true;
+        workspace.save_document_forced(index).unwrap();
+        let text =
+            std::fs::read_to_string(project.root.join("assets/scenes/main.scene.json")).unwrap();
+        assert!(!text.contains("Theirs"), "{text}");
+    }
+
+    #[test]
+    fn reloading_a_conflicted_document_takes_the_disk_version() {
+        let project = TempProject::new("save-reload");
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        let index = workspace
+            .docs
+            .iter()
+            .position(|doc| doc.path.as_deref() == Some("assets/scenes/main.scene.json"))
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[{"id":1,"name":"Theirs","parent":null,"transform":{"position":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},"components":{}}]}"#,
+        )
+        .unwrap();
+        assert!(workspace.check_external_changes() >= 1);
+
+        workspace.reload_document_from_disk(index).unwrap();
+        let names: Vec<String> = workspace.docs[index]
+            .doc
+            .entities
+            .iter()
+            .map(|entity| entity.name.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(names, vec!["Theirs".to_string()]);
+        assert!(!workspace.docs[index].dirty);
+        assert!(!workspace.docs[index].externally_modified);
+        assert!(workspace.save_conflict(index).is_none());
+    }
+
+    #[test]
+    fn a_missing_file_counts_as_an_external_change() {
+        let project = TempProject::new("save-missing");
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        let index = workspace
+            .docs
+            .iter()
+            .position(|doc| doc.path.as_deref() == Some("assets/scenes/main.scene.json"))
+            .unwrap();
+
+        assert!(workspace.save_conflict(index).is_none());
+        std::fs::remove_file(project.root.join("assets/scenes/main.scene.json")).unwrap();
+        // 文件被删掉也是「改了」：盲写会把它变回我们的版本。
+        assert!(workspace.save_conflict(index).is_some());
     }
 
     #[test]

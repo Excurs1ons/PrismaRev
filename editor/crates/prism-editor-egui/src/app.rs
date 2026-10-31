@@ -160,6 +160,8 @@ pub struct EditorApp {
     pending_doc: Option<String>,
     pending_since: Option<Instant>,
     last_frame: Instant,
+    /// 上一帧窗口是否有焦点；`false → true` 时比对一次磁盘（#452）。
+    was_focused: bool,
     playing: bool,
     paused: bool,
     /// 控制协议 / 自动化请求退出：跳过未保存确认。
@@ -306,6 +308,7 @@ impl EditorApp {
             pending_doc: None,
             pending_since: None,
             last_frame: Instant::now(),
+            was_focused: false,
             playing: false,
             paused: false,
             force_quit: false,
@@ -1254,6 +1257,11 @@ impl EditorApp {
             if self.workspace.docs[index].dirty {
                 match self.workspace.save_document(index) {
                     Ok(_) => saved += 1,
+                    Err(error) if self.workspace.save_conflict(index).is_some() => {
+                        // 先弹冲突框，别把「别人的改动」直接覆盖掉（#452）。
+                        self.state.pending_save_conflict.get_or_insert(index);
+                        failures.push(error.to_string());
+                    }
                     Err(error) => failures.push(error.to_string()),
                 }
             }
@@ -3119,6 +3127,70 @@ impl EditorApp {
         }
     }
 
+    /// 保存时发现文件被外部改过：覆盖 / 重新载入 / 取消（#452）。
+    ///
+    /// 典型场景是 `git checkout` 切分支后仍然按了 `Ctrl+S`：盲写会把刚拉下来的
+    /// 版本覆盖掉，而且没有任何提示。
+    fn save_conflict_dialog(&mut self, ctx: &egui::Context) {
+        let Some(index) = self.state.pending_save_conflict else {
+            return;
+        };
+        let Some(document) = self.workspace.docs.get(index) else {
+            self.state.pending_save_conflict = None;
+            return;
+        };
+        let title = document.title();
+        let path = document.path.clone().unwrap_or_default();
+
+        #[derive(Clone, Copy, PartialEq)]
+        enum Choice {
+            Overwrite,
+            Reload,
+            Cancel,
+        }
+        let mut choice: Option<Choice> = None;
+        egui::Window::new("File Changed on Disk")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("{title} was modified outside the editor."));
+                ui.label(egui::RichText::new(path).weak().small());
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Overwriting discards the other copy.").weak());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Overwrite").clicked() {
+                        choice = Some(Choice::Overwrite);
+                    }
+                    if ui.button("Reload from Disk").clicked() {
+                        choice = Some(Choice::Reload);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(Choice::Cancel);
+                    }
+                });
+            });
+
+        match choice {
+            Some(Choice::Overwrite) => {
+                self.state.pending_save_conflict = None;
+                match self.workspace.save_document_forced(index) {
+                    Ok(path) => self.state.status = format!("saved {path} (overwrote)"),
+                    Err(error) => self.state.status = format!("save failed: {error}"),
+                }
+            }
+            Some(Choice::Reload) => {
+                self.state.pending_save_conflict = None;
+                match self.workspace.reload_document_from_disk(index) {
+                    Ok(()) => self.state.status = "reloaded from disk".to_string(),
+                    Err(error) => self.state.status = format!("reload failed: {error}"),
+                }
+            }
+            Some(Choice::Cancel) => self.state.pending_save_conflict = None,
+            None => {}
+        }
+    }
+
     /// 关闭未保存文档 / 窗口时的三选一确认（引擎的 Save / Don't Save / Cancel）。
     fn close_confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(target) = self.state.pending_close else {
@@ -3750,6 +3822,22 @@ impl App for EditorApp {
         }
         self.poll_control(ctx);
         self.drain_engine_logs();
+        // 核心层（`Workspace::run(Command::Save)`）挡住了一次覆盖，交给对话框（#452）。
+        if let Some(index) = self.workspace.pending_save_conflict.take() {
+            self.state.pending_save_conflict = Some(index);
+        }
+        // 窗口重新获得焦点 = 「回到前台」，像 Unity 的 `OnApplicationFocus`：
+        // git checkout / 外部编辑器改过的文档与资产在这里被发现（#452）。
+        let focused = ctx.input(|input| input.focused);
+        if focused && !self.was_focused {
+            let changed = self.workspace.check_external_changes();
+            if changed > 0 {
+                self.state.status = format!("{changed} document(s) changed on disk");
+            }
+            // 外部新建 / 删除的资产也在这里重新扫出来（原来只有手动 Refresh）。
+            self.workspace.refresh_project_files();
+        }
+        self.was_focused = focused;
         self.poll_build();
         self.poll_project_module();
         self.sync_document();
@@ -3833,6 +3921,7 @@ impl App for EditorApp {
         panels::entity_delete_confirm(ctx, &mut self.workspace, &mut self.state);
         self.confirm_dialog(ctx);
         self.close_confirm_dialog(ctx);
+        self.save_conflict_dialog(ctx);
         panels::doc_delete_confirm(ctx, &mut self.workspace, &mut self.state);
 
         let mut about = self.state.about_open;
