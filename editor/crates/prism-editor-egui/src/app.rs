@@ -383,6 +383,11 @@ impl EditorApp {
             Ok(mut view) => {
                 // 新视口从编辑器当前设置出发（网格 / 天空盒），否则首帧会和工具栏不一致。
                 *view.host.settings_mut() = self.render_settings.clone();
+                // Game view 代表「独立构建跑起来的样子」：渲染默认值必须来自工程
+                // 自己的 `assets/settings.ini [render]`，否则曝光 / 色调映射和产物不一致。
+                if kind == ViewKind::Game {
+                    apply_project_render_defaults(&mut view.host, self.project_root.as_deref());
+                }
                 view.host.set_show_skybox(self.workspace.show_skybox);
                 // Game view 的 Play 执行用户项目代码（Scene view 只跑编辑器预览）。
                 if kind == ViewKind::Game {
@@ -847,6 +852,17 @@ impl EditorApp {
                 "fps": self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
                 "playing": self.playing,
                 "paused": self.paused,
+                "project_module": self
+                    .game_view
+                    .as_ref()
+                    .and_then(|view| view.host.project_module_status())
+                    .map(|status| {
+                        json!({
+                            "available": status.available,
+                            "loaded": status.loaded,
+                            "building": status.building,
+                        })
+                    }),
                 "scene": self.workspace.document().path.clone(),
                 "dirty": self.workspace.document().dirty,
                 "project_root": self
@@ -857,6 +873,54 @@ impl EditorApp {
                 "status": self.state.status.clone(),
                 "project_module": self.project_module_json(),
             }),
+            "logs" | "log.dump" => {
+                // Console 面板的同一份缓冲：MCP / 自动化没窗口可看，也能读到
+                // 引擎日志与工程模块（target `project`）的日志和 panic 调用栈。
+                let since = args
+                    .get("since")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let limit = args
+                    .get("limit")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(200) as usize;
+                let lines: Vec<serde_json::Value> = self
+                    .workspace
+                    .log
+                    .all()
+                    .iter()
+                    .filter(|line| line.seq >= since)
+                    .take(limit)
+                    .map(|line| {
+                        json!({
+                            "seq": line.seq,
+                            "source": format!("{:?}", line.source),
+                            "level": format!("{:?}", line.level),
+                            "text": line.text,
+                        })
+                    })
+                    .collect();
+                let next = self
+                    .workspace
+                    .log
+                    .all()
+                    .back()
+                    .map(|line| line.seq + 1)
+                    .unwrap_or(since);
+                json!({ "ok": true, "lines": lines, "next": next })
+            }
+            "play" | "play.start" => {
+                self.apply_command(Command::Play);
+                json!({ "ok": true, "playing": self.playing })
+            }
+            "stop" | "play.stop" => {
+                self.apply_command(Command::Stop);
+                json!({ "ok": true, "playing": self.playing })
+            }
+            "pause" => {
+                self.apply_command(Command::Pause);
+                json!({ "ok": true, "paused": self.paused, "playing": self.playing })
+            }
             "capture" => {
                 let target = args
                     .get("target")
@@ -3423,15 +3487,12 @@ impl EditorApp {
     /// 渲染设置改动 → 应用到两个引擎实例 → 下一帧重绘。
     fn apply_render_settings(&mut self, settings: prism_engine::render_settings::RenderSettings) {
         self.render_settings = settings;
-        for kind in [ViewKind::Scene, ViewKind::Game] {
-            let view = match kind {
-                ViewKind::Scene => self.scene_view.as_mut(),
-                ViewKind::Game => self.game_view.as_mut(),
-            };
-            if let Some(view) = view {
-                *view.host.settings_mut() = self.render_settings.clone();
-                view.mark_dirty();
-            }
+        // 只改 **Scene view**：Game view 是「独立构建跑起来的样子」，设置来自工程
+        // `assets/settings.ini`（`apply_project_render_defaults`），被编辑器预览覆盖
+        // 就谈不上对齐产物了。
+        if let Some(view) = self.scene_view.as_mut() {
+            *view.host.settings_mut() = self.render_settings.clone();
+            view.mark_dirty();
         }
     }
 
@@ -3827,4 +3888,32 @@ fn main_window_hwnd(window: &egui_ash::winit::window::Window) -> Option<isize> {
         let _ = window;
         None
     }
+}
+
+/// 把工程 `assets/settings.ini` 的 `[render]` 应用到 Game View。
+///
+/// 独立构建启动时走的正是这条链路：`AppConfig { render }` → `RenderSettings`
+/// （`prism_app::App::build`）。Game View 用同一份默认值，Play 看到的画面才和
+/// 打包产物一致。文件不存在（老工程）时保持引擎默认值，不报错。
+fn apply_project_render_defaults(
+    host: &mut crate::engine_host::EngineHost,
+    project_root: Option<&Path>,
+) {
+    let Some(root) = project_root else {
+        return;
+    };
+    let path = root.join("assets").join("settings.ini");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            log::debug!(
+                "game view: no project render settings at {}: {error}",
+                path.display()
+            );
+            return;
+        }
+    };
+    let config = prism_engine::config::AppConfig::from_ini(&text);
+    config.render.apply(host.settings_mut());
+    log::info!("game view render defaults: {}", path.display());
 }

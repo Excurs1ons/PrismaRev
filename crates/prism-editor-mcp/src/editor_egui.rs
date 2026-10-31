@@ -11,6 +11,8 @@
 //! | `editor_capture` | 抓整窗或某个视口的 PNG（`target` = `window` / `scene` / `game`） |
 //! | `editor_quit` | 让编辑器退出 |
 //! | `editor_ui` | UI 节点树快照 / 按节点点击 / 按节点设值（类似浏览器 MCP 的 DOM 操作） |
+//! | `editor_play` | Play / Stop / Pause（Play 会编译并加载工程模块） |
+//! | `editor_logs` | 读 Console 缓冲（含工程模块日志与 panic 调用栈） |
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -41,6 +43,8 @@ impl EditorHost {
             "editor_capture" => capture(root, args),
             "editor_quit" => quit(self),
             "editor_ui" => ui(root, args),
+            "editor_play" => play(root, args),
+            "editor_logs" => logs(root, args),
             other => Err(format!("未知的编辑器工具 '{other}'")),
         }
     }
@@ -157,11 +161,58 @@ pub fn definitions() -> Vec<ToolDef> {
             }),
         },
         ToolDef {
+            name: "editor_play",
+            description: "控制编辑器 Play：action=play 开始（会后台编译并加载工程模块，工程代码在 Game view 里跑）、stop 停止、pause 暂停/继续。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["play", "stop", "pause"],
+                        "default": "play"
+                    }
+                }
+            }),
+        },
+        ToolDef {
+            name: "editor_logs",
+            description: "读编辑器 Console 缓冲（引擎日志 + 工程模块的 project: 日志 + panic 调用栈）。since 是上一轮的 next，用于增量拉取。",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "since": { "type": "integer", "default": 0, "description": "只要 seq >= since 的行（用上次返回的 next）" },
+                    "limit": { "type": "integer", "default": 200 }
+                }
+            }),
+        },
+        ToolDef {
             name: "editor_quit",
             description: "让编辑器走正常退出路径（会落盘 state.json）。",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
     ]
+}
+
+fn play(root: &Path, args: &Value) -> Result<String, String> {
+    let action = args.get("action").and_then(Value::as_str).unwrap_or("play");
+    let cmd = match action {
+        "play" => "play",
+        "stop" => "stop",
+        "pause" => "pause",
+        other => return Err(format!("action 只能是 play / stop / pause，收到 '{other}'")),
+    };
+    let reply = request(root, json!({ "cmd": cmd }))?;
+    Ok(reply.to_string())
+}
+
+fn logs(root: &Path, args: &Value) -> Result<String, String> {
+    let since = args.get("since").and_then(Value::as_u64).unwrap_or(0);
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(200);
+    let reply = request(
+        root,
+        json!({ "cmd": "logs", "since": since, "limit": limit }),
+    )?;
+    Ok(reply.to_string())
 }
 
 fn ui(root: &Path, args: &Value) -> Result<String, String> {

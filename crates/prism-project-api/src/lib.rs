@@ -52,6 +52,25 @@ pub const UNKNOWN_TYPE: i32 = 4;
 /// 输出缓冲区太小；`out_count` 已写入所需长度。
 pub const BUFFER_TOO_SMALL: i32 = 5;
 
+/// 在 ABI 边界上兜住 Rust 的 panic。
+///
+/// 模块导出的是 `extern "C"` 函数，而 Rust 的 unwinding panic 跨 `extern "C"`
+/// 边界是**未定义行为**（近版本 std 会直接 abort 整个进程）。宿主是编辑器时，
+/// 这意味着工程代码里的一个 `unwrap()` 会把编辑器一起带走 —— 所以模块的每个
+/// 导出入口都要走这里：panic 被就地捕获、返回 [`TICK_FAILED`]，宿主继续运行
+/// 并显示错误。
+///
+/// 这里**不**接管 `panic::set_hook`：hook 是进程级的，模块和宿主是同一个进程，
+/// 模块改 hook 会顶掉宿主的日志/崩溃收集。call stack 由宿主的 hook 负责
+/// （`std::backtrace::Backtrace::force_capture()`，PDB 与模块放在一起就能解出
+/// 模块帧）。
+pub fn guard<F: FnOnce() -> i32>(f: F) -> i32 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(status) => status,
+        Err(_) => TICK_FAILED,
+    }
+}
+
 pub const HOST_CAP_LOGGING: u64 = 1 << 0;
 pub const HOST_CAP_WORLD_COMMANDS: u64 = 1 << 1;
 /// 松散资产访问（`asset_exists` / `read_asset_file`）。

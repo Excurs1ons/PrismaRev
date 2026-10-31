@@ -963,9 +963,11 @@ impl GraphRenderer {
     /// doesn't keep counting after the 着色器 stops accumulating.
     /// Returns `None` if the path-trace pass is not in the 图
     pub fn pt_frame_count(&self) -> Option<u32> {
+        // 不用 `return`：关掉 `pathtrace` 时函数体只剩这一句，`return None;`
+        // 会让 clippy 的 `needless_return` 直接报错（-D warnings 下编译失败）。
         #[cfg(not(feature = "pathtrace"))]
         {
-            return None;
+            None
         }
         #[cfg(feature = "pathtrace")]
         self.graph.pass_ref::<PathTracePass>().map(|pt| {
