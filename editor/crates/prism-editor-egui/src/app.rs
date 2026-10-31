@@ -12,7 +12,10 @@ use egui::{Align, Color32, CursorIcon, Layout, Rect, RichText, Sense, Stroke, Ve
 use egui_ash::{App, CreationContext, ExitSignal, HandleRedraw};
 
 use prism_editor_core::dock::split_side_length;
-use prism_editor_core::{Command, DockDirection, DockNode, Locale, Preferences, Workspace};
+use prism_editor_core::{
+    Command, DockDirection, DockNode, KeyChord, Locale, Preferences, Workspace, SHORTCUTS,
+    SHORTCUT_ALIASES,
+};
 
 use crate::engine_host::ViewKind;
 use crate::gpu::SharedVulkan;
@@ -171,75 +174,87 @@ fn dock_zone(rect: Rect, pos: egui::Pos2) -> prism_editor_core::dock::DockZone {
 ///
 /// 裸键（不带修饰键）只留给 `Delete` / `F`：`Select All` 必须是 `Ctrl+A`，否则在输入框里
 /// 打一个 `a` 就会全选实体（#499）。
+/// 把 `prism_editor_core` 的快捷键表翻译成 egui 的分发表（#516）。
+///
+/// **单一事实源**：Shortcuts 面板、菜单提示、实际分发读的都是
+/// [`prism_editor_core::SHORTCUTS`] / [`prism_editor_core::SHORTCUT_ALIASES`]，
+/// 所以不会出现「面板写 Ctrl+Shift+S，按下却触发 Save」这种漂移。
+///
+/// 顺序按修饰键数量从多到少：带 Shift/Alt 的 chord 必须先于它的子集被消费。
 fn editor_shortcuts() -> Vec<(egui::KeyboardShortcut, Command)> {
-    use egui::{Key, KeyboardShortcut, Modifiers};
-    vec![
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::S),
-            Command::Save,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::Z),
-            Command::Undo,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::Y),
-            Command::Redo,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::D),
-            Command::DuplicateEntity,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::C),
-            Command::CopyEntity,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::X),
-            Command::CutEntity,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::V),
-            Command::PasteEntity,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::V),
-            Command::PasteComponent,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::N),
-            Command::NewScene,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::P),
-            Command::Pause,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL | Modifiers::ALT, Key::P),
-            Command::Step,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::P),
-            Command::Play,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::NONE, Key::Delete),
-            Command::DeleteSelection,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::NONE, Key::F),
-            Command::FrameSelection,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::Num0),
-            Command::ResetSceneCamera,
-        ),
-        // 不是裸 `A`：输入框里打 `a` 不能触发全选实体。
-        (
-            KeyboardShortcut::new(Modifiers::CTRL, Key::A),
-            Command::SelectAll,
-        ),
-    ]
+    use egui::{KeyboardShortcut, Modifiers};
+    let mut shortcuts: Vec<(KeyboardShortcut, Command)> = SHORTCUTS
+        .iter()
+        .chain(SHORTCUT_ALIASES.iter())
+        .filter_map(|entry| {
+            let chord = KeyChord::parse(entry.keys)?;
+            let key = key_for(&chord.key)?;
+            let mut modifiers = Modifiers::NONE;
+            if chord.ctrl {
+                modifiers |= Modifiers::CTRL;
+            }
+            if chord.shift {
+                modifiers |= Modifiers::SHIFT;
+            }
+            if chord.alt {
+                modifiers |= Modifiers::ALT;
+            }
+            Some((KeyboardShortcut::new(modifiers, key), entry.command))
+        })
+        .collect();
+    shortcuts.sort_by_key(|(shortcut, _)| {
+        std::cmp::Reverse(
+            u8::from(shortcut.modifiers.ctrl)
+                + u8::from(shortcut.modifiers.shift)
+                + u8::from(shortcut.modifiers.alt),
+        )
+    });
+    shortcuts
+}
+
+/// 表里的键名（`s` / `f5` / `home` / `del`）→ egui 的 `Key`。
+///
+/// `KeyChord::parse` 会把键名小写化，而 egui 的 `Key::from_name` 只认自己的拼写
+/// （`Delete` / `Escape` …），所以这里补一张缩写对照。
+fn key_for(name: &str) -> Option<egui::Key> {
+    let canonical = match name {
+        "del" => "delete",
+        "ins" => "insert",
+        "esc" => "escape",
+        "return" => "enter",
+        other => other,
+    };
+    egui::Key::ALL
+        .iter()
+        .copied()
+        .find(|key| key.name().eq_ignore_ascii_case(canonical))
+}
+
+/// 只在**修饰键完全一致**时消费按键（#516）。
+///
+/// `InputState::consume_shortcut` 用的是 `matches_logically`：pattern 里没写的
+/// Shift/Alt 也算匹配，于是 `Ctrl+Shift+S` 会先被 `Ctrl+S` 吃掉。这里改成
+/// `matches_exact`，并跳过操作系统重复事件。
+fn consume_shortcut_exact(input: &mut egui::InputState, shortcut: &egui::KeyboardShortcut) -> bool {
+    let index = input.events.iter().position(|event| match event {
+        egui::Event::Key {
+            key,
+            pressed: true,
+            repeat,
+            modifiers,
+            ..
+        } => {
+            *key == shortcut.logical_key && !*repeat && modifiers.matches_exact(shortcut.modifiers)
+        }
+        _ => false,
+    });
+    match index {
+        Some(index) => {
+            input.events.remove(index);
+            true
+        }
+        None => false,
+    }
 }
 
 /// 文本控件聚焦时**必须让路**的命令（#499）。
@@ -3641,30 +3656,6 @@ impl EditorApp {
                     view.mark_dirty();
                 }
             }
-            // 引擎的面板快捷键：Ctrl+1..5 = Scene / Game / Inspector / Hierarchy / Project，
-            // Ctrl+Shift+C = Console。
-            for (key, command) in [
-                (egui::Key::Num1, Command::ToggleSceneView),
-                (egui::Key::Num2, Command::ToggleGameView),
-                (egui::Key::Num3, Command::ToggleInspector),
-                (egui::Key::Num4, Command::ToggleHierarchy),
-                (egui::Key::Num5, Command::ToggleAssets),
-            ] {
-                if ctx.input_mut(|input| {
-                    input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, key))
-                }) {
-                    self.apply_command(command);
-                }
-            }
-            if ctx.input_mut(|input| {
-                input.consume_shortcut(&egui::KeyboardShortcut::new(
-                    egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
-                    egui::Key::C,
-                ))
-            }) {
-                self.apply_command(Command::ToggleLog);
-            }
-
             // Ctrl+B = Build And Run，Ctrl+I = 反选（引擎的默认绑定）。
             if ctx.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -3706,7 +3697,7 @@ impl EditorApp {
             if wants_keyboard && plain_shortcut(command) {
                 continue;
             }
-            if ctx.input_mut(|input| input.consume_shortcut(&shortcut)) {
+            if ctx.input_mut(|input| consume_shortcut_exact(input, &shortcut)) {
                 if assets_focused {
                     match command {
                         Command::DeleteSelection => {
@@ -4398,6 +4389,105 @@ mod tests {
 
     fn rect() -> Rect {
         Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(400.0, 300.0))
+    }
+
+    /// #516：表里的每一条都必须能翻译成 egui 的键位，否则面板写着却按不出来。
+    #[test]
+    fn every_listed_shortcut_maps_to_a_key() {
+        for entry in SHORTCUTS.iter().chain(SHORTCUT_ALIASES.iter()) {
+            let chord = KeyChord::parse(entry.keys)
+                .unwrap_or_else(|| panic!("{:?} 的键位 {:?} 解析不了", entry.command, entry.keys));
+            assert!(
+                key_for(&chord.key).is_some(),
+                "{:?} 的键名 {:?} 在 egui 里没有对应键",
+                entry.command,
+                chord.key
+            );
+        }
+        assert_eq!(
+            editor_shortcuts().len(),
+            SHORTCUTS.len() + SHORTCUT_ALIASES.len(),
+            "分发表应当覆盖整张表（含别名）"
+        );
+    }
+
+    /// #516：带 Shift / Alt 的 chord 必须先于它的子集被消费，且基键不能被它抢走。
+    #[test]
+    fn shifted_chords_do_not_fall_back_to_their_base_key() {
+        let table = editor_shortcuts();
+        // 修饰键多的排在前面。
+        for pair in table.windows(2) {
+            let modifiers = |shortcut: &egui::KeyboardShortcut| {
+                u8::from(shortcut.modifiers.ctrl)
+                    + u8::from(shortcut.modifiers.shift)
+                    + u8::from(shortcut.modifiers.alt)
+            };
+            assert!(
+                modifiers(&pair[0].0) >= modifiers(&pair[1].0),
+                "排序必须按修饰键数量从多到少，否则 Ctrl+Shift+S 会被 Ctrl+S 吃掉"
+            );
+        }
+
+        let mut input = egui::InputState::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+        });
+        let save = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::S);
+        let save_as = egui::KeyboardShortcut::new(
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            egui::Key::S,
+        );
+        assert!(
+            !consume_shortcut_exact(&mut input, &save),
+            "Ctrl+Shift+S 不能触发 Save"
+        );
+        assert!(
+            consume_shortcut_exact(&mut input, &save_as),
+            "Ctrl+Shift+S 必须触发 Save As"
+        );
+        assert!(input.events.is_empty(), "命中后事件要被消费掉");
+
+        // 反方向：只有 Ctrl 时不能匹配带 Shift 的 chord。
+        input.events.push(egui::Event::Key {
+            key: egui::Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        });
+        assert!(!consume_shortcut_exact(&mut input, &save_as));
+        assert!(consume_shortcut_exact(&mut input, &save));
+    }
+
+    /// #516：表里每条命令只出现一次（别名除外），免得两个键位互相抢。
+    #[test]
+    fn the_shortcut_table_has_no_duplicate_commands() {
+        let mut seen: Vec<Command> = Vec::new();
+        for entry in SHORTCUTS {
+            assert!(
+                !seen.contains(&entry.command),
+                "{:?} 在 SHORTCUTS 里出现了两次",
+                entry.command
+            );
+            seen.push(entry.command);
+        }
+    }
+
+    /// #516：表里列出的命令必须真的能触发（Stop / Frame All / Save As 曾经只是「写了」）。
+    #[test]
+    fn every_table_command_is_dispatched() {
+        let table = editor_shortcuts();
+        for entry in SHORTCUTS {
+            assert!(
+                table.iter().any(|(_, command)| *command == entry.command),
+                "{:?} 在表里但没有进分发表",
+                entry.command
+            );
+        }
     }
 
     /// #499：输入框聚焦时，裸键（F / Delete / 全选）不能被执行。
