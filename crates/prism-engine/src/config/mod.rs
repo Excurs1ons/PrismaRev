@@ -42,6 +42,12 @@ pub struct RenderConfig {
     pub tonemap_mode: Option<u32>,
     /// 后处理抗锯齿：0 = 关（默认），1 = FXAA。
     pub aa_mode: Option<u32>,
+    /// 显示空间对比度（`1.0` = 不变，#502）。
+    pub contrast: Option<f32>,
+    /// 显示空间饱和度（`1.0` = 不变，`0.0` = 灰度）。
+    pub saturation: Option<f32>,
+    /// 暗角强度（`0.0` = 关，`1.0` = 四角全黑）。
+    pub vignette: Option<f32>,
     /// 0 = HDR tonemap, 1 = depth, 2 = view-space normal。
     pub debug_rt: Option<u32>,
     pub pt_max_bounces: Option<u32>,
@@ -72,6 +78,16 @@ impl RenderConfig {
         if let Some(mode) = self.aa_mode {
             settings.aa_mode = mode;
         }
+        if let Some(value) = self.contrast {
+            // 负对比度会把画面翻负，这里挡在 0。
+            settings.contrast = value.max(0.0);
+        }
+        if let Some(value) = self.saturation {
+            settings.saturation = value.max(0.0);
+        }
+        if let Some(value) = self.vignette {
+            settings.vignette = value.clamp(0.0, 1.0);
+        }
         if let Some(rt) = self.debug_rt {
             settings.debug_rt = rt;
         }
@@ -92,6 +108,9 @@ impl RenderConfig {
             debug_flags: ini.get_u32("render", "debug_flags"),
             tonemap_mode: ini.get_u32("render", "tonemap_mode"),
             aa_mode: ini.get_u32("render", "aa_mode"),
+            contrast: ini.get_f32("render", "contrast"),
+            saturation: ini.get_f32("render", "saturation"),
+            vignette: ini.get_f32("render", "vignette"),
             debug_rt: ini.get_u32("render", "debug_rt"),
             pt_max_bounces: ini.get_u32("render", "pt_max_bounces"),
             pt_ray_max_distance: ini.get_f32("render", "pt_ray_max_distance"),
@@ -292,6 +311,9 @@ const KNOWN_KEYS: &[(&str, &[&str])] = &[
             "debug_flags",
             "tonemap_mode",
             "aa_mode",
+            "contrast",
+            "saturation",
+            "vignette",
             "debug_rt",
             "pt_max_bounces",
             "pt_ray_max_distance",
@@ -409,13 +431,17 @@ mod tests {
         use crate::render_settings::{RenderMode, RenderSettings};
 
         let cfg = AppConfig::from_ini(
-            "[render]\nrender_mode = \"path_trace\"\ntonemap_mode = 1\naa_mode = 1\npt_max_bounces = 7\n",
+            "[render]\nrender_mode = \"path_trace\"\ntonemap_mode = 1\naa_mode = 1\ncontrast = 1.4\nsaturation = 0.6\nvignette = 0.3\npt_max_bounces = 7\n",
         );
         let mut settings = RenderSettings::default();
         cfg.render.apply(&mut settings);
         assert_eq!(settings.render_mode, RenderMode::PathTrace);
         assert_eq!(settings.tonemap_mode, 1);
         assert_eq!(settings.aa_mode, 1);
+        // #502 color grading knobs ride in the same section.
+        assert_eq!(settings.contrast, 1.4);
+        assert_eq!(settings.saturation, 0.6);
+        assert_eq!(settings.vignette, 0.3);
         assert_eq!(settings.pt_max_bounces, 7);
         // Unspecified fields keep their defaults.
         assert_eq!(settings.pt_max_iterations, 0);

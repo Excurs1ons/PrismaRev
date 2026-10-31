@@ -52,6 +52,30 @@
                                 }
                             },
                             "binding": {"kind": "uniform", "offset": 8, "size": 8}
+                        },
+                        {
+                            "name": "contrast",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 4}
+                        },
+                        {
+                            "name": "saturation",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 20, "size": 4}
+                        },
+                        {
+                            "name": "vignette",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 24, "size": 4}
                         }
                     ]
                 },
@@ -90,10 +114,34 @@
                                     }
                                 },
                                 "binding": {"kind": "uniform", "offset": 8, "size": 8}
+                            },
+                            {
+                                "name": "contrast",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 16, "size": 4}
+                            },
+                            {
+                                "name": "saturation",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 20, "size": 4}
+                            },
+                            {
+                                "name": "vignette",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 24, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 32}
                 }
             }
         }

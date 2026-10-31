@@ -437,6 +437,61 @@ pub struct SpriteDrawItem {
     pub texture: u32,
 }
 
+/// Display-referred color grading applied by `PostPass` **after** tonemapping
+/// (#502).
+///
+/// All three knobs are no-ops at their defaults, so an untouched
+/// `PostGrade::default()` produces exactly the pre-#502 image:
+///
+/// - `contrast`: scale around mid-grey `0.5` (`1.0` = unchanged);
+/// - `saturation`: Rec.709 luma interpolation (`1.0` = unchanged, `0.0` = grey);
+/// - `vignette`: corner falloff strength (`0.0` = off, `1.0` = corners black).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PostGrade {
+    pub contrast: f32,
+    pub saturation: f32,
+    pub vignette: f32,
+}
+
+impl Default for PostGrade {
+    fn default() -> Self {
+        Self {
+            contrast: 1.0,
+            saturation: 1.0,
+            vignette: 0.0,
+        }
+    }
+}
+
+impl PostGrade {
+    /// `true` when every knob is at its default (the pass can skip the math).
+    pub fn is_neutral(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Clamp to the ranges the shader expects (`contrast`/`saturation` never
+    /// negative, `vignette` in `0..=1`).
+    pub fn sanitized(self) -> Self {
+        Self {
+            contrast: if self.contrast.is_finite() {
+                self.contrast.max(0.0)
+            } else {
+                1.0
+            },
+            saturation: if self.saturation.is_finite() {
+                self.saturation.max(0.0)
+            } else {
+                1.0
+            },
+            vignette: if self.vignette.is_finite() {
+                self.vignette.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+        }
+    }
+}
+
 /// Per-frame scene + lighting 状态 shared with every pass via [`RenderContext`].
 ///
 /// The `GraphRenderer` populates this once per 帧 (before driving the
@@ -496,6 +551,9 @@ pub struct GraphFrame<'a> {
     /// 高动态范围 1 = linearized 深度 2 = view-space 法线 PostPass picks which
     /// published 视图 to 样本 based on this.
     pub debug_rt: u32,
+    /// Display-referred color grading, applied in `PostPass` after tonemapping
+    /// (#502). [`PostGrade::default`] is an exact no-op.
+    pub grade: PostGrade,
     /// 投影 矩阵 entries `[2][2]` / `[3][2]` (column-major
     /// `m[col][row]`) used by PostPass to linearize the 深度 缓冲区 for the
     /// 调试 深度 视图 (`view_z = proj22 * d + proj32`).

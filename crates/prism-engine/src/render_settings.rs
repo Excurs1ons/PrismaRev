@@ -73,6 +73,15 @@ pub struct RenderSettings {
     pub pt_max_iterations: u32,
     /// 是否在场景视图中渲染地面基准网格 (Y = 0)。
     pub show_grid: bool,
+    /// 显示空间对比度（围绕中灰 `0.5` 缩放，`1.0` = 不变）。色调映射之后应用。
+    ///
+    /// 这三个字段是 #502 的后处理调色参数：和 `tonemap_mode` / `aa_mode` 一样
+    /// 在 `PostPass` 里生效，交换链与编辑器离屏视口共用同一条路径。
+    pub contrast: f32,
+    /// 显示空间饱和度（`1.0` = 不变，`0.0` = 灰度）。Rec.709 luma 插值。
+    pub saturation: f32,
+    /// 暗角强度（`0.0` = 关闭，`1.0` = 四角全黑）。
+    pub vignette: f32,
 }
 
 /// 默认 PBR 众数 法线 full-PBR 渲染 Reinhard 色调映射 光栅化
@@ -106,6 +115,9 @@ impl Default for RenderSettings {
             pt_ray_max_distance: 1000.0,
             pt_max_iterations: 0,
             show_grid: false,
+            contrast: 1.0,
+            saturation: 1.0,
+            vignette: 0.0,
         }
     }
 }

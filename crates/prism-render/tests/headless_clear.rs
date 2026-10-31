@@ -137,6 +137,7 @@ fn headless_render_real_frame_and_readback() {
             0,
             1.0,
             &[],
+            prism_render::render_graph::PostGrade::default(),
         )
         .expect("headless render failed");
 
