@@ -34,6 +34,7 @@ pub fn component_card_with_assets(
     actions: &mut Vec<CardAction>,
     set: &mut dyn FnMut(&str, Value),
     assets: &[String],
+    doc_dir: &str,
 ) {
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(6, 4))
@@ -71,7 +72,7 @@ pub fn component_card_with_assets(
                 if field.name == "type_id" {
                     continue;
                 }
-                field_row_at(ui, registry, field, field_value, "", set, assets);
+                field_row_at(ui, registry, field, field_value, "", set, assets, doc_dir);
             }
             let _ = &component;
         });
@@ -155,6 +156,7 @@ mod tests {
                     &mut actions,
                     &mut |path, value| writes.push((path.to_owned(), value)),
                     &[],
+                    "assets",
                 );
             });
         });
@@ -172,6 +174,7 @@ fn field_row_at(
     prefix: &str,
     set: &mut dyn FnMut(&str, Value),
     assets: &[String],
+    doc_dir: &str,
 ) {
     let widget = field.widget();
     let label = field.label();
@@ -240,6 +243,22 @@ fn field_row_at(
                 // 引擎的「把资产拖到对象字段」：路径类字段接受资产拖放。
                 let looks_like_asset = name.ends_with("_path")
                     || matches!(name.as_str(), "prefab" | "env_map" | "volume" | "mesh");
+                // 引用断掉（被删 / 改名 / 拼错）时红字标出来：引擎那边只会往
+                // 日志写一句 warn，画面里是「物体不见了」或「贴图变白」（#467）。
+                if looks_like_asset
+                    && !current.is_empty()
+                    && prism_editor_core::assets::resolve_reference(assets, doc_dir, &current)
+                        .is_none()
+                {
+                    ui.label(
+                        egui::RichText::new("⚠ Missing")
+                            .size(10.5)
+                            .color(egui::Color32::from_rgb(232, 96, 96)),
+                    )
+                    .on_hover_text(format!(
+                        "{current} is not in the asset database — the file was deleted,                          renamed, or the path is misspelt"
+                    ));
+                }
                 if looks_like_asset {
                     if let Some(payload) = response.dnd_release_payload::<AssetDrag>() {
                         set(&name, Value::String(payload.path.clone()));
@@ -416,6 +435,7 @@ fn field_row_at(
                                 &child_prefix,
                                 set,
                                 assets,
+                                doc_dir,
                             );
                         }
                     });
