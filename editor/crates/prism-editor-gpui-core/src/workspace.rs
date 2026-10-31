@@ -872,8 +872,13 @@ impl Workspace {
         Ok(())
     }
 
-    /// 资产重命名 / 移动：先改磁盘文件，再改写所有打开文档里的精确路径引用，
-    /// 并同步文档自身的路径。返回 `(替换次数, 受影响文档)`。
+    /// 资产重命名 / 移动：先改磁盘文件，再改写**所有**文档里的资产路径引用。
+    ///
+    /// 打开着的文档改内存（标脏，等用户保存）；没打开的文档直接读-改-写落盘，
+    /// 否则关着的那份会留着断掉的旧路径（#465）。只碰资产路径字段，实体名 /
+    /// UI 文本里恰好写着同一段路径的字符串不受影响。
+    ///
+    /// 返回 `(替换次数, 受影响文档)`。
     pub fn rename_asset(&mut self, from: &str, to: &str) -> io::Result<(usize, Vec<String>)> {
         let root = self.project_root.clone().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法重命名资产")
@@ -889,17 +894,57 @@ impl Workspace {
 
         let mut references = 0;
         let mut affected = Vec::new();
+        let mut ambiguous: Vec<String> = Vec::new();
+        let mut open_paths: Vec<String> = Vec::new();
+
         for document in &mut self.docs {
-            let count = document.doc.rewrite_reference(from, to);
+            let doc_dir = document_dir(document.path.as_deref());
+            let rewrite = document.doc.rewrite_asset_references(&doc_dir, from, to);
             if document.path.as_deref() == Some(from) {
                 document.path = Some(to.to_string());
             }
-            if count > 0 {
+            if let Some(path) = document.path.clone() {
+                open_paths.push(path);
+            }
+            ambiguous.extend(rewrite.ambiguous);
+            if rewrite.rewritten > 0 {
                 document.dirty = true;
-                references += count;
+                references += rewrite.rewritten;
                 affected.push(document.title());
             }
         }
+
+        // 磁盘上没打开的文档：读-改-写，避免留下指向旧路径的引用。
+        let closed: Vec<String> = self
+            .project_files
+            .iter()
+            .filter(|file| matches!(file.kind, DocKind::Scene | DocKind::Prefab))
+            .map(|file| file.path.clone())
+            .filter(|path| !open_paths.contains(path))
+            .collect();
+        for path in closed {
+            let doc = match project::read_document(&root, &path) {
+                Ok(doc) => doc,
+                Err(error) => {
+                    log::warn!("rename: cannot read {path}: {error}");
+                    continue;
+                }
+            };
+            let mut doc = doc;
+            let rewrite = doc.rewrite_asset_references(&document_dir(Some(&path)), from, to);
+            ambiguous.extend(rewrite.ambiguous);
+            if rewrite.rewritten == 0 {
+                continue;
+            }
+            match project::write_document(&root, &path, &doc) {
+                Ok(()) => {
+                    references += rewrite.rewritten;
+                    affected.push(path);
+                }
+                Err(error) => log::warn!("rename: cannot write {path}: {error}"),
+            }
+        }
+
         self.refresh_project_files();
         self.refresh_assets();
         self.log(
@@ -910,6 +955,19 @@ impl Workspace {
                 affected.len()
             ),
         );
+        if !ambiguous.is_empty() {
+            ambiguous.sort();
+            ambiguous.dedup();
+            self.log(
+                LogSource::Editor,
+                LogLevel::Warn,
+                format!(
+                    "{} 处引用无法自动改写（不是 `assets/` 或相对路径）：{}",
+                    ambiguous.len(),
+                    ambiguous.join(", ")
+                ),
+            );
+        }
         Ok((references, affected))
     }
 
@@ -3728,6 +3786,13 @@ fn overrides_between(
     out
 }
 
+/// 文档所在的目录（`assets/scenes` 这种），没有路径时按 `assets` 处理。
+fn document_dir(path: Option<&str>) -> String {
+    path.and_then(|path| path.rsplit_once('/'))
+        .map(|(dir, _)| dir.to_string())
+        .unwrap_or_else(|| "assets".to_string())
+}
+
 fn hydrate_doc(schema: &Schema, doc: &mut SceneDoc) {
     for entity in &mut doc.entities {
         for (component_name, value) in entity.components.iter_mut() {
@@ -5538,6 +5603,65 @@ mod tests {
         assert!(workspace
             .rename_asset("assets/textures/b.png", "outside.png")
             .is_err());
+    }
+
+    #[test]
+    fn renaming_an_asset_updates_scenes_that_are_not_open() {
+        let project = TempProject::new("rename-closed");
+        std::fs::create_dir_all(project.root.join("assets/textures")).unwrap();
+        std::fs::write(project.root.join("assets/textures/wood.png"), b"png").unwrap();
+        let scene = |texture: &str| {
+            format!(
+                r#"{{"version":3,"entities":[{{"id":1,"name":"Sprite","parent":null,"transform":{{"position":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]}},"components":{{"prism_engine::scene::SpriteRenderer":{{"sprite_path":"{texture}"}}}}}}]}}"#
+            )
+        };
+        for name in ["a", "b"] {
+            std::fs::write(
+                project
+                    .root
+                    .join(format!("assets/scenes/{name}.scene.json")),
+                scene("assets/textures/wood.png"),
+            )
+            .unwrap();
+        }
+
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        // 关掉 b：它仍在 project_files 里，但不在打开的文档里。
+        let index = workspace
+            .docs
+            .iter()
+            .position(|doc| doc.path.as_deref() == Some("assets/scenes/b.scene.json"))
+            .expect("b 应该被 load_project 打开");
+        workspace.close_document(index);
+        assert!(!workspace
+            .docs
+            .iter()
+            .any(|doc| doc.path.as_deref() == Some("assets/scenes/b.scene.json")));
+
+        let (references, affected) = workspace
+            .rename_asset("assets/textures/wood.png", "assets/textures/oak.png")
+            .unwrap();
+
+        // 两份场景各 1 处引用：打开的那份在内存里标脏，关着的那份直接落盘。
+        assert_eq!(references, 2);
+        assert_eq!(affected.len(), 2);
+
+        let on_disk =
+            std::fs::read_to_string(project.root.join("assets/scenes/b.scene.json")).unwrap();
+        assert!(on_disk.contains("assets/textures/oak.png"), "{on_disk}");
+        assert!(!on_disk.contains("wood.png"), "{on_disk}");
+
+        let open = workspace
+            .docs
+            .iter()
+            .find(|doc| doc.path.as_deref() == Some("assets/scenes/a.scene.json"))
+            .expect("a 仍然开着");
+        assert_eq!(
+            open.doc.field_references("assets/textures/oak.png").len(),
+            1
+        );
+        assert!(open.dirty, "内存里的引用改完要标脏");
     }
 
     /// 建一个「预制体在磁盘上 + 场景里实例化一份」的工程。
