@@ -273,6 +273,11 @@ pub struct UiState {
     pub confirm: Option<Confirm>,
     /// 最后点过的面板（引擎的 `focusedWindow`）：快捷键按它分派。
     pub focused_panel: Option<String>,
+    /// 局部光源预算（#468）：实际画出来的 / 场景里启用的。
+    pub lights_kept: usize,
+    pub lights_total: usize,
+    /// 被 `LIGHT_MAX` 挤掉的局部光实体 id。
+    pub dropped_light_ids: Vec<u32>,
     /// 等待确认删除的资产路径。
     pub pending_asset_delete: Option<String>,
     /// 等待用户回答的关闭请求（有未保存改动时才会出现）。
@@ -1092,6 +1097,48 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
             });
         }
         ui.separator();
+    }
+
+    // ---- 光源预算（#468） ----
+    // 前向渲染的局部光 SSBO 只有 `LIGHT_MAX` 个槽位；超出的按重要性挑，
+    // 这里把「你这盏没画」直接写在检查器里，而不是让人对着参数发呆。
+    let is_local_light = [
+        "prism_engine::scene::Light",
+        "prism_engine::scene::PointLight",
+        "prism_engine::scene::SpotLight",
+    ]
+    .iter()
+    .any(|name| workspace.document().doc.entities[index].has_component(name));
+    if is_local_light {
+        if state.dropped_light_ids.contains(&entity_id) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new("Not rendered")
+                        .size(10.5)
+                        .strong()
+                        .color(Color32::from_rgb(226, 168, 64)),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "only the {} most important of {} local lights are drawn",
+                        state.lights_kept, state.lights_total
+                    ))
+                    .size(10.5)
+                    .weak(),
+                );
+            });
+            ui.separator();
+        } else if state.lights_total > state.lights_kept {
+            ui.label(
+                RichText::new(format!(
+                    "{} of {} local lights are drawn (the rest are dropped)",
+                    state.lights_kept, state.lights_total
+                ))
+                .size(10.5)
+                .weak(),
+            );
+            ui.separator();
+        }
     }
 
     // ---- 预制体（引擎的 Prefab 区块） ----

@@ -3947,6 +3947,16 @@ impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
         self.frame_count += 1;
         self.state.build_running = self.build_job_running();
+        // 光源预算（#468）：视口每帧采集，检查器只读这份镜像。
+        if let Some(view) = self.scene_view.as_ref() {
+            let (kept, total) = view.host.local_light_stats();
+            self.state.lights_kept = kept;
+            self.state.lights_total = total;
+            let dropped = view.host.dropped_light_ids();
+            if self.state.dropped_light_ids.as_slice() != dropped {
+                self.state.dropped_light_ids = dropped.to_vec();
+            }
+        }
         // 鼠标松开 = 一次交互结束（拖动 gizmo / 拖拽检查器数字框）：
         // 本次交互压成一步，下一次修改必然开新撤销步。
         if ctx.input(|input| input.pointer.any_released()) {

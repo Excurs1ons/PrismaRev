@@ -36,6 +36,21 @@ fn snap_active(enabled: bool, modifier: bool) -> bool {
     enabled != modifier
 }
 
+/// 视口角标里的光源预算文本（#468）。
+///
+/// 前向渲染的局部光 SSBO 只有 `LIGHT_MAX` 个槽位，超出的按重要性挑并丢弃。
+/// 没有任何局部光时返回 `None`（不占角标位置）。
+fn light_budget_label(kept: usize, total: usize) -> Option<String> {
+    if total == 0 {
+        return None;
+    }
+    if kept < total {
+        Some(format!("Lights {kept}/{total} ({} dropped)", total - kept))
+    } else {
+        Some(format!("Lights {total}"))
+    }
+}
+
 /// 平移拖动这一帧要应用的增量（沿 gizmo 轴，世界单位）。
 ///
 /// 吸附按「起始坐标 + 累计量」取整再减回起点 —— 逐帧取整会把慢拖的每一帧
@@ -980,8 +995,9 @@ impl ViewportState {
             }
         }
 
-        // 5) 角标：FPS / 帧耗时 / 分辨率。
-        let stats = format!(
+        // 5) 角标：FPS / 帧耗时 / 分辨率 / 光源预算。
+        let (lights_kept, lights_total) = self.host.local_light_stats();
+        let mut stats = format!(
             "{} · {} · {:.1} ms · {:.1} FPS · {} frames",
             self.kind().label(),
             self.tool.label(),
@@ -989,6 +1005,10 @@ impl ViewportState {
             self.fps,
             self.frames
         );
+        if let Some(label) = light_budget_label(lights_kept, lights_total) {
+            stats.push_str(" · ");
+            stats.push_str(&label);
+        }
         let pos = rect.left_bottom() + egui::vec2(6.0, -6.0);
         painter.text(
             pos,
@@ -1384,6 +1404,17 @@ fn engine_key(key: egui::Key) -> Option<KeyCode> {
 mod tests {
     use super::*;
     use egui::{Pos2, Vec2};
+
+    /// #468：超预算的局部光要在角标里明确报出来，而不是静默丢弃。
+    #[test]
+    fn the_stats_label_reports_dropped_lights() {
+        assert_eq!(light_budget_label(0, 0), None, "没有局部光时不占位置");
+        assert_eq!(light_budget_label(3, 3), Some("Lights 3".to_string()));
+        assert_eq!(
+            light_budget_label(8, 12),
+            Some("Lights 8/12 (4 dropped)".to_string())
+        );
+    }
 
     #[test]
     fn ctrl_inverts_the_snap_toggle() {
