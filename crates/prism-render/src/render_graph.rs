@@ -1374,6 +1374,18 @@ impl RenderGraph {
     /// cache only tracks the four graph-flow handles (shadow / scene 深度 /
     /// 法线 / 高动态范围 颜色
     pub fn execute(&mut self, ctx: &RenderContext) -> Result<()> {
+        self.execute_with_timer(ctx, None)
+    }
+
+    /// 同上，但记录每个 pass 的 GPU 时间戳（#518）。
+    ///
+    /// `timer` 为 `Some` 时，pass 首尾各写一个时间戳；时间戳池由调用方拥有，
+    /// 结果也要等下一帧再由调用方读回（避免 stall）。
+    pub fn execute_with_timer(
+        &mut self,
+        ctx: &RenderContext,
+        mut timer: Option<&mut crate::gpu_timer::GpuTimer>,
+    ) -> Result<()> {
         self.graph_resources.clear_frame();
 
         // Throttle the BARRIER_PROBE 跟踪 lines to once per 秒 so the 对数
@@ -1437,7 +1449,16 @@ impl RenderGraph {
                 }
             }
 
+            let timed = timer
+                .as_deref_mut()
+                .map(|timer| timer.begin_pass(ctx.device, ctx.cmd, ctx.frame_index, pass.name()))
+                .unwrap_or(false);
             pass.execute(ctx, &mut self.graph_resources)?;
+            if timed {
+                if let Some(timer) = timer.as_deref_mut() {
+                    timer.end_pass(ctx.device, ctx.cmd, ctx.frame_index);
+                }
+            }
 
             self.state_tracker
                 .apply_writes(&self.pass_edges[pass_idx], ctx.image_index);

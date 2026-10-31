@@ -39,6 +39,9 @@ pub struct RenderGraphReport {
     pub passes: Vec<ReportPass>,
     /// 图管理的资源。
     pub resources: Vec<ReportResource>,
+    /// 上一帧的总 GPU 时间（ms，#518）。设备不支持时间戳时为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_total_ms: Option<f32>,
 }
 
 /// 报告里的渲染设置子集（与编辑器 `RenderSettingsData` 对齐）。
@@ -97,6 +100,9 @@ pub struct ReportPass {
     pub kind: &'static str,
     pub inputs: Vec<ReportHandle>,
     pub outputs: Vec<ReportHandle>,
+    /// 该 pass 上一帧的 GPU 时间（ms，#518）；没有计时数据时为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_ms: Option<f32>,
 }
 
 /// 一个资源的节点数据。
@@ -130,6 +136,16 @@ impl RenderGraphReport {
         settings: ReportSettings,
         frame: u64,
     ) -> Self {
+        Self::from_snapshot_with_timings(snapshot, settings, frame, None)
+    }
+
+    /// 同 [`Self::from_snapshot`]，但带上 per-pass GPU 时间（#518）。
+    pub fn from_snapshot_with_timings(
+        snapshot: &RenderGraphSnapshot,
+        settings: ReportSettings,
+        frame: u64,
+        timings: Option<&crate::gpu_timer::GpuTimings>,
+    ) -> Self {
         let passes = snapshot
             .passes
             .iter()
@@ -137,6 +153,7 @@ impl RenderGraphReport {
                 index: pass.index,
                 name: pass.name.clone(),
                 kind: pass_kind(pass),
+                gpu_ms: timings.and_then(|timings| timings.pass_ms(&pass.name)),
                 inputs: visible_inputs(pass, &settings)
                     .into_iter()
                     .map(|h| ReportHandle(h.0))
@@ -208,6 +225,9 @@ impl RenderGraphReport {
             settings,
             passes,
             resources,
+            gpu_total_ms: timings
+                .map(|timings| timings.total_ms)
+                .filter(|total| *total > 0.0),
         }
     }
 
@@ -266,6 +286,17 @@ impl ReportWriter {
         settings: ReportSettings,
         frame: u64,
     ) {
+        self.maybe_write_with_timings(snapshot, settings, frame, None);
+    }
+
+    /// 同 [`Self::maybe_write`]，附带 per-pass GPU 时间（#518）。
+    pub fn maybe_write_with_timings(
+        &mut self,
+        snapshot: &RenderGraphSnapshot,
+        settings: ReportSettings,
+        frame: u64,
+        timings: Option<&crate::gpu_timer::GpuTimings>,
+    ) {
         let Some(path) = self.path.as_deref() else {
             return;
         };
@@ -278,7 +309,8 @@ impl ReportWriter {
         }
         self.last_frame = Some(frame);
 
-        let report = RenderGraphReport::from_snapshot(snapshot, settings, frame);
+        let report =
+            RenderGraphReport::from_snapshot_with_timings(snapshot, settings, frame, timings);
         if let Err(error) = report.write_json(path) {
             log::warn!(
                 "render graph report write failed ({}): {error}",
