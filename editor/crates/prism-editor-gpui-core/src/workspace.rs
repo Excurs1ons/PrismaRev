@@ -508,6 +508,14 @@ pub struct PrefabOverride {
     pub prefab_value: Value,
 }
 
+/// 把一组下标映射成实体 id（#513）。没有 id 的实体跳过。
+fn selection_ids_in(doc: &crate::doc::SceneDoc, selection: &[usize]) -> Vec<u32> {
+    selection
+        .iter()
+        .filter_map(|index| doc.entities.get(*index).and_then(|entity| entity.id))
+        .collect()
+}
+
 impl Workspace {
     /// 一个自包含的最小工作区（没有 fixture 时也能启动）。
     pub fn sample() -> Self {
@@ -1891,6 +1899,7 @@ impl Workspace {
         mutate: impl FnOnce(&mut Document) -> T,
     ) -> T {
         let before = self.document().doc.clone();
+        let selection_before = self.selection_ids();
         let label = label.into();
         let result = {
             let document = self.document_mut();
@@ -1898,11 +1907,49 @@ impl Workspace {
         };
         let after = self.document().doc.clone();
         if before != after {
+            let selection_after = selection_ids_in(&after, &self.selection);
             let document = self.document_mut();
-            document.undo.push_snapshot(label, before, &after);
+            document.undo.push_snapshot_with_selection(
+                label,
+                before,
+                Some(crate::undo::SelectionSnapshot {
+                    before: selection_before,
+                    after: selection_after,
+                }),
+                &after,
+            );
             document.dirty = true;
         }
         result
+    }
+
+    /// 当前选择集对应的实体 id（#513）。实体没有 id 时跳过 —— 那种文档本来就不该存在。
+    pub fn selection_ids(&self) -> Vec<u32> {
+        selection_ids_in(&self.document().doc, &self.selection)
+    }
+
+    /// 按实体 id 恢复选择集：找不到的 id 直接丢弃，剩下的按下标排序。
+    ///
+    /// 返回真正被选中的实体数。
+    pub fn select_ids(&mut self, ids: &[u32]) -> usize {
+        let document = self.document();
+        let mut selection: Vec<usize> = ids
+            .iter()
+            .filter_map(|id| document.doc.index_of_id(*id))
+            .collect();
+        selection.sort_unstable();
+        selection.dedup();
+        let count = selection.len();
+        self.selection = selection;
+        count
+    }
+
+    /// 文档结构变了但没有选择快照（字段类命令之外的老快照）：把越界下标丢掉。
+    fn clamp_selection(&mut self) {
+        let len = self.document().doc.entities.len();
+        self.selection.retain(|index| *index < len);
+        self.selection.sort_unstable();
+        self.selection.dedup();
     }
 
     // ── 选择 / 层级 ─────────────────────────────────────────────────────
@@ -3207,16 +3254,36 @@ impl Workspace {
     // ── 撤销 ────────────────────────────────────────────────────────────
 
     pub fn undo(&mut self) {
-        let document = self.document_mut();
-        if document.undo.undo(&mut document.doc).is_some() {
-            document.dirty = true;
-        }
+        let outcome = {
+            let document = self.document_mut();
+            document.undo.undo(&mut document.doc)
+        };
+        let Some(outcome) = outcome else {
+            return;
+        };
+        self.document_mut().dirty = true;
+        self.restore_selection(outcome.selection);
     }
 
     pub fn redo(&mut self) {
-        let document = self.document_mut();
-        if document.undo.redo(&mut document.doc).is_some() {
-            document.dirty = true;
+        let outcome = {
+            let document = self.document_mut();
+            document.undo.redo(&mut document.doc)
+        };
+        let Some(outcome) = outcome else {
+            return;
+        };
+        self.document_mut().dirty = true;
+        self.restore_selection(outcome.selection);
+    }
+
+    /// 撤销 / 重做之后把选择集校正好（#513）。
+    fn restore_selection(&mut self, ids: Option<Vec<u32>>) {
+        match ids {
+            Some(ids) => {
+                self.select_ids(&ids);
+            }
+            None => self.clamp_selection(),
         }
     }
 
@@ -5549,6 +5616,100 @@ mod tests {
             !workspace.document().doc.entities[1].has_component(path),
             "一次撤销就回退整批"
         );
+    }
+
+    /// #513：删除后撤销，原实体重新被选中（按 id 找回，不是按下标）。
+    #[test]
+    fn undoing_a_delete_restores_the_selection() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let target = 1;
+        let id = workspace.document().doc.entities[target]
+            .id
+            .expect("fixture 有 id");
+        workspace.selection = vec![target];
+
+        workspace.delete_selection();
+        assert!(
+            workspace.document().doc.index_of_id(id).is_none(),
+            "删除后实体不在了"
+        );
+        assert!(workspace.selection.is_empty());
+
+        workspace.undo();
+        let restored = workspace
+            .document()
+            .doc
+            .index_of_id(id)
+            .expect("撤销后实体回来");
+        assert_eq!(workspace.selection, vec![restored]);
+        assert_eq!(workspace.selection_ids(), vec![id]);
+    }
+
+    /// 重做删除：选择按「删除后」的快照还原（空的），不会指向越界下标。
+    #[test]
+    fn redoing_a_delete_leaves_an_empty_selection() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.selection = vec![1];
+        workspace.delete_selection();
+        workspace.undo();
+        assert_eq!(workspace.selection.len(), 1);
+
+        workspace.redo();
+        assert!(workspace.selection.is_empty());
+        let len = workspace.document().doc.entities.len();
+        assert!(workspace.selection.iter().all(|index| *index < len));
+    }
+
+    /// #513：复制后撤销，选择回到复制前的实体，而不是已经不存在的新下标。
+    #[test]
+    fn undoing_a_duplicate_returns_to_the_original_selection() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let original = 1;
+        let id = workspace.document().doc.entities[original]
+            .id
+            .expect("fixture 有 id");
+        workspace.selection = vec![original];
+
+        workspace.duplicate_selection();
+        assert!(workspace.selection.len() >= 1);
+        assert!(
+            workspace.selection.iter().any(|index| *index != original),
+            "复制后选中新实体"
+        );
+
+        workspace.undo();
+        assert_eq!(workspace.selection_ids(), vec![id]);
+        assert_eq!(workspace.selection, vec![original]);
+    }
+
+    /// 选择快照里的 id 已经不存在时（文档被外部改动过）只丢弃，不 panic、不越界。
+    #[test]
+    fn restoring_a_selection_drops_entities_that_are_gone() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let kept = workspace.document().doc.entities[0].id.unwrap();
+        let selected = workspace.select_ids(&[kept, 9999]);
+        assert_eq!(selected, 1);
+        assert_eq!(workspace.selection, vec![0]);
+
+        assert_eq!(workspace.select_ids(&[9999]), 0);
+        assert!(workspace.selection.is_empty());
+    }
+
+    /// 字段类命令（没有选择快照）撤销后 SELECTION 保持现状。
+    #[test]
+    fn undoing_a_field_edit_keeps_the_selection() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.selection = vec![0];
+        workspace.set_field(
+            0,
+            "prism_engine::scene::Camera",
+            "fov_y_degrees",
+            json!(75.0),
+        );
+        assert_eq!(workspace.selection, vec![0]);
+
+        workspace.undo();
+        assert_eq!(workspace.selection, vec![0]);
     }
 
     /// `fixture()` 的 0 号实体只有一个组件；插入两个哑组件才好测顺序。

@@ -65,12 +65,32 @@ fn apply_field(
     set_at_path(root, path, value.clone())
 }
 
+/// 一步结构性编辑前后的选中实体（按 `EntityJson.id`，不是数组下标）。
+///
+/// 撤销 / 重做会连选择一起还原，见 #513：删掉 → 撤销后原实体重新被选中，
+/// 复制 → 撤销后回到复制前的选择。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SelectionSnapshot {
+    pub before: Vec<u32>,
+    pub after: Vec<u32>,
+}
+
+/// [`UndoStack::undo`] / [`UndoStack::redo`] 的结果：标签 + 要还原的选择（如果有）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UndoOutcome {
+    pub label: String,
+    /// 该步记录的选中实体；`None` = 这一步没有记录选择（字段类命令），调用方保持现状。
+    pub selection: Option<Vec<u32>>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub command: Command,
     pub label: String,
     coalesce: Option<String>,
     at_ms: u64,
+    /// 结构性编辑的选中快照；字段 / Transform 命令为 `None`（实体集合没变）。
+    selection: Option<SelectionSnapshot>,
 }
 
 impl Entry {
@@ -233,6 +253,7 @@ impl UndoStack {
             command,
             coalesce: Some(coalesce),
             at_ms: now_ms,
+            selection: None,
         });
         self.redo.clear();
         self.trim();
@@ -277,6 +298,7 @@ impl UndoStack {
             },
             coalesce: Some(coalesce),
             at_ms: now_ms,
+            selection: None,
         });
         self.redo.clear();
         self.trim();
@@ -330,13 +352,30 @@ impl UndoStack {
             command: Command::TransformBatch { changes },
             coalesce: Some(coalesce),
             at_ms: now_ms,
+            selection: None,
         });
         self.redo.clear();
         self.trim();
     }
 
     /// 结构性编辑：把 `before` 快照与编辑后的文档整体记成一步。
+    ///
+    /// 不带选择快照 —— 撤销 / 重做时选择集保持现状（调用方自己校正）。
     pub fn push_snapshot(&mut self, label: impl Into<String>, before: SceneDoc, after: &SceneDoc) {
+        self.push_snapshot_with_selection(label, before, None, after);
+    }
+
+    /// 结构性编辑 + 选中实体快照（#513）。
+    ///
+    /// `selection` 里的 id 在撤销 / 重做后按 `EntityJson.id` 映射回下标，找不到的
+    /// 直接丢弃，所以「删掉再撤销」能准确回到原来的实体，而不是某个碰巧同下标的对象。
+    pub fn push_snapshot_with_selection(
+        &mut self,
+        label: impl Into<String>,
+        before: SceneDoc,
+        selection: Option<SelectionSnapshot>,
+        after: &SceneDoc,
+    ) {
         if before == *after {
             return;
         }
@@ -348,12 +387,13 @@ impl UndoStack {
             },
             coalesce: None,
             at_ms: 0,
+            selection,
         });
         self.redo.clear();
         self.trim();
     }
 
-    pub fn undo(&mut self, doc: &mut SceneDoc) -> Option<String> {
+    pub fn undo(&mut self, doc: &mut SceneDoc) -> Option<UndoOutcome> {
         let mut entry = self.undo.pop()?;
         match &entry.command {
             Command::SetField {
@@ -379,13 +419,17 @@ impl UndoStack {
                 *doc = (**before).clone();
             }
         }
+        let selection = entry
+            .selection
+            .as_ref()
+            .map(|snapshot| snapshot.before.clone());
         entry.coalesce = None;
         let label = entry.label.clone();
         self.redo.push(entry);
-        Some(label)
+        Some(UndoOutcome { label, selection })
     }
 
-    pub fn redo(&mut self, doc: &mut SceneDoc) -> Option<String> {
+    pub fn redo(&mut self, doc: &mut SceneDoc) -> Option<UndoOutcome> {
         let mut entry = self.redo.pop()?;
         match &entry.command {
             Command::SetField {
@@ -411,10 +455,14 @@ impl UndoStack {
                 *doc = (**after).clone();
             }
         }
+        let selection = entry
+            .selection
+            .as_ref()
+            .map(|snapshot| snapshot.after.clone());
         entry.coalesce = None;
         let label = entry.label.clone();
         self.undo.push(entry);
-        Some(label)
+        Some(UndoOutcome { label, selection })
     }
 
     fn trim(&mut self) {
