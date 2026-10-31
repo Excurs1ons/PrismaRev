@@ -826,39 +826,102 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
     });
 }
 
+/// 检查器里一次 Transform 编辑。
+enum TransformEdit {
+    /// 单个分量（`position` / `scale`，旋转走欧拉角）。
+    Axis {
+        field: &'static str,
+        axis: usize,
+        value: f32,
+    },
+    /// 整个旋转（检查器按 XYZ 欧拉角编辑，换回四元数再写）。
+    Rotation([f32; 4]),
+}
+
 fn transform_rows(
     ui: &mut Ui,
     state: &mut UiState,
     transform: &prism_editor_core::TransformJson,
-    mut write: impl FnMut(&str, usize, f32),
+    // 多选时每个分量「选中项取值不一致」的掩码：[position, rotation, scale][axis]。
+    mixed: Option<&[[bool; 4]; 3]>,
+    mut write: impl FnMut(TransformEdit),
 ) {
-    for (field, values, speed) in [
-        ("position", transform.position.to_vec(), 0.01f32),
-        ("rotation", transform.rotation.to_vec(), 0.002f32),
-        ("scale", transform.scale.to_vec(), 0.01f32),
-    ] {
-        let label = match field {
-            "position" => "Position",
-            "rotation" => "Rotation",
-            _ => "Scale",
-        };
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(label).size(11.0));
-            let mut items = values;
-            for axis in 0..items.len() {
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut items[axis])
-                            .speed(speed)
-                            .max_decimals(3),
-                    )
-                    .changed()
-                {
-                    write(field, axis, items[axis]);
-                }
+    let mixed_at = |row: usize, axis: usize| mixed.map(|mixed| mixed[row][axis]).unwrap_or(false);
+    let marker = |ui: &mut Ui, axis: usize, row: usize| {
+        if mixed_at(row, axis) {
+            ui.label(RichText::new("—").weak())
+                .on_hover_text("Selected entities have different values here");
+        }
+    };
+
+    let mut position = transform.position;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Position").size(11.0));
+        for axis in 0..3 {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut position[axis])
+                        .speed(0.01)
+                        .max_decimals(3),
+                )
+                .changed()
+            {
+                write(TransformEdit::Axis {
+                    field: "position",
+                    axis,
+                    value: position[axis],
+                });
             }
-        });
-    }
+            marker(ui, axis, 0);
+        }
+    });
+
+    // Rotation：三个角度框（`R = Rz Ry Rx`），不再摊成 x/y/z/w 四个裸分量。
+    let mut euler = prism_editor_core::viewport_math::quat_to_euler_degrees(transform.rotation);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Rotation").size(11.0));
+        for axis in 0..3 {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut euler[axis])
+                        .speed(0.5)
+                        .max_decimals(2)
+                        .suffix("°")
+                        .prefix(["X ", "Y ", "Z "][axis]),
+                )
+                .changed()
+            {
+                write(TransformEdit::Rotation(
+                    prism_editor_core::viewport_math::euler_degrees_to_quat(euler),
+                ));
+                break;
+            }
+            marker(ui, axis, 1);
+        }
+    });
+
+    // Scale 单独一行，保持 Position / Rotation / Scale 的固定顺序。
+    let mut scale = transform.scale;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Scale").size(11.0));
+        for axis in 0..3 {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut scale[axis])
+                        .speed(0.01)
+                        .max_decimals(3),
+                )
+                .changed()
+            {
+                write(TransformEdit::Axis {
+                    field: "scale",
+                    axis,
+                    value: scale[axis],
+                });
+            }
+            marker(ui, axis, 2);
+        }
+    });
     let _ = state;
 }
 
@@ -942,8 +1005,13 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
     // ---- Transform ----
     let transform = workspace.document().doc.entities[index].transform.clone();
     ui.label(RichText::new("Transform").strong().size(12.0));
-    transform_rows(ui, state, &transform, |field, axis, value| {
-        workspace.set_transform_axis(entity_id, field, axis, value);
+    transform_rows(ui, state, &transform, None, |edit| match edit {
+        TransformEdit::Axis { field, axis, value } => {
+            workspace.set_transform_axis(entity_id, field, axis, value);
+        }
+        TransformEdit::Rotation(rotation) => {
+            workspace.set_transform_rotation(entity_id, rotation);
+        }
     });
     ui.separator();
 
@@ -1233,6 +1301,40 @@ mod line_renderer_tests {
     }
 }
 
+/// 多选时，每个分量是否「选中实体之间取值不同」。
+///
+/// `[position, rotation, scale][x, y, z, w]`（`rotation` 是四元数，占 4 个分量）。
+fn mixed_transform_axes(workspace: &Workspace, indices: &[usize]) -> [[bool; 4]; 3] {
+    let mut mixed = [[false; 4]; 3];
+    let Some(first) = indices.first().copied() else {
+        return mixed;
+    };
+    let base = workspace.document().doc.entities[first].transform;
+    let base_basis = prism_editor_core::viewport_math::basis_from_quat(base.rotation);
+    for index in indices.iter().skip(1) {
+        let transform = workspace.document().doc.entities[*index].transform;
+        for axis in 0..3 {
+            if (base.position[axis] - transform.position[axis]).abs() > 1e-5 {
+                mixed[0][axis] = true;
+            }
+            if (base.scale[axis] - transform.scale[axis]).abs() > 1e-5 {
+                mixed[2][axis] = true;
+            }
+        }
+        // 四元数 q 与 -q 是同一个旋转，所以比较基向量而不是分量。
+        let basis = prism_editor_core::viewport_math::basis_from_quat(transform.rotation);
+        let rotated = (0..3).any(|column| {
+            (0..3).any(|row| (base_basis[column][row] - basis[column][row]).abs() > 1e-5)
+        });
+        if rotated {
+            for axis in 0..3 {
+                mixed[1][axis] = true;
+            }
+        }
+    }
+    mixed
+}
+
 fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, indices: &[usize]) {
     let ids: Vec<u32> = indices
         .iter()
@@ -1250,12 +1352,18 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
     );
     ui.separator();
 
-    // 批量 Transform（值取第一个选中实体）。
+    // 批量 Transform（显示值取第一个选中实体，其余不一致的分量标 "—"）。
     let first = indices[0];
     let transform = workspace.document().doc.entities[first].transform.clone();
+    let mixed = mixed_transform_axes(workspace, indices);
     ui.label(RichText::new("Transform").strong().size(12.0));
-    transform_rows(ui, state, &transform, |field, axis, value| {
-        workspace.set_transform_axis_many(&ids, field, axis, value);
+    transform_rows(ui, state, &transform, Some(&mixed), |edit| match edit {
+        TransformEdit::Axis { field, axis, value } => {
+            workspace.set_transform_axis_many(&ids, field, axis, value);
+        }
+        TransformEdit::Rotation(rotation) => {
+            workspace.set_transform_rotation_many(&ids, rotation);
+        }
     });
     ui.separator();
 
@@ -2772,5 +2880,35 @@ mod window_smoke_tests {
         assert_eq!(tree_row_height(false), 18.0);
         assert_eq!(row_height(true), 16.0);
         assert_eq!(row_height(false), 20.0);
+    }
+
+    #[test]
+    fn mixed_transform_axes_flags_only_the_differing_components() {
+        let mut workspace = Workspace::sample();
+        workspace.clear_selection();
+        workspace.document_mut().doc.entities[0].transform.position = [1.0, 2.0, 3.0];
+        workspace.document_mut().doc.entities[1].transform.position = [1.0, 5.0, 3.0];
+        let mixed = mixed_transform_axes(&workspace, &[0, 1]);
+        assert!(!mixed[0][0]);
+        assert!(mixed[0][1], "只有 Y 不同");
+        assert!(!mixed[0][2]);
+        assert!(mixed[2].iter().all(|flag| !flag), "scale 相同时不标记");
+
+        // 只选一个实体时永远没有 mixed。
+        let single = mixed_transform_axes(&workspace, &[0]);
+        assert!(single.iter().all(|row| row.iter().all(|flag| !flag)));
+    }
+
+    #[test]
+    fn mixed_transform_axes_ignores_the_quaternion_double_cover() {
+        let mut workspace = Workspace::sample();
+        workspace.document_mut().doc.entities[0].transform.rotation =
+            prism_editor_core::viewport_math::euler_degrees_to_quat([0.0, 45.0, 0.0]);
+        // q 与 -q 表示同一个旋转：不该被当成「值不一致」。
+        workspace.document_mut().doc.entities[1].transform.rotation =
+            prism_editor_core::viewport_math::euler_degrees_to_quat([0.0, 45.0, 0.0])
+                .map(|value| -value);
+        let mixed = mixed_transform_axes(&workspace, &[0, 1]);
+        assert!(mixed[1].iter().all(|flag| !flag), "{mixed:?}");
     }
 }

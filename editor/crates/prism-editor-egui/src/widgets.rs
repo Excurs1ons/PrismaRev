@@ -6,6 +6,7 @@
 
 use egui::Ui;
 use egui_phosphor::regular as icons;
+use prism_editor_core::viewport_math as vm;
 use prism_editor_core::{FieldSchema, FieldWidget, Schema, TypeSchema};
 use serde_json::Value;
 
@@ -301,29 +302,36 @@ fn field_row_at(
             });
         }
         FieldWidget::Quat => {
-            // 四元数按分量编辑（欧拉角换算留给引擎 / 其它工具）。
-            ui.label(label);
-            let mut values: Vec<f32> = (0..4)
-                .map(|axis| {
-                    value
-                        .get(axis)
-                        .and_then(|item| item.as_f64())
-                        .unwrap_or(if axis == 3 { 1.0 } else { 0.0 }) as f32
-                })
-                .collect();
+            // 四元数按 XYZ 欧拉角编辑（`R = Rz Ry Rx`，与 glam 的
+            // `EulerRot::XYZ` 一致）：直接编辑 x/y/z/w 四个分量没人算得出来。
+            let current = [0usize, 1, 2, 3].map(|axis| {
+                value
+                    .get(axis)
+                    .and_then(|item| item.as_f64())
+                    .unwrap_or(if axis == 3 { 1.0 } else { 0.0 }) as f32
+            });
+            let mut degrees = vm::quat_to_euler_degrees(current);
             ui.horizontal(|ui| {
-                for (axis, item) in values.iter_mut().enumerate() {
-                    if ui
-                        .add(egui::DragValue::new(item).speed(0.01).max_decimals(3))
-                        .changed()
-                    {
-                        let mut next = value.clone();
-                        if let Some(array) = next.as_array_mut() {
-                            if let Some(slot) = array.get_mut(axis) {
-                                *slot = Value::from(*item as f64);
-                            }
-                            set(&name, next);
-                        }
+                ui.label(label);
+                for axis in 0..3 {
+                    let response = ui.add(
+                        egui::DragValue::new(&mut degrees[axis])
+                            .speed(0.5)
+                            .max_decimals(2)
+                            .suffix("°")
+                            .prefix(["X ", "Y ", "Z "][axis]),
+                    );
+                    if response.changed() {
+                        let quat = vm::euler_degrees_to_quat(degrees);
+                        set(
+                            &name,
+                            Value::Array(
+                                quat.iter()
+                                    .map(|component| Value::from(*component as f64))
+                                    .collect(),
+                            ),
+                        );
+                        break;
                     }
                 }
             });
