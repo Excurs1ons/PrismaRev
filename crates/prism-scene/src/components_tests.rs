@@ -394,3 +394,48 @@ fn a_particle_system_without_fields_falls_back_to_the_defaults() {
         7.0
     );
 }
+
+#[test]
+fn audio_sources_decay_with_distance_and_blend_toward_2d() {
+    let source = AudioSource {
+        sound_path: "audio/footstep.ogg".into(),
+        volume: 0.8,
+        spatial_blend: 1.0,
+        min_distance: 2.0,
+        max_distance: 10.0,
+        ..AudioSource::default()
+    };
+    assert!(source.has_sound());
+    assert_eq!(source.volume_at(0.0), 0.8, "近距离内不衰减");
+    assert_eq!(source.volume_at(2.0), 0.8, "min_distance 仍然满音量");
+    assert!((source.volume_at(6.0) - 0.4).abs() < 1e-6, "中点线性衰减");
+    assert_eq!(source.volume_at(10.0), 0.0, "max_distance 起完全静止");
+    assert_eq!(source.volume_at(1_000.0), 0.0);
+    assert_eq!(source.volume_at(f32::NAN), 0.0);
+
+    // 纯 2D：距离不起作用。
+    let flat = AudioSource {
+        spatial_blend: 0.0,
+        ..source.clone()
+    };
+    assert_eq!(flat.volume_at(0.0), 0.8);
+    assert_eq!(flat.volume_at(9_999.0), 0.8);
+
+    // 半混合：衰减只生效一半。
+    let half = AudioSource {
+        spatial_blend: 0.5,
+        ..source.clone()
+    };
+    assert!((half.volume_at(6.0) - 0.6).abs() < 1e-6);
+
+    // 退化区间 / 越界音量都不会算出 >1 或 NaN。
+    let broken = AudioSource {
+        volume: 4.0,
+        min_distance: 5.0,
+        max_distance: 1.0,
+        ..source
+    };
+    assert_eq!(broken.volume_at(3.0), 1.0);
+    assert_eq!(AudioSource::default().volume_at(0.0), 1.0);
+    assert!(!AudioSource::default().has_sound());
+}

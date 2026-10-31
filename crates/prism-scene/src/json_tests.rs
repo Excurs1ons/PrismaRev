@@ -420,3 +420,57 @@ fn a_particle_system_survives_cook_and_decode() {
     assert_eq!(system.start_color, [1.0, 0.6, 0.2, 1.0]);
     assert_eq!(system.particle_cap(), 64);
 }
+
+#[test]
+fn an_audio_source_survives_cook_and_decode() {
+    // 音频组件只有一个字符串路径 + 若干标量；RSCN 位置化编码最容易丢的是
+    // 字符串（`sound_path`）与布尔（#508）。
+    let mut registry = ComponentRegistry::new();
+    register_builtin_components(&mut registry);
+    let scene = SceneJson::parse(
+        r#"{
+            "version": 3,
+            "entities": [{
+                "id": 0,
+                "name": "Speaker",
+                "components": {
+                    "prism_engine::scene::AudioSource": {
+                        "sound_path": "audio/ambient.ogg",
+                        "volume": 0.35,
+                        "looped": true,
+                        "play_on_awake": false,
+                        "spatial_blend": 1.0,
+                        "min_distance": 3.0,
+                        "max_distance": 20.0
+                    },
+                    "prism_engine::scene::AudioListener": {
+                        "gain": 0.8
+                    }
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let bytes = crate::encode_scene(&scene, &registry).expect("scene with audio must cook");
+    let decoded = crate::decode_scene(&bytes, &registry).expect("cooked scene must decode");
+
+    let mut world = prism_ecs::World::new();
+    let entity = world.spawn();
+    for component in &decoded.entities[0].components {
+        assert!(registry.apply_object(&mut world, entity, component));
+    }
+    let source = world
+        .get::<crate::components::AudioSource>(entity)
+        .expect("audio source must apply to the world");
+    assert_eq!(source.sound_path, "audio/ambient.ogg");
+    assert_eq!(source.volume, 0.35);
+    assert!(source.looped);
+    assert!(!source.play_on_awake);
+    assert_eq!(source.spatial_blend, 1.0);
+    assert_eq!(source.max_distance, 20.0);
+    let listener = world
+        .get::<crate::components::AudioListener>(entity)
+        .expect("audio listener must apply to the world");
+    assert_eq!(listener.gain, 0.8);
+}
