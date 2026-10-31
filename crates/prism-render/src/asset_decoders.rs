@@ -162,10 +162,10 @@ fn rtex_texture_format(code: u8) -> Result<TextureFormat> {
         RTEX_FORMAT_RGBA8 => Ok(TextureFormat::Rgba8Srgb),
         RTEX_FORMAT_BC5 => Ok(TextureFormat::Bc5Unorm),
         RTEX_FORMAT_BC6H => Ok(TextureFormat::Bc6HUfloat),
-        RTEX_FORMAT_BC1 | RTEX_FORMAT_BC3 => bail!(
-            "RTEX format code {code} (BC1/BC3) has no TextureFormat equivalent; \
-             the cooker only emits RGBA8 today"
-        ),
+        // BC1 / BC3 不带颜色空间信息；与 RGBA8 一致按 sRGB 处理（albedo / emissive 是
+        // 主要用途。需要线性时上层用 `texture_format_for`，它知道槽位语义）（#519）。
+        RTEX_FORMAT_BC1 => Ok(TextureFormat::Bc1Srgb),
+        RTEX_FORMAT_BC3 => Ok(TextureFormat::Bc3Srgb),
         other => bail!("RTEX unknown format code {other}"),
     }
 }

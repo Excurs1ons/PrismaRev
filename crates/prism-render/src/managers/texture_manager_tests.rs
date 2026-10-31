@@ -119,3 +119,40 @@ fn release_slot_rejects_double_release() {
     // Now live=2=capacity: the next claim must fail.
     assert!(slots.claim().is_err(), "capacity exhausted again");
 }
+
+#[test]
+fn bc1_and_bc3_report_their_block_sizes() {
+    use crate::managers::texture_manager::TextureFormat;
+
+    // BC1 是 8 字节 / 4×4 块，BC3 是 16 字节 —— 上传时按这个算缓冲区大小（#519）。
+    assert_eq!(TextureFormat::Bc1Srgb.compressed_byte_len(8, 8), 4 * 8);
+    assert_eq!(TextureFormat::Bc3Srgb.compressed_byte_len(8, 8), 4 * 16);
+    // 非 4 的倍数向上取整到整块。
+    assert_eq!(TextureFormat::Bc1Unorm.compressed_byte_len(5, 3), 2 * 8);
+    assert_eq!(TextureFormat::Bc3Unorm.compressed_byte_len(5, 3), 2 * 16);
+    assert!(TextureFormat::Bc1Srgb.is_compressed());
+    assert!(TextureFormat::Bc3Unorm.is_compressed());
+    assert_eq!(TextureFormat::Rgba8.bytes_per_pixel(), 4);
+}
+
+#[test]
+fn bc1_and_bc3_map_to_vulkan_block_formats() {
+    use crate::managers::texture_manager::TextureFormat;
+
+    assert_eq!(
+        TextureFormat::Bc1Unorm.vk_format(),
+        ash::vk::Format::BC1_RGBA_UNORM_BLOCK
+    );
+    assert_eq!(
+        TextureFormat::Bc1Srgb.vk_format(),
+        ash::vk::Format::BC1_RGBA_SRGB_BLOCK
+    );
+    assert_eq!(
+        TextureFormat::Bc3Unorm.vk_format(),
+        ash::vk::Format::BC3_UNORM_BLOCK
+    );
+    assert_eq!(
+        TextureFormat::Bc3Srgb.vk_format(),
+        ash::vk::Format::BC3_SRGB_BLOCK
+    );
+}
