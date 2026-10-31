@@ -15,7 +15,7 @@ use std::time::Instant;
 use ash::vk;
 use egui::{Align, Layout, Rect, Sense, Vec2};
 use egui_ash::ImageRegistry;
-use prism_editor_core::{viewport_math as vm, TransformJson, Workspace};
+use prism_editor_core::{viewport_math as vm, SelectMode, TransformJson, Workspace};
 use prism_engine::input::{ElementState, KeyCode, MouseButton};
 
 use crate::engine_host::{EngineHost, ViewKind};
@@ -1026,13 +1026,11 @@ impl ViewportState {
                         &proxies(workspace),
                     );
                     let modifiers = ui.input(|input| input.modifiers);
-                    if modifiers.ctrl || modifiers.command {
-                        workspace.selection.retain(|index| !hits.contains(index));
-                    } else if modifiers.shift {
-                        workspace.select_many(&hits, true);
-                    } else {
-                        workspace.select_many(&hits, false);
-                    }
+                    let mode = SelectMode::from_modifiers(
+                        modifiers.shift,
+                        modifiers.ctrl || modifiers.command,
+                    );
+                    workspace.select_many_with(&hits, mode);
                     self.dirty = true;
                 }
             }
@@ -1071,12 +1069,19 @@ impl ViewportState {
                         .filter(|(_, distance)| *distance <= 11.0)
                         .min_by(|a, b| a.1.total_cmp(&b.1))
                         .map(|(index, _)| index);
+                    // 修饰键决定这次点击是替换 / 并入 / 移除（Shift 加、Ctrl-Cmd 减）。
+                    let modifiers = ui.input(|input| input.modifiers);
+                    let mode = SelectMode::from_modifiers(
+                        modifiers.shift,
+                        modifiers.ctrl || modifiers.command,
+                    );
                     if let Some(index) = icon {
-                        workspace.select(index, false);
+                        workspace.select_with(index, mode);
                     } else {
                         match pick(workspace, local, rect.size(), &frame) {
-                            Some(index) => workspace.select(index, false),
-                            None => workspace.clear_selection(),
+                            Some(index) => workspace.select_with(index, mode),
+                            // Shift / Ctrl + 点空白保留当前选择。
+                            None => workspace.clear_selection_in(mode),
                         }
                     }
                     self.dirty = true;

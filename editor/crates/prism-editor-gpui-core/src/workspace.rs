@@ -362,6 +362,35 @@ impl SnapSettings {
     }
 }
 
+/// 一次点选 / 框选对选择集的作用方式。
+///
+/// 与 Unity 的 `SelectionType` 对齐：`Normal` = 替换，`Additive` = 并入，
+/// `Subtractive` = 移除。修饰键如何映射由调用方决定（见 [`SelectMode::from_modifiers`]），
+/// 数据层只负责集合运算，所以点空白在这种语义下也能「保留当前选择」。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectMode {
+    /// 覆盖选择：点空白时清空。
+    #[default]
+    Replace,
+    /// 并入选择：点空白时不改变。
+    Add,
+    /// 从选择中移除：点空白时不改变。
+    Remove,
+}
+
+impl SelectMode {
+    /// Shift = 并入，Ctrl / Cmd = 移除，否则替换。
+    pub fn from_modifiers(shift: bool, command: bool) -> Self {
+        if command {
+            Self::Remove
+        } else if shift {
+            Self::Add
+        } else {
+            Self::Replace
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub docs: Vec<Document>,
@@ -1866,6 +1895,28 @@ impl Workspace {
         self.selection.sort_unstable();
     }
 
+    /// 按 [`SelectMode`] 写入单选语义（视口单击、层级单击共用）。
+    ///
+    /// 与 [`Workspace::select`] 的区别：`Remove` 只删不加，`Add` 只加不删，
+    /// 所以 Shift+点已选中项不会把它取消掉（Unity 的行为）。
+    pub fn select_with(&mut self, index: usize, mode: SelectMode) {
+        match mode {
+            SelectMode::Replace => {
+                self.selection.clear();
+                self.selection.push(index);
+            }
+            SelectMode::Add => {
+                if !self.selection.contains(&index) {
+                    self.selection.push(index);
+                }
+            }
+            SelectMode::Remove => {
+                self.selection.retain(|item| *item != index);
+            }
+        }
+        self.selection.sort_unstable();
+    }
+
     pub fn select_range(&mut self, anchor: usize, index: usize) {
         let (start, end) = if anchor <= index {
             (anchor, index)
@@ -1877,15 +1928,46 @@ impl Workspace {
 
     /// 框选：`additive = false` 覆盖选择，`true` 并入。
     pub fn select_many(&mut self, indices: &[usize], additive: bool) {
-        if !additive {
-            self.selection.clear();
-        }
-        for index in indices {
-            if !self.selection.contains(index) {
-                self.selection.push(*index);
+        self.select_many_with(
+            indices,
+            if additive {
+                SelectMode::Add
+            } else {
+                SelectMode::Replace
+            },
+        );
+    }
+
+    /// 按 [`SelectMode`] 写入一组选中项（框选、反选、批量选中共用）。
+    pub fn select_many_with(&mut self, indices: &[usize], mode: SelectMode) {
+        match mode {
+            SelectMode::Replace => {
+                self.selection.clear();
+                for index in indices {
+                    if !self.selection.contains(index) {
+                        self.selection.push(*index);
+                    }
+                }
+            }
+            SelectMode::Add => {
+                for index in indices {
+                    if !self.selection.contains(index) {
+                        self.selection.push(*index);
+                    }
+                }
+            }
+            SelectMode::Remove => {
+                self.selection.retain(|index| !indices.contains(index));
             }
         }
         self.selection.sort_unstable();
+    }
+
+    /// 空选择框 / 点空白：只有 `Replace` 才清空，`Add` / `Remove` 保持现状。
+    pub fn clear_selection_in(&mut self, mode: SelectMode) {
+        if mode == SelectMode::Replace {
+            self.selection.clear();
+        }
     }
 
     pub fn clear_selection(&mut self) {
@@ -5145,6 +5227,61 @@ mod tests {
         assert_eq!(workspace.selection, vec![0, 1, 2], "附加选择去重");
         workspace.select_many(&[], false);
         assert!(workspace.selection.is_empty());
+    }
+
+    #[test]
+    fn shift_adds_and_ctrl_removes_in_the_viewport() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select_with(0, SelectMode::Replace);
+        workspace.select_with(1, SelectMode::Add);
+        assert_eq!(workspace.selection, vec![0, 1], "Shift 并入且保留原选择");
+        workspace.select_with(1, SelectMode::Add);
+        assert_eq!(workspace.selection, vec![0, 1], "重复并入不切换掉已有项");
+        workspace.select_with(0, SelectMode::Remove);
+        assert_eq!(workspace.selection, vec![1], "Ctrl 只移除，不影响其它项");
+        workspace.select_with(0, SelectMode::Remove);
+        assert_eq!(workspace.selection, vec![1], "移除未选中项是空操作");
+        workspace.select_with(2, SelectMode::Replace);
+        assert_eq!(workspace.selection, vec![2], "普通点击替换");
+    }
+
+    #[test]
+    fn clicking_empty_space_only_clears_on_replace() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select_many(&[0, 1], false);
+        workspace.clear_selection_in(SelectMode::Add);
+        assert_eq!(workspace.selection, vec![0, 1], "Shift+点空白保留选择");
+        workspace.clear_selection_in(SelectMode::Remove);
+        assert_eq!(workspace.selection, vec![0, 1], "Ctrl+点空白保留选择");
+        workspace.clear_selection_in(SelectMode::Replace);
+        assert!(workspace.selection.is_empty(), "普通点空白才清空");
+    }
+
+    #[test]
+    fn marquee_modes_add_remove_and_replace() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select_many_with(&[0], SelectMode::Replace);
+        workspace.select_many_with(&[1, 2], SelectMode::Add);
+        assert_eq!(workspace.selection, vec![0, 1, 2], "Shift 框选并入");
+        workspace.select_many_with(&[0, 2], SelectMode::Remove);
+        assert_eq!(workspace.selection, vec![1], "Ctrl 框选只减去命中项");
+        workspace.select_many_with(&[2], SelectMode::Replace);
+        assert_eq!(workspace.selection, vec![2], "普通框选覆盖");
+        workspace.select_many_with(&[], SelectMode::Add);
+        assert_eq!(workspace.selection, vec![2], "空框 + Shift 不清空");
+        workspace.select_many_with(&[], SelectMode::Replace);
+        assert!(workspace.selection.is_empty(), "空框 + 普通点击清空");
+    }
+
+    #[test]
+    fn select_mode_follows_the_modifiers() {
+        assert_eq!(
+            SelectMode::from_modifiers(false, false),
+            SelectMode::Replace
+        );
+        assert_eq!(SelectMode::from_modifiers(true, false), SelectMode::Add);
+        assert_eq!(SelectMode::from_modifiers(false, true), SelectMode::Remove);
+        assert_eq!(SelectMode::from_modifiers(true, true), SelectMode::Remove);
     }
 
     #[test]
