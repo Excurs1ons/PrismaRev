@@ -4042,6 +4042,23 @@ impl App for EditorApp {
             }
         }
 
+        // 资产热重载（#495）：Play 中重建 `.pak` 之后不用退出再进。
+        // 轮询自己在 500ms 节流里，所以每帧调用是便宜的。
+        let mut re_resolved = 0usize;
+        for view in [self.scene_view.as_mut(), self.game_view.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            let count = view.host.poll_asset_changes();
+            if count > 0 {
+                view.mark_dirty();
+                re_resolved += count;
+            }
+        }
+        if re_resolved > 0 {
+            self.state.status = format!("hot-reloaded assets: {re_resolved} reference(s)");
+        }
+
         // Play 时无论 Game 面板是否可见都推进模拟（切走 tab 不能暂停游戏）。
         if self.playing {
             if let Some(view) = self.game_view.as_mut() {

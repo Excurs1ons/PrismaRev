@@ -89,6 +89,8 @@ pub struct EngineHost {
     env_path: Option<String>,
     /// `assets/scenes.pak` 的修改时间：只有 pak 本身重建了才重新读它。
     pak_mtime: Option<std::time::SystemTime>,
+    /// 上一次检查资产变更的时间（500ms 轮询节流，见 [`EngineHost::poll_asset_changes`]）。
+    asset_check_at: Instant,
 }
 
 /// 编辑器地面网格只在 Scene 视图出现。
@@ -147,6 +149,7 @@ impl EngineHost {
             scene_loaded: false,
             env_path: None,
             pak_mtime: resource_package_mtime(),
+            asset_check_at: Instant::now(),
         })
     }
 
@@ -519,6 +522,61 @@ impl EngineHost {
 
         self.pump_assets();
         self.input.begin_frame();
+    }
+
+    /// 轮询 `assets/scenes.pak`：重建过就换掉 reader、把已上传的资产打回待解析（#495）。
+    ///
+    /// 每 500ms 最多检查一次（与 `prism_asset` 的 watcher 同节奏）。返回重新解析的
+    /// 实体数；0 表示这一帧什么都没变。上传在这里同步走完（和 [`Self::pump_assets`]
+    /// 同一条路径），所以 Play 中的下一帧就能看到新贴图 / 新网格，不用退出再进。
+    ///
+    /// 只处理 `.pak`：运行时只从包里读资产，单独改一张松散贴图不会进到内存里。
+    pub fn poll_asset_changes(&mut self) -> usize {
+        const INTERVAL: Duration = Duration::from_millis(500);
+        if self.asset_check_at.elapsed() < INTERVAL {
+            return 0;
+        }
+        self.asset_check_at = Instant::now();
+
+        let Some(pak) = prism_engine::asset_paths::asset_path("scenes.pak") else {
+            return 0;
+        };
+        let mtime = std::fs::metadata(&pak)
+            .and_then(|meta| meta.modified())
+            .ok();
+        if mtime == self.pak_mtime {
+            return 0;
+        }
+        // 打开失败（pak 正在被写）就等下一轮，别把 reader 换成半截文件。
+        if let Err(error) = self.asset_resolver.resource_manager.on_pak_changed(&pak) {
+            log::warn!(
+                "hot reload: reopening {} failed: {error}; will retry",
+                pak.display()
+            );
+            return 0;
+        }
+        self.pak_mtime = mtime;
+        if let Some(manifest) = prism_engine::asset_paths::asset_path("scenes.pak.meta.json") {
+            if let Err(error) = self
+                .asset_resolver
+                .resource_manager
+                .load_path_manifest(&manifest)
+            {
+                log::warn!(
+                    "hot reload: path manifest {} failed: {error}",
+                    manifest.display()
+                );
+            }
+        }
+        let count = self
+            .asset_resolver
+            .invalidate_assets(self.engine.world_mut());
+        self.pump_assets();
+        log::info!(
+            "hot reload: {count} entity/entities re-resolved after {} was rebuilt",
+            pak.display()
+        );
+        count
     }
 
     /// 资产解析：CPU 段 → GPU 上传 → 结果写回 ECS，全部同步。

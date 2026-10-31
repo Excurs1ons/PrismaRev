@@ -27,6 +27,7 @@ core = []
 async-io = ["dep:tokio"]
 runtime = ["dep:tracing", "core", "package"]
 package = ["core", "dep:zstd", "dep:xxhash-rust"]
+# 兼容别名：热重载轮询器现在总是随 `runtime` 编译，打开这个 feature 不再有副作用。
 hot-reload = ["runtime"]
 streaming = ["runtime"]
 types = ["core", "asset-data"]

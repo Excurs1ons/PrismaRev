@@ -1,41 +1,18 @@
-//! Hot-reload support — Phase 6 实现（已接线，2026-08-21）
+//! Hot-reload entry points (engine 侧再导出)。
 //!
-//! 轮询 `game.pak` / `.scene.json` 修改时间，变更时通知 ResourceManager::on_pak_changed。
-//! 当前为轻量轮询实现，下一步扩展可替换为 notify crate。
+//! 真正的轮询器是 [`prism_asset::runtime::HotReloadWatcher`]：它只依赖 `std`，运行时
+//! 总是可用，产出 [`HotReloadEvent::PakModified`] 后由宿主调用
+//! [`ResourceManager::on_pak_changed`](prism_asset::runtime::ResourceManager::on_pak_changed)
+//! 换掉陈旧的文件字节。
+//!
+//! **引擎自己不轮询**，也不会自动重载任何东西。宿主（编辑器 / 玩家）需要做三步：
+//!
+//! 1. 轮询 `.pak`（或在重建 `.pak` 的地方直接拿到路径）；
+//! 2. `ResourceManager::on_pak_changed(path)` 换掉 reader 并原地刷新常驻资源；
+//! 3. `GpuAssetResolver::invalidate_assets(&mut world)` 把实体侧的解析结果打回
+//!    「待解析」，下一帧 `prepare_requests` 会重新上传 —— GPU 句柄才是渲染用的那一份。
+//!
+//! 以前这个文件里有一个只返回 `bool`、没有任何调用点的 `HotReloadWatcher`，注释还写着
+//! 「已接线」；那是假的，已删除（#495）。别再往这里加第二个 watcher。
 
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-
-pub struct HotReloadWatcher {
-    pak_path: PathBuf,
-    last_modified: Option<SystemTime>,
-    #[allow(dead_code)]
-    interval: Duration,
-}
-
-impl HotReloadWatcher {
-    pub fn new(pak_path: impl AsRef<Path>) -> Self {
-        Self {
-            pak_path: pak_path.as_ref().to_path_buf(),
-            last_modified: None,
-            interval: Duration::from_millis(500),
-        }
-    }
-    /// 轮询检查是否变更，返回 true 表示需要 reload
-    pub fn poll(&mut self) -> bool {
-        let Ok(meta) = std::fs::metadata(&self.pak_path) else {
-            return false;
-        };
-        let Ok(modified) = meta.modified() else {
-            return false;
-        };
-        if self.last_modified.map_or(true, |t| modified > t) {
-            self.last_modified = Some(modified);
-            return true;
-        }
-        false
-    }
-    pub fn pak_path(&self) -> &Path {
-        &self.pak_path
-    }
-}
+pub use prism_asset::runtime::{HotReloadError, HotReloadEvent, HotReloadWatcher};

@@ -11,7 +11,7 @@
 //! - 不依赖构建工具（`prism-cooker` 的 importer/cooker/db 等）。
 //! - 支持同步 + 异步加载。
 //! - 通过 LRU 淘汰控制内存预算（阶段 3）。
-//! - 通过文件监视器支持热重载（阶段 3，特性 `hot-reload`）。
+//! - 通过文件监视器支持热重载（[`HotReloadWatcher`]，运行时总是可用）。
 //! - 大资源流式读取（阶段 3，特性 `streaming`）。
 
 use crate::core::{AnyHandle, AssetId, AssetType, Handle};
@@ -23,14 +23,14 @@ use std::time::Instant;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
-// Hot-reload support (optional)
+// Hot-reload support
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "hot-reload")]
+// 轮询器只依赖 `std`，运行时和构建期都能用；以前它藏在 `hot-reload` feature 后面，
+// 而打开该 feature 的只有构建期的 `prism-cooker`，于是运行期根本拿不到 watcher（#495）。
 mod hot_reload;
 
-#[cfg(feature = "hot-reload")]
-pub use hot_reload::{HotReloadEvent, HotReloadWatcher};
+pub use hot_reload::{HotReloadError, HotReloadEvent, HotReloadWatcher};
 
 // ---------------------------------------------------------------------------
 // Typed 资源 wrappers (RTEX/RMES/RMAT/SPIR-V/RSCN decoders)
@@ -207,8 +207,7 @@ impl MemoryTracker {
 struct LoadedPackage {
     /// `None` = 从内存字节注册（[`ResourceManager::load_package_bytes`]），磁盘上没有可替换的文件。
     ///
-    /// 只有 `on_pak_changed` 读它；`hot-reload` 关闭时是纯记账，所以按需关掉 dead_code。
-    #[cfg_attr(not(feature = "hot-reload"), allow(dead_code))]
+    /// 只有 `on_pak_changed` 读它（热重载要靠它找回被替换的那个 reader）。
     path: Option<PathBuf>,
     reader: PackageReader,
 }
@@ -223,8 +222,8 @@ struct LoadedPackage {
 ///
 /// - **Memory budget**: 调用 [`set_memory_budget()`](ResourceManager::set_memory_budget)
 ///   to cap 总计 loaded 字节 LRU or FIFO eviction.
-/// - **Hot reload**: enable with 特性 `hot-reload`, use
-///   [`HotReloadWatcher`] to watch `.pak` files.
+/// - **Hot reload**: use [`HotReloadWatcher`] to watch `.pak` files, then hand each
+///   event to [`ResourceManager::on_pak_changed`].
 /// - **Streaming**: 调用 [`read_stream()`](ResourceManager::read_stream) to
 ///   iterate over an asset's data in fixed-size chunks (zero-copy within a
 ///   loaded 包).
@@ -1077,7 +1076,6 @@ impl ResourceManager {
     /// （只用于「槽被回收给别的资源」时才递增）。
     ///
     /// 未知路径视为新出现的 `.pak`，按普通注册处理。
-    #[cfg(feature = "hot-reload")]
     pub fn on_pak_changed(&mut self, path: &Path) -> Result<(), RuntimeError> {
         let reader = PackageReader::open(path)?;
 

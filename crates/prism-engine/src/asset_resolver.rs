@@ -397,6 +397,89 @@ impl GpuAssetResolver {
     }
 
     // -----------------------------------------------------------------------
+    // 热重载：让已解析的资产重新走一遍
+    // -----------------------------------------------------------------------
+
+    /// 让**所有** `MeshRenderer` / `SpriteRenderer` 的解析结果失效（`.pak` 重建后调用）。
+    ///
+    /// 只清实体这一侧的状态（`MeshRef` / `MaterialRef` / `SpriteRef` 的
+    /// `generation`、失败缓存、排队标记），**不动** `ResourceManager`：包里的字节由
+    /// [`ResourceManager::on_pak_changed`] 换掉，新字节在下一帧
+    /// [`Self::prepare_requests`] 里重新读出来，渲染线程给它们新的句柄。
+    ///
+    /// 返回**重新排队**的实体数。旧 GPU 句柄暂时留在渲染器里（没有从 ECS 反向释放的接口），
+    /// 频繁热重载会让纹理/材质槽增长 —— 已知遗留，见 #495 的后续条目。
+    pub fn invalidate_assets(&mut self, world: &mut World) -> usize {
+        let mut entities: Vec<Entity> = Vec::new();
+        for (entity, _) in world.query::<MeshRenderer>() {
+            entities.push(entity);
+        }
+        for (entity, _) in world.query::<SpriteRenderer>() {
+            if !entities.contains(&entity) {
+                entities.push(entity);
+            }
+        }
+        let count = entities.len();
+        for entity in entities {
+            self.reset_entity_refs(world, entity);
+        }
+        count
+    }
+
+    /// 只让引用了 `path` 的实体重新解析（换了一张贴图 / 一个网格）。
+    ///
+    /// `path` 与作者文档里的写法一致（`mesh_path` / `material_path` /
+    /// `sprite_path`）。返回引用了该路径的实体数；没有实体引用它时返回 0。
+    pub fn invalidate_path(&mut self, world: &mut World, path: &str) -> usize {
+        let mut entities: Vec<Entity> = Vec::new();
+        for (entity, renderer) in world.query::<MeshRenderer>() {
+            if renderer.mesh_path == path || renderer.material_path == path {
+                entities.push(entity);
+            }
+        }
+        for (entity, sprite) in world.query::<SpriteRenderer>() {
+            if sprite.sprite_path == path && !entities.contains(&entity) {
+                entities.push(entity);
+            }
+        }
+        let count = entities.len();
+        for entity in entities {
+            self.reset_entity_refs(world, entity);
+        }
+        count
+    }
+
+    /// 把实体上已解析的句柄打回 `generation == 0`，并清掉会挡住重新解析的缓存。
+    ///
+    /// 返回 `true` 表示确实做了修改（本来就是 `0` 的实体不算）。
+    fn reset_entity_refs(&mut self, world: &mut World, entity: Entity) -> bool {
+        let mut changed = false;
+        if let Some(mesh) = world.get_mut::<MeshRef>(entity) {
+            if mesh.generation != 0 {
+                mesh.generation = 0;
+                changed = true;
+            }
+        }
+        if let Some(material) = world.get_mut::<MaterialRef>(entity) {
+            if material.generation != 0 {
+                material.generation = 0;
+                changed = true;
+            }
+        }
+        if let Some(sprite) = world.get_mut::<SpriteRef>(entity) {
+            if sprite.generation != 0 {
+                sprite.generation = 0;
+                changed = true;
+            }
+        }
+        // 失败缓存（同一个坏路径不再重试）与排队标记都会挡住重新解析。
+        self.enqueued.remove(&entity);
+        self.pending_bounds.remove(&entity);
+        self.failed.retain(|(owner, _), _| *owner != entity);
+        changed
+    }
+
+    // -----------------------------------------------------------------------
     // 内部 CPU 加载 helpers（纯数据，无渲染器依赖）
     // -----------------------------------------------------------------------
 
@@ -1072,5 +1155,112 @@ mod mesh_bounds_tests {
 
         // 再投递一次不会重复：句柄已写回（`generation = 1`）。
         assert!(resolver.prepare_requests(&world).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod hot_reload_tests {
+    use super::*;
+    use prism_scene::SceneAssetId;
+
+    fn spawn_mesh(world: &mut World, path: &str, generation: u32) -> Entity {
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            MeshRenderer {
+                mesh_path: path.into(),
+                ..Default::default()
+            },
+        );
+        world.insert(
+            entity,
+            MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: Default::default(),
+                generation,
+            },
+        );
+        entity
+    }
+
+    #[test]
+    fn invalidating_everything_re_uploads_the_meshes() {
+        let mut world = World::new();
+        let entity = spawn_mesh(&mut world, "__builtin/box", 1);
+
+        let mut resolver = GpuAssetResolver::new();
+        assert!(
+            resolver.prepare_requests(&world).is_empty(),
+            "a resolved mesh must not be re-uploaded on its own"
+        );
+
+        assert_eq!(resolver.invalidate_assets(&mut world), 1);
+        assert_eq!(world.get::<MeshRef>(entity).unwrap().generation, 0);
+        assert_eq!(
+            resolver.prepare_requests(&world).len(),
+            1,
+            "a hot reload must put the entity back in the upload queue"
+        );
+    }
+
+    #[test]
+    fn invalidating_a_path_only_touches_its_users() {
+        let mut world = World::new();
+        let boxed = spawn_mesh(&mut world, "__builtin/box", 1);
+        let sphere = spawn_mesh(&mut world, "__builtin/sphere", 1);
+
+        let mut resolver = GpuAssetResolver::new();
+        assert_eq!(resolver.invalidate_path(&mut world, "__builtin/box"), 1);
+        assert_eq!(world.get::<MeshRef>(boxed).unwrap().generation, 0);
+        assert_eq!(
+            world.get::<MeshRef>(sphere).unwrap().generation,
+            1,
+            "an unrelated path must keep its resolved handles"
+        );
+        assert_eq!(
+            resolver.invalidate_path(&mut world, "assets/nothing.rmes"),
+            0
+        );
+    }
+
+    #[test]
+    fn invalidation_clears_the_failure_cache() {
+        // 一个不存在于任何包里的路径：第一次 prepare 会失败并进失败缓存，
+        // 之后不再重试。热重载必须能让它再试一次（新包里可能刚加上它）。
+        let mut world = World::new();
+        let entity = spawn_mesh(&mut world, "assets/new_mesh.rmes", 0);
+
+        let mut resolver = GpuAssetResolver::new();
+        let first = resolver.prepare_requests(&world);
+        assert_eq!(first.len(), 1);
+        assert!(first[0].1.mesh.is_none(), "the path is not in any package");
+        // 上传失败也是「有结果」：清掉排队标记，于是只剩失败缓存挡着重试。
+        resolver.apply_results(
+            &mut world,
+            &[(
+                entity,
+                prism_render::asset_bridge::AssetResolveResult {
+                    mesh_handle: None,
+                    material_slot: None,
+                    texture_slot: None,
+                    texture_size: None,
+                },
+            )],
+        );
+        assert!(
+            resolver.prepare_requests(&world).is_empty(),
+            "a failed path must not be retried until something changes"
+        );
+
+        assert_eq!(
+            resolver.invalidate_path(&mut world, "assets/new_mesh.rmes"),
+            1
+        );
+        assert_eq!(
+            resolver.prepare_requests(&world).len(),
+            1,
+            "hot reload must clear the failed-path cache"
+        );
+        assert_eq!(world.get::<MeshRef>(entity).unwrap().generation, 0);
     }
 }
