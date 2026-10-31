@@ -560,6 +560,7 @@ pub fn render_system(
         inv_projection: inv_projection.to_cols_array_2d(),
         debug_flags: settings.debug_flags,
         tonemap_mode: settings.tonemap_mode,
+        aa_mode: settings.aa_mode,
         debug_rt: settings.debug_rt,
         proj22: *proj22,
         proj32: *proj32,

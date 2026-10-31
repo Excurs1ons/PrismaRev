@@ -40,6 +40,8 @@ pub struct RenderConfig {
     pub debug_flags: Option<u32>,
     /// 0 = Reinhard, 1 = ACES。
     pub tonemap_mode: Option<u32>,
+    /// 后处理抗锯齿：0 = 关（默认），1 = FXAA。
+    pub aa_mode: Option<u32>,
     /// 0 = HDR tonemap, 1 = depth, 2 = view-space normal。
     pub debug_rt: Option<u32>,
     pub pt_max_bounces: Option<u32>,
@@ -67,6 +69,9 @@ impl RenderConfig {
         if let Some(mode) = self.tonemap_mode {
             settings.tonemap_mode = mode;
         }
+        if let Some(mode) = self.aa_mode {
+            settings.aa_mode = mode;
+        }
         if let Some(rt) = self.debug_rt {
             settings.debug_rt = rt;
         }
@@ -86,6 +91,7 @@ impl RenderConfig {
             render_mode: ini.get("render", "render_mode").map(str::to_string),
             debug_flags: ini.get_u32("render", "debug_flags"),
             tonemap_mode: ini.get_u32("render", "tonemap_mode"),
+            aa_mode: ini.get_u32("render", "aa_mode"),
             debug_rt: ini.get_u32("render", "debug_rt"),
             pt_max_bounces: ini.get_u32("render", "pt_max_bounces"),
             pt_ray_max_distance: ini.get_f32("render", "pt_ray_max_distance"),
@@ -285,6 +291,7 @@ const KNOWN_KEYS: &[(&str, &[&str])] = &[
             "render_mode",
             "debug_flags",
             "tonemap_mode",
+            "aa_mode",
             "debug_rt",
             "pt_max_bounces",
             "pt_ray_max_distance",
@@ -402,12 +409,13 @@ mod tests {
         use crate::render_settings::{RenderMode, RenderSettings};
 
         let cfg = AppConfig::from_ini(
-            "[render]\nrender_mode = \"path_trace\"\ntonemap_mode = 1\npt_max_bounces = 7\n",
+            "[render]\nrender_mode = \"path_trace\"\ntonemap_mode = 1\naa_mode = 1\npt_max_bounces = 7\n",
         );
         let mut settings = RenderSettings::default();
         cfg.render.apply(&mut settings);
         assert_eq!(settings.render_mode, RenderMode::PathTrace);
         assert_eq!(settings.tonemap_mode, 1);
+        assert_eq!(settings.aa_mode, 1);
         assert_eq!(settings.pt_max_bounces, 7);
         // Unspecified fields keep their defaults.
         assert_eq!(settings.pt_max_iterations, 0);

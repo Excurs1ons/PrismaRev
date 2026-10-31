@@ -3594,6 +3594,25 @@ pub fn render_graph(
                 });
             ui.end_row();
 
+            ui.label("Anti-aliasing");
+            egui::ComboBox::from_id_salt("aa-mode")
+                .selected_text(match settings.aa_mode {
+                    1 => "FXAA",
+                    _ => "Off",
+                })
+                .show_ui(ui, |ui| {
+                    for (mode, label) in [(0u32, "Off"), (1, "FXAA")] {
+                        if ui
+                            .selectable_label(settings.aa_mode == mode, label)
+                            .clicked()
+                        {
+                            settings.aa_mode = mode;
+                            changed = true;
+                        }
+                    }
+                });
+            ui.end_row();
+
             ui.label("Path trace");
             let mut path_trace = matches!(
                 settings.render_mode,

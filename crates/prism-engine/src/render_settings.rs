@@ -55,6 +55,11 @@ pub struct RenderSettings {
     /// 色调映射 operator: 0 = Reinhard, 1 = ACES (Narkowicz),
     /// 2 = passthrough (2D 像素画：保留原始调色板，只做 saturate).
     pub tonemap_mode: u32,
+    /// 后处理抗锯齿: 0 = 关, 1 = FXAA（在 `PostPass` 色调映射之后执行）。
+    ///
+    /// 不依赖 MSAA / resolve 目标，交换链与编辑器离屏视口共用同一条路径；
+    /// 调试图（`debug_rt != 0`）会自动忽略它。
+    pub aa_mode: u32,
     /// PostPass 调试 render-target viewer (Tab cycles). 0 = 法线 tonemapped
     /// 高动态范围 1 = linearized 深度 2 = view-space 法线
     pub debug_rt: u32,
@@ -94,6 +99,7 @@ impl Default for RenderSettings {
         Self {
             debug_flags: 0,
             tonemap_mode: 0,
+            aa_mode: 0,
             debug_rt: 0,
             render_mode: RenderMode::Raster,
             pt_max_bounces: 3,

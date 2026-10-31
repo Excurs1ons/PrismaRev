@@ -565,6 +565,7 @@ impl EngineHost {
             inv_projection: scene.inv_projection.to_cols_array_2d(),
             debug_flags: self.settings.debug_flags,
             tonemap_mode: self.settings.tonemap_mode,
+            aa_mode: self.settings.aa_mode,
             debug_rt: self.settings.debug_rt,
             proj22: scene.proj22,
             proj32: scene.proj32,
