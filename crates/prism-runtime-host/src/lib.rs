@@ -354,11 +354,43 @@ unsafe extern "C" fn host_set_component(
     if !context.world.is_alive(entity) {
         return INVALID_ARGUMENT;
     }
-    if context.registry.apply_object(context.world, entity, object) {
-        SUCCESS
-    } else {
-        UNKNOWN_TYPE
+    // 运行时组件先走（注册表对它们只会打一条「unknown」警告再拒绝）。
+    if apply_runtime_component(context.world, entity, object) {
+        return SUCCESS;
     }
+    if context.registry.apply_object(context.world, entity, object) {
+        return SUCCESS;
+    }
+    UNKNOWN_TYPE
+}
+
+/// 写「运行时组件」：注册表刻意不让作者文档挂载它们，但工程代码必须能写。
+///
+/// `LocalTransform` 在注册表里只登记为**类型**（见 `prism-scene` 的
+/// `register_builtin_components`：作者只写 `transform`，由 loader / cooker bake 成
+/// `LocalTransform` + `LocalToWorld`，否则会在世界矩阵算完之后被覆盖）。
+/// 玩家形态里工程代码是 `GameWorld::host(...)` → `world.set(entity, LocalTransform)`，
+/// 直接进 ECS；插件形态必须有一条等价通路，否则模块 spawn 出来的实体没有变换，
+/// 只能停在原点。
+///
+/// 只在注册表之前尝试：作者 JSON 走的是 `registry.apply`，语义一点没变。
+fn apply_runtime_component(
+    world: &mut prism_ecs::World,
+    entity: prism_ecs::Entity,
+    object: &prism_reflect::Object,
+) -> bool {
+    // 类型名与 `#[reflect(name = ...)]` 固定值对齐。
+    const LOCAL_TRANSFORM: &str = "prism_engine::scene::LocalTransform";
+    if object.type_name != LOCAL_TRANSFORM {
+        return false;
+    }
+    let Ok(transform) =
+        <prism_scene::components::LocalTransform as prism_reflect::Reflect>::from_object(object)
+    else {
+        return false;
+    };
+    world.insert(entity, transform);
+    true
 }
 
 unsafe extern "C" fn host_remove_component(
@@ -634,11 +666,13 @@ unsafe extern "C" fn host_log(
         unsafe { std::slice::from_raw_parts(message, message_len) }
     };
     let text = String::from_utf8_lossy(bytes);
+    // target 固定为 `project`：编辑器 Console 按 target 把模块日志归到 `Game`
+    // 来源（`logging::source_for`），和引擎 / 编辑器日志分开。
     match level {
-        0 => log::error!("project: {text}"),
-        1 => log::warn!("project: {text}"),
-        2 => log::debug!("project: {text}"),
-        _ => log::info!("project: {text}"),
+        0 => log::error!(target: "project", "{text}"),
+        1 => log::warn!(target: "project", "{text}"),
+        2 => log::debug!(target: "project", "{text}"),
+        _ => log::info!(target: "project", "{text}"),
     }
 }
 
@@ -707,6 +741,55 @@ mod tests {
         assert_eq!(status, SUCCESS);
         let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
         assert_eq!(bytes, br#"{"layers":[]}"#);
+    }
+
+    /// 工程代码通过 ABI 写的 `LocalTransform` 必须真的进世界。
+    ///
+    /// 注册表刻意不让作者文档挂载它（作者只写 `transform`，由 loader bake），
+    /// 但运行时模块 spawn 出来的实体没有变换就只会堆在原点 —— 插件形态必须和
+    /// `GameWorld::host(...)` 的 `world.set(entity, LocalTransform)` 等价。
+    #[test]
+    fn plugin_set_can_write_local_transform() {
+        use prism_scene::components::LocalTransform;
+
+        let mut world = prism_ecs::World::new();
+        let registry = registry();
+        let entity = world.spawn();
+        let mut commands = WorldCommands::new(&mut world, &registry, 1);
+        let api = commands.api();
+        let set = api.set_component.expect("component capability");
+
+        let mut transform = LocalTransform::default();
+        transform.position.x = 1.0;
+        transform.position.y = 2.0;
+        transform.position.z = 3.0;
+        transform.scale.x = 2.0;
+        transform.scale.y = 2.0;
+        transform.scale.z = 2.0;
+        let bytes = prism_reflect::rtti_bin::encode_one(
+            &Reflect::to_object(&transform),
+            registry.type_registry(),
+        )
+        .expect("encode LocalTransform");
+        let status = unsafe {
+            set(
+                api.user_data,
+                EntityHandle {
+                    id: entity.id(),
+                    generation: entity.generation(),
+                },
+                bytes.as_ptr(),
+                bytes.len(),
+            )
+        };
+        assert_eq!(status, SUCCESS);
+
+        let stored = world
+            .get::<LocalTransform>(entity)
+            .expect("transform inserted");
+        assert_eq!(stored.position.x, 1.0);
+        assert_eq!(stored.position.z, 3.0);
+        assert_eq!(stored.scale.y, 2.0);
     }
 
     #[test]

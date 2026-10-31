@@ -79,6 +79,11 @@ pub struct LakeWorld {
 }
 
 impl LakeWorld {
+    /// 当前图层数量（Play 日志 / 冒烟测试用来确认世界真的建起来了）。
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
     fn build(world: &mut GameWorld<'_>) -> Self {
         let camera = world.query::<Camera>().first().copied();
 

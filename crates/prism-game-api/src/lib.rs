@@ -266,6 +266,132 @@ struct PluginBackend<'a> {
     registry: &'a TypeRegistry,
 }
 
+// ---------------------------------------------------------------------------
+// 模块日志 → 宿主日志
+// ---------------------------------------------------------------------------
+
+/// 模块里 `log!` 记录的转发目标（宿主下发的 `HostApi::log`）。
+#[cfg(feature = "plugin")]
+#[derive(Clone, Copy)]
+struct LogSink {
+    user_data: usize,
+    log: prism_project_api::LogMessage,
+}
+
+#[cfg(feature = "plugin")]
+static LOG_SINK: std::sync::OnceLock<LogSink> = std::sync::OnceLock::new();
+
+#[cfg(feature = "plugin")]
+struct HostLogger;
+
+/// `log::set_logger` 要 `&'static`：workspace 的 `log` 关了 `alloc` feature，
+/// 用静态实例而不是 `set_boxed_logger`。
+#[cfg(feature = "plugin")]
+static HOST_LOGGER: HostLogger = HostLogger;
+
+#[cfg(feature = "plugin")]
+impl log::Log for HostLogger {
+    fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+        LOG_SINK.get().is_some()
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if LOG_SINK.get().is_none() {
+            return;
+        }
+        // 与 `prism-runtime-host::host_log` 的约定一致：0 error / 1 warn / 2 debug / 3 info。
+        let level = match record.level() {
+            log::Level::Error => 0,
+            log::Level::Warn => 1,
+            log::Level::Debug => 2,
+            log::Level::Info | log::Level::Trace => 3,
+        };
+        let text = format!("{}: {}", record.target(), record.args());
+        forward_log(level, &text);
+    }
+
+    fn flush(&self) {}
+}
+
+/// 把工程模块里的 **panic**（连同调用栈）送进宿主的日志。
+///
+/// 模块是独立动态库，`std` 也是它自己的一份：宿主 `set_hook` 装的钩子收不到模块里的
+/// panic，默认行为只是往 stderr 打一行（编辑器 Console 一片空白，而且每帧 panic 会把
+/// stderr 刷爆）。这里在模块自己的 `std` 上装钩子，把 `panicked at …` + `Backtrace`
+/// 经 [`install_host_logger`] 的同一条通路发出去。
+///
+/// 调用栈里工程帧的符号要靠 `.pdb`：编辑器把模块复制到 `staged/` 时会连 `.pdb`
+/// 一起复制（见 `prism-editor-egui::project_module::stage_module`）。
+///
+/// 与 [`install_host_logger`] 一样，重复调用是 no-op。必须在 `create` 里调用，
+/// 且要在 [`install_host_logger`] 之后（否则日志还没有出口）。
+#[cfg(feature = "plugin")]
+pub fn install_host_panic_hook() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            // `Backtrace::force_capture` 不依赖 `RUST_BACKTRACE`，Play 时默认就要有栈。
+            let text = format!(
+                "{info}
+{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+            forward_log(0, &text);
+            // 保留原行为（stderr），终端排查仍然可用。
+            previous(info);
+        }));
+    });
+}
+
+/// 按 ABI 的级别约定把一行文本发给宿主（0 error / 1 warn / 2 debug / 3 info）。
+#[cfg(feature = "plugin")]
+fn forward_log(level: u32, text: &str) {
+    let Some(sink) = LOG_SINK.get() else {
+        return;
+    };
+    // SAFETY: 同 `HostLogger::log`；宿主日志回调不使用 `user_data`，字符串只在本调用内有效。
+    unsafe {
+        (sink.log)(
+            sink.user_data as *mut core::ffi::c_void,
+            level,
+            text.as_ptr(),
+            text.len(),
+        );
+    }
+}
+
+/// 把工程模块自己的 `log!` 接到宿主的 `HostApi::log` 上。
+///
+/// 模块是独立动态库，链接的是**它自己那份** `log` crate —— 宿主在编辑器进程里
+/// 装的 logger 收不到模块里的记录。工程只要在 `create` 里调一次这个函数，
+/// `log::info!` / `log::error!` 就会经 ABI 送进编辑器的 Console（与宿主日志同一条
+/// 通路，来源标 `Game`）。
+///
+/// 重复调用是 no-op（只取第一次的 `log` 回调）。`user_data` 每次调用都会更新，
+/// 因为宿主每个 tick 都会换一个新的命令上下文；但宿主实现（`prism-runtime-host`）
+/// 的日志回调并不依赖它。
+#[cfg(feature = "plugin")]
+pub fn install_host_logger(host: &HostApi) {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    let Some(log) = host.log else {
+        return;
+    };
+    let sink = LogSink {
+        user_data: host.user_data as usize,
+        log,
+    };
+    // 第一次安装 logger；之后只刷新 sink（`OnceLock::set` 失败说明已经有了）。
+    let fresh = LOG_SINK.set(sink).is_ok();
+    if fresh {
+        INSTALL.call_once(|| {
+            if log::set_logger(&HOST_LOGGER).is_ok() {
+                log::set_max_level(log::LevelFilter::Debug);
+            }
+        });
+    }
+}
+
 #[cfg(feature = "plugin")]
 impl PluginBackend<'_> {
     fn spawn(&self) -> EntityHandle {

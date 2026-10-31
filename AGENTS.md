@@ -162,13 +162,21 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
     and force full rebuilds.
   - Compile timing: 350 ms debounce after edits settle, deferred while
     playing, failing builds keep the previous module running, and the built file is
-    copied to a unique name before loading (a loaded dll cannot be overwritten on
-    Windows). Auto Refresh can be disabled; `Ctrl+R` forces a rebuild. The toolbar
+    copied before loading (a loaded dll cannot be overwritten on Windows). Stage into
+    `staged/<stem>-<nanos>/<original name>` — unique **directory**, original **file
+    name** — and copy the `.pdb` next to it: dbghelp looks symbols up by the name
+    recorded in the PE, so renaming the dll degrades module frames to the export name.
+    Auto Refresh can be disabled; `Ctrl+R` forces a rebuild. The toolbar
     shows the module state (ready / changes not compiled / compiling / failed), and
     `cargo --message-format=json-render-diagnostics` is parsed into the Problems panel
     (`file:line:col`, click to open); the player build (`BuildKind::Player`) uses the same
     parser, `cargo run` must not. Reload replaces the whole module — never call it
     "hot reload".
+  - Module logs and panics need a bridge: the dylib has its own `log`/`std`, so the
+    host logger and panic hook never see them. A project must call
+    `prism_game_api::install_host_logger(&host)` and `install_host_panic_hook()` in
+    `create`; `prism_project_api::guard()` keeps panics from unwinding across
+    `extern "C"`. A failed tick latches (no per-frame panic replay) until reload.
   - Compilation runs **off** the viewport thread and reports progress through
     `ViewportSnapshot.build`; scene cook/pack and project builds report through
     `editor_build_status`. Never run `cargo`/cook synchronously in a viewport or command

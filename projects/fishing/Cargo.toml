@@ -11,15 +11,48 @@ description = "Cozy Fishing — 2D 像素钓鱼游戏（用户项目）"
 [lib]
 crate-type = ["lib", "cdylib"]
 
+[[bin]]
+name = "fishing"
+path = "src/main.rs"
+# 玩家二进制只在 `player` 形态下构建：`preview-module` 构建不该链引擎。
+required-features = ["player"]
+
+# 两种形态（与 `projects/prisma` 同构）：
+# - `player`（默认）：静态玩家，链接引擎，产出桌面二进制 + Android cdylib。
+# - `preview-module`：编辑器 Play 加载的动态模块，只依赖跨 ABI 的纯数据层。
+[features]
+default = ["player"]
+player = ["dep:prism-app", "dep:prism-engine", "prism-game-api/host"]
+# 组件 schema 必须和编辑器宿主**完全一致**：宿主用 prism-scene 默认分组编译，
+# 模块是独立 workspace、拿不到引擎的 feature 统一，所以这里显式打开三组。
+# 少了任何一组，`ProjectModule::load` 的 schema fingerprint 校验会拒绝模块，
+# 而且项目自己也编码不了 SpriteRenderer 之类的组件。
+preview-module = [
+    "dep:prism-project-api",
+    # 没有 `plugin` 后端时 `prism-game-api` 的 `Backend` 是空枚举（编译不过）。
+    "prism-game-api/plugin",
+    "prism-scene/group-3d",
+    "prism-scene/group-2d",
+    "prism-scene/group-ui",
+]
+
 [dependencies]
-prism-app = { path = "../../crates/prism-app" }
-prism-engine = { path = "../../crates/prism-engine" }
-prism-game-api = { path = "../../crates/prism-game-api" }
+prism-app = { path = "../../crates/prism-app", optional = true }
+prism-engine = { path = "../../crates/prism-engine", optional = true }
+# 插件形态只需要 `plugin` 后端：默认的 `host` 会拉进 prism-engine。
+prism-game-api = { path = "../../crates/prism-game-api", default-features = false }
+prism-project-api = { path = "../../crates/prism-project-api", optional = true }
 prism-scene = { path = "../../crates/prism-scene", default-features = false }
 log = "0.4"
 glam = "0.33.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# 测试只多要一个纯数据 ECS（无 Vulkan / 无引擎）：`GameWorld::host` 借用的
+# 就是它，玩法回归测试用它代替编辑器宿主。
+[dev-dependencies]
+prism-ecs = { path = "../../crates/prism-ecs" }
+prism-game-api = { path = "../../crates/prism-game-api", features = ["host"] }
 
 # 玩家 / Android 打包：体积优先（fat LTO + 单 codegen unit + abort + strip）。
 # 编辑器/工具跑在引擎进程内，不能用这个 profile。

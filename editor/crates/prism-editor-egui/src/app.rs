@@ -189,6 +189,12 @@ pub struct EditorApp {
     panel_rects: std::collections::BTreeMap<String, egui::Rect>,
     /// 上一帧的 dock leaf：(leaf id, 激活 tab, 所有 tab)。
     dock_leaves: Vec<(String, String, Vec<String>)>,
+    /// 控制通道排进来的输入事件（自动化 / MCP 驱动 Play）。
+    ///
+    /// **每帧只消费一个**：`just_pressed` 在这一帧的 tick 里可见，下一帧就被
+    /// `InputManager::begin_frame` 清掉；一次塞两个会让按下/松开落在同一帧里，
+    /// 工程侧永远看不到点击。
+    pending_input: std::collections::VecDeque<InjectedInput>,
 }
 
 impl EditorApp {
@@ -329,6 +335,7 @@ impl EditorApp {
             pending_captures: Vec::new(),
             panel_rects: std::collections::BTreeMap::new(),
             dock_leaves: Vec::new(),
+            pending_input: std::collections::VecDeque::new(),
         };
 
         // Preferences 的日志上限在启动时生效，而不是等用户再拖一次滑条。
@@ -383,6 +390,11 @@ impl EditorApp {
             Ok(mut view) => {
                 // 新视口从编辑器当前设置出发（网格 / 天空盒），否则首帧会和工具栏不一致。
                 *view.host.settings_mut() = self.render_settings.clone();
+                // Game view 代表「独立构建跑起来的样子」：渲染默认值必须来自工程
+                // 自己的 `assets/settings.ini [render]`，否则曝光 / 色调映射和产物不一致。
+                if kind == ViewKind::Game {
+                    apply_project_render_defaults(&mut view.host, self.project_root.as_deref());
+                }
                 view.host.set_show_skybox(self.workspace.show_skybox);
                 // Game view 的 Play 执行用户项目代码（Scene view 只跑编辑器预览）。
                 if kind == ViewKind::Game {
@@ -847,6 +859,17 @@ impl EditorApp {
                 "fps": self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
                 "playing": self.playing,
                 "paused": self.paused,
+                "project_module": self
+                    .game_view
+                    .as_ref()
+                    .and_then(|view| view.host.project_module_status())
+                    .map(|status| {
+                        json!({
+                            "available": status.available,
+                            "loaded": status.loaded,
+                            "building": status.building,
+                        })
+                    }),
                 "scene": self.workspace.document().path.clone(),
                 "dirty": self.workspace.document().dirty,
                 "project_root": self
@@ -857,6 +880,109 @@ impl EditorApp {
                 "status": self.state.status.clone(),
                 "project_module": self.project_module_json(),
             }),
+            "logs" | "log.dump" => {
+                // Console 面板的同一份缓冲：MCP / 自动化没窗口可看，也能读到
+                // 引擎日志与工程模块（target `project`）的日志和 panic 调用栈。
+                let since = args
+                    .get("since")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let limit = args
+                    .get("limit")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(200) as usize;
+                let lines: Vec<serde_json::Value> = self
+                    .workspace
+                    .log
+                    .all()
+                    .iter()
+                    .filter(|line| line.seq >= since)
+                    .take(limit)
+                    .map(|line| {
+                        json!({
+                            "seq": line.seq,
+                            "source": format!("{:?}", line.source),
+                            "level": format!("{:?}", line.level),
+                            "text": line.text,
+                        })
+                    })
+                    .collect();
+                let next = self
+                    .workspace
+                    .log
+                    .all()
+                    .back()
+                    .map(|line| line.seq + 1)
+                    .unwrap_or(since);
+                json!({ "ok": true, "lines": lines, "next": next })
+            }
+            "input" | "input.send" => {
+                // 驱动 Play 用的输入注入：key=space/w/a/s/d/...、mouse=left/right，
+                // state=press/release（默认 press）。`click` 等价于 left 的按下+松开。
+                let state = args
+                    .get("state")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("press");
+                let pressed = match state {
+                    "press" | "down" | "true" => true,
+                    "release" | "up" | "false" => false,
+                    other => {
+                        return Some(json!({
+                            "ok": false,
+                            "error": format!("state 只能是 press / release，收到 '{other}'"),
+                        }))
+                    }
+                };
+                if args.get("click").and_then(serde_json::Value::as_bool) == Some(true) {
+                    self.pending_input.push_back(InjectedInput::Mouse(
+                        prism_engine::input::MouseButton::Left,
+                        true,
+                    ));
+                    self.pending_input.push_back(InjectedInput::Mouse(
+                        prism_engine::input::MouseButton::Left,
+                        false,
+                    ));
+                    return Some(json!({
+                        "ok": true,
+                        "queued": 2,
+                        "pending": self.pending_input.len(),
+                    }));
+                }
+                if let Some(button) = args.get("mouse").and_then(serde_json::Value::as_str) {
+                    let button = parse_mouse(button);
+                    let Some(button) = button else {
+                        return Some(
+                            json!({ "ok": false, "error": "mouse 只能是 left / right / middle" }),
+                        );
+                    };
+                    self.pending_input
+                        .push_back(InjectedInput::Mouse(button, pressed));
+                } else if let Some(key) = args.get("key").and_then(serde_json::Value::as_str) {
+                    let Some(key) = parse_key(key) else {
+                        return Some(json!({
+                            "ok": false,
+                            "error": format!("不认识的按键 '{key}'（可用：w/a/s/d/q/e/space/shift/ctrl/alt/escape/tab/enter/方向键/0-9）"),
+                        }));
+                    };
+                    self.pending_input
+                        .push_back(InjectedInput::Key(key, pressed));
+                } else {
+                    return Some(json!({ "ok": false, "error": "需要 key / mouse / click 之一" }));
+                }
+                json!({ "ok": true, "queued": 1, "pending": self.pending_input.len() })
+            }
+            "play" | "play.start" => {
+                self.apply_command(Command::Play);
+                json!({ "ok": true, "playing": self.playing })
+            }
+            "stop" | "play.stop" => {
+                self.apply_command(Command::Stop);
+                json!({ "ok": true, "playing": self.playing })
+            }
+            "pause" => {
+                self.apply_command(Command::Pause);
+                json!({ "ok": true, "paused": self.paused, "playing": self.playing })
+            }
             "capture" => {
                 let target = args
                     .get("target")
@@ -3423,15 +3549,12 @@ impl EditorApp {
     /// 渲染设置改动 → 应用到两个引擎实例 → 下一帧重绘。
     fn apply_render_settings(&mut self, settings: prism_engine::render_settings::RenderSettings) {
         self.render_settings = settings;
-        for kind in [ViewKind::Scene, ViewKind::Game] {
-            let view = match kind {
-                ViewKind::Scene => self.scene_view.as_mut(),
-                ViewKind::Game => self.game_view.as_mut(),
-            };
-            if let Some(view) = view {
-                *view.host.settings_mut() = self.render_settings.clone();
-                view.mark_dirty();
-            }
+        // 只改 **Scene view**：Game view 是「独立构建跑起来的样子」，设置来自工程
+        // `assets/settings.ini`（`apply_project_render_defaults`），被编辑器预览覆盖
+        // 就谈不上对齐产物了。
+        if let Some(view) = self.scene_view.as_mut() {
+            *view.host.settings_mut() = self.render_settings.clone();
+            view.mark_dirty();
         }
     }
 
@@ -3458,6 +3581,13 @@ impl App for EditorApp {
         self.poll_project_module();
         self.sync_document();
         self.handle_shortcuts(ctx);
+
+        // 控制通道注入的输入：每帧只放一个进去（见 `pending_input` 的注释）。
+        if let Some(event) = self.pending_input.pop_front() {
+            if let Some(view) = self.game_view.as_mut() {
+                event.apply(view.host.input_mut());
+            }
+        }
 
         // Play 时无论 Game 面板是否可见都推进模拟（切走 tab 不能暂停游戏）。
         if self.playing {
@@ -3827,4 +3957,110 @@ fn main_window_hwnd(window: &egui_ash::winit::window::Window) -> Option<isize> {
         let _ = window;
         None
     }
+}
+
+/// 把工程 `assets/settings.ini` 的 `[render]` 应用到 Game View。
+///
+/// 独立构建启动时走的正是这条链路：`AppConfig { render }` → `RenderSettings`
+/// （`prism_app::App::build`）。Game View 用同一份默认值，Play 看到的画面才和
+/// 打包产物一致。文件不存在（老工程）时保持引擎默认值，不报错。
+fn apply_project_render_defaults(
+    host: &mut crate::engine_host::EngineHost,
+    project_root: Option<&Path>,
+) {
+    let Some(root) = project_root else {
+        return;
+    };
+    let path = root.join("assets").join("settings.ini");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            log::debug!(
+                "game view: no project render settings at {}: {error}",
+                path.display()
+            );
+            return;
+        }
+    };
+    let config = prism_engine::config::AppConfig::from_ini(&text);
+    config.render.apply(host.settings_mut());
+    log::info!("game view render defaults: {}", path.display());
+}
+
+/// 控制通道排进 `pending_input` 的一个输入事件。
+enum InjectedInput {
+    Key(prism_engine::input::KeyCode, bool),
+    Mouse(prism_engine::input::MouseButton, bool),
+}
+
+impl InjectedInput {
+    fn apply(self, input: &mut prism_engine::input::InputManager) {
+        use prism_engine::input::ElementState;
+        match self {
+            Self::Key(key, pressed) => input.handle_keyboard(
+                key,
+                if pressed {
+                    ElementState::Pressed
+                } else {
+                    ElementState::Released
+                },
+            ),
+            Self::Mouse(button, pressed) => input.handle_mouse_button(
+                button,
+                if pressed {
+                    ElementState::Pressed
+                } else {
+                    ElementState::Released
+                },
+            ),
+        }
+    }
+}
+
+/// 控制通道里的按键名 → `KeyCode`。大小写不敏感，覆盖自动化常用的那些。
+fn parse_key(name: &str) -> Option<prism_engine::input::KeyCode> {
+    use prism_engine::input::KeyCode;
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "w" => KeyCode::KeyW,
+        "a" => KeyCode::KeyA,
+        "s" => KeyCode::KeyS,
+        "d" => KeyCode::KeyD,
+        "q" => KeyCode::KeyQ,
+        "e" => KeyCode::KeyE,
+        "space" | " " => KeyCode::Space,
+        "shift" | "shiftleft" => KeyCode::ShiftLeft,
+        "shiftright" => KeyCode::ShiftRight,
+        "ctrl" | "control" | "controlleft" => KeyCode::ControlLeft,
+        "controlright" => KeyCode::ControlRight,
+        "alt" | "altleft" => KeyCode::AltLeft,
+        "altright" => KeyCode::AltRight,
+        "escape" | "esc" => KeyCode::Escape,
+        "tab" => KeyCode::Tab,
+        "enter" | "return" => KeyCode::Enter,
+        "up" | "arrowup" => KeyCode::ArrowUp,
+        "down" | "arrowdown" => KeyCode::ArrowDown,
+        "left" | "arrowleft" => KeyCode::ArrowLeft,
+        "right" | "arrowright" => KeyCode::ArrowRight,
+        "0" => KeyCode::Digit0,
+        "1" => KeyCode::Digit1,
+        "2" => KeyCode::Digit2,
+        "3" => KeyCode::Digit3,
+        "4" => KeyCode::Digit4,
+        "5" => KeyCode::Digit5,
+        "6" => KeyCode::Digit6,
+        "7" => KeyCode::Digit7,
+        "8" => KeyCode::Digit8,
+        "9" => KeyCode::Digit9,
+        _ => return None,
+    })
+}
+
+fn parse_mouse(name: &str) -> Option<prism_engine::input::MouseButton> {
+    use prism_engine::input::MouseButton;
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "left" => MouseButton::Left,
+        "right" => MouseButton::Right,
+        "middle" => MouseButton::Middle,
+        _ => return None,
+    })
 }

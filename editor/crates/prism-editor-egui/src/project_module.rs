@@ -134,6 +134,8 @@ pub struct ProjectModuleDriver {
     auto_refresh: bool,
     /// 项目是否提供 `preview-module`（或给了预构建模块）。
     available: bool,
+    /// 上一次 tick 把模块判成故障（panic / 返回错误）：暂停调用，等重新加载。
+    faulted: bool,
     /// `PRISMREV_PROJECT_MODULE` 指定的预构建模块（只尝试加载一次）。
     prebuilt: Option<PathBuf>,
     events: Vec<ProjectEvent>,
@@ -178,6 +180,7 @@ impl ProjectModuleDriver {
             refresh_requested: false,
             auto_refresh: true,
             available,
+            faulted: false,
             prebuilt,
             events: Vec::new(),
             last_error: None,
@@ -317,6 +320,10 @@ impl ProjectModuleDriver {
         scene_generation: u64,
         screen: [f32; 2],
     ) {
+        // 上一帧已经把模块判为故障：等它被重新加载，不再往同一个坑里跳。
+        if self.faulted {
+            return;
+        }
         // 字段级借用：session 与 components/assets 互不重叠。
         let Some(session) = self.session.as_mut() else {
             return;
@@ -331,6 +338,9 @@ impl ProjectModuleDriver {
         queue_project_quads(world, quads);
 
         let error = result.err().map(|error| error.to_string());
+        // 崩过一次就停在这里：工程每帧 panic 会把 stderr 和 GPU 时间都烧掉，
+        // 重新加载模块（保存源码 / Ctrl+R）才会再试。
+        self.faulted = error.is_some();
         if error != self.last_tick_error {
             match &error {
                 Some(error) => self.push(LogLevel::Error, format!("project tick failed: {error}")),
@@ -470,7 +480,7 @@ impl ProjectModuleDriver {
         {
             Ok(session) => session,
             Err(error) => {
-                let _ = std::fs::remove_file(&staged);
+                remove_staged_file(&staged);
                 return Err(error);
             }
         };
@@ -479,13 +489,14 @@ impl ProjectModuleDriver {
         let previous = self.session.replace(session);
         drop(previous);
         if let Some(old) = self.staged.replace(staged) {
-            let _ = std::fs::remove_file(old);
+            remove_staged_file(&old);
         }
         self.last_error = None;
         self.last_tick_error = None;
         self.diagnostics = diagnostics;
         // 让下一帧立刻重扫：编译期间改过的源码不能因为“刚好编完”被当成已编译。
         self.last_scan = None;
+        self.faulted = false;
         Ok(())
     }
 
@@ -690,10 +701,6 @@ fn stage_module(built: &Path) -> Result<PathBuf, String> {
     let staging = parent.join("staged");
     std::fs::create_dir_all(&staging)
         .map_err(|error| format!("create module staging dir failed: {error}"))?;
-    let extension = built
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or("so");
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
@@ -702,10 +709,51 @@ fn stage_module(built: &Path) -> Result<PathBuf, String> {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("project");
-    let staged = staging.join(format!("{stem}-{nanos}.{extension}"));
+    // 唯一性放在**目录**上，文件名必须保持原样：dbghelp 是按 PE 里记录的符号
+    // 文件名（`fishing.pdb`）去模块目录找的，不会从 `fishing-<nanos>.dll` 反推。
+    // 改名的 dll 会让工程帧的符号退化成导出名（`prism_project_get_api`），
+    // panic 调用栈就白抓了。
+    let unique = staging.join(format!("{stem}-{nanos}"));
+    std::fs::create_dir_all(&unique)
+        .map_err(|error| format!("create module staging dir failed: {error}"))?;
+    let Some(file_name) = built.file_name() else {
+        return Err(format!(
+            "project module path has no file name: {}",
+            built.display()
+        ));
+    };
+    let staged = unique.join(file_name);
     std::fs::copy(built, &staged)
         .map_err(|error| format!("copy project module failed: {error}"))?;
+
+    // 符号文件与 dll 同目录：缺了它工程帧只有地址。
+    let pdb = built.with_extension("pdb");
+    if pdb.is_file() {
+        if let Some(pdb_name) = pdb.file_name() {
+            if let Err(error) = std::fs::copy(&pdb, unique.join(pdb_name)) {
+                log::warn!("copy project module symbols failed (stack will lack frames): {error}");
+            }
+        }
+    } else {
+        log::debug!(
+            "project module has no .pdb ({}), stack frames will be addresses",
+            pdb.display()
+        );
+    }
     Ok(staged)
+}
+
+/// 删掉一次加载的暂存目录（dll + pdb）。模块 dll 必须已经 unload。
+fn remove_staged_file(staged: &Path) {
+    let Some(dir) = staged.parent() else {
+        return;
+    };
+    if let Err(error) = std::fs::remove_dir_all(dir) {
+        log::debug!(
+            "remove project module staging dir failed {}: {error}",
+            dir.display()
+        );
+    }
 }
 
 fn library_file_name(package: &str) -> String {

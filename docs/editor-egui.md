@@ -107,12 +107,30 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
 - 项目模块通过 `AssetIo` 读**项目自己的** `assets/`（不是仓库根的引擎资产）。
 - 输入：Play 时 Game view 把键鼠转发给引擎 `InputManager`，`InputSnapshot.keys`
   是**按住**语义（fishing 的 `input.key(SPACE)` 需要持续收线）。
-- 没有 `preview-module` feature 的项目（例如 `projects/fishing`）只跑引擎，并在
+- 没有 `preview-module` feature 的项目（任何还没改造的用户工程）只跑引擎，并在
   Console 说明原因；`PRISMREV_PROJECT_MODULE=/path/libgame.so` 可直接加载
   预构建模块（测试 / 非 Cargo 项目）。
-- `projects/prisma` 的 `preview-module` 必须显式打开 `prism-scene` 的三组组件
-  （3D / 2D / UI）：模块是独立 workspace，拿不到引擎侧的 feature 统一，少一组
-  就会在 `ProjectModule::load` 的 schema fingerprint 校验处被拒绝。
+- `projects/prisma` 与 `projects/fishing` 的 `preview-module` 必须显式打开
+  `prism-scene` 的三组组件（3D / 2D / UI）：模块是独立 workspace，拿不到引擎侧的
+  feature 统一，少一组就会在 `ProjectModule::load` 的 schema fingerprint 校验处被
+  拒绝。（实测踩过：`default-features = false` 的 `prism-scene` 只注册核心组件，
+  指纹 0x758a… vs 宿主 0x03b2…，加载直接失败。）
+- **符号文件跟着 dll 走**：构建产物复制成 `staged/<stem>-<nanos>/<原文件名>`，
+  `.pdb` 放在同一目录。唯一性只能放在**目录**上 —— dbghelp 是按 PE 里记录的
+  `fishing.pdb` 去模块目录找符号，把 dll 改名成 `fishing-<nanos>.dll` 会让调用栈里
+  工程帧全部退化成导出名（`prism_project_get_api`）。
+- **模块日志与 panic 要桥接**：模块是独立 dylib，自带一份 `log` 和 `std`，宿主的
+  logger / panic hook 都看不见它。工程在 `create` 里调用
+  `prism_game_api::install_host_logger(&host)` + `install_host_panic_hook()`，
+  之后 `log::info!` 与 `panicked at …` + `Backtrace` 都经 `HostApi::log` 进 Console
+  （target `project`，来源 `Game`）。panic 本身由 `prism_project_api::guard()` 在
+  ABI 边界兜住（不能跨 `extern "C"` unwind）。
+- **tick 失败会 latch**：模块返回错误（含 panic）后停止调用，直到重新编译 / 重新
+  加载。否则一个每帧 panic 的工程会 60 次/秒刷 stderr 并拖慢 GPU。
+- **Game view 的渲染默认值来自工程**：`EngineHost::new` 之后立刻用工程
+  `assets/settings.ini [render]` 覆盖（`apply_project_render_defaults`，与玩家启动
+  同一条 `AppConfig.render → RenderSettings`），渲染设置面板只作用于 Scene view ——
+  否则「编辑器里看到的」和「打包出来的」不是一张图。
 
 ## 4. 交互
 
@@ -200,7 +218,15 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
 
 控制通道（`src/control.rs`）：启动时在 `127.0.0.1:0` 上监听并把端口写进
 `<项目根>/target/editor-egui/control.port`，一行 JSON 一问一答：
-`ping` / `status` / `capture` / `ui.snapshot` / `ui.click` / `ui.set` / `quit`。请求经 `mpsc` 排进 UI 线程，所以截图和
+`ping` / `status` / `play` / `stop` / `pause` / `logs` / `input` / `capture` /
+`ui.snapshot` / `ui.click` / `ui.set` / `quit`。`logs` 读 Console 的同一份缓冲（`since`
+增量、`limit` 条数），自动化因此能拿到引擎日志、工程模块的 `project:` 日志和 panic 栈。
+
+`input` 给 Play 注入键鼠（`key=space` / `mouse=left` / `click=true`，`state=press|release`）。
+事件**每帧只消费一个**：`just_pressed` 只在这一帧的 tick 里可见，下一帧就会被
+`InputManager::begin_frame` 清掉，一次塞两个等于没按。fishing 的完整一竿就是这么跑的：
+`click` → `cast` → `bobber landed` → 等到 `bite!` → 再 `click` → `hook set` →
+`landed fish #1`，全流程只用控制通道，不需要窗口焦点。请求经 `mpsc` 排进 UI 线程，所以截图和
 界面状态是同一帧的；启动前三帧内的 `capture` 会延后到画面合成后再抓（否则是白图）。
 
 ## 5. 数据层
