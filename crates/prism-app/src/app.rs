@@ -153,6 +153,12 @@ pub struct App {
     audio_decode_tx: Option<flume::Sender<crate::audio_decode_runner::DecodeRequest>>,
     #[cfg(feature = "audio")]
     audio_decode_rx: Option<flume::Receiver<crate::audio_decode_runner::DecodeResult>>,
+    /// 场景音频驱动：把 ECS 的 `AudioSource` 接到混音器（#508）。
+    #[cfg(feature = "audio")]
+    scene_audio: crate::scene_audio::SceneAudio,
+    /// `SceneAudio` 声部 id → 真实播放句柄。
+    #[cfg(feature = "audio")]
+    audio_voices: crate::scene_audio::VoiceHandles,
 
     // ---------- 窗口大小调整 ----------
     needs_resize: bool,
@@ -297,6 +303,10 @@ impl App {
             audio_decode_tx: None,
             #[cfg(feature = "audio")]
             audio_decode_rx: None,
+            #[cfg(feature = "audio")]
+            scene_audio: crate::scene_audio::SceneAudio::new(),
+            #[cfg(feature = "audio")]
+            audio_voices: crate::scene_audio::VoiceHandles::default(),
             needs_resize: false,
             host_extent: None,
             host_surface: None,
@@ -1070,20 +1080,27 @@ impl App {
                     audio.update();
                 }
 
-                // 处理音频解码结果。
+                // 处理音频解码结果：交给场景音频缓存（不再自动播放，
+                // 播放由 `AudioSource` 组件决定）。
                 if let Some(rx) = self.audio_decode_rx.as_ref() {
                     while let Ok(result) = rx.try_recv() {
-                        match result {
-                            crate::audio_decode_runner::DecodeResult::Decoded { data, .. } => {
-                                if let Some(audio) = self.audio.as_mut() {
-                                    audio.play(&data);
-                                }
-                            }
-                            crate::audio_decode_runner::DecodeResult::Error { message, .. } => {
-                                log::warn!("Audio decode error: {message}");
-                            }
+                        if let crate::audio_decode_runner::DecodeResult::Error { message, .. } =
+                            &result
+                        {
+                            log::warn!("Audio decode error: {message}");
                         }
+                        self.scene_audio.receive(result);
                     }
+                }
+
+                // 场景音频：ECS `AudioSource` → 混音器（#508）。
+                if let Some(audio) = self.audio.as_mut() {
+                    let mut sink = (audio, &mut self.audio_voices);
+                    self.scene_audio.update(
+                        engine.world(),
+                        &mut sink,
+                        self.audio_decode_tx.as_ref(),
+                    );
                 }
             }
         } // engine 借用在此结束

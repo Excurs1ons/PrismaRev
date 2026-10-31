@@ -2,6 +2,15 @@
 //!
 //! 提供 [`AudioSource`] ECS 组件和 [`sync_audio_sources`] 函数，
 //! 每帧桥接 ECS 状态与 [`AudioEngine`]。
+//!
+//! # 状态：遗留代码路径
+//!
+//! 这里的 `AudioSource` **不是**场景组件（不进 `.scene.json` / RSCN），
+//! 也持有内联 PCM，作者没法在编辑器里写。场景音频请用
+//! `prism_engine::scene::components::AudioSource`（反射组件，按 `sound_path`
+//! 加载），由 `prism-app::scene_audio` 驱动混音器（#508）。
+//! [`sync_audio_sources`] 目前没有任何调用方；保留它是为了不破坏已有的
+//! 外部用法，新代码不要接这条路径。
 
 use prism_audio::{AudioData, AudioEngine, PlaybackHandle};
 use prism_ecs::World;

@@ -247,6 +247,8 @@ impl TypeSchema {
         let first = parts.next().unwrap_or("");
         if self.name.starts_with("prism_engine::ui") {
             "UI"
+        } else if self.name.starts_with("prism_engine::scene::Audio") {
+            "Audio"
         } else if first.contains("render") {
             "Rendering"
         } else {

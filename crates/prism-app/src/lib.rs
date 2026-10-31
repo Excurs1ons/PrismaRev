@@ -89,6 +89,8 @@ mod physics_runner;
 mod render_graph_report;
 mod render_runner;
 mod render_shared;
+#[cfg(feature = "audio")]
+pub mod scene_audio;
 mod screenshot;
 
 use prism_engine::config::AppConfig;

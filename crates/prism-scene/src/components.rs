@@ -10,6 +10,7 @@
 //! | 光源 | `Light`（形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
+//! | 音频     | `AudioSource`（场景内播放）, `AudioListener`（听者） |
 //! | 调试     | `Gizmo` |
 //! | 场景     | `SceneMember` |
 //! | 标识     | `Name` |
@@ -1148,6 +1149,97 @@ impl Default for Gizmo {
             scale: 1.0,
             mode: GizmoMode::Translate,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audio
+// ---------------------------------------------------------------------------
+
+/// 音频播放器 = `AudioSource`。
+///
+/// 只承载**作者态**参数：片段路径 + 播放/衰减设置。真正的解码与混音在宿主层
+/// （`prism-app::scene_audio`）：按路径从 `assets/` 取文件、后台线程解码、
+/// `AudioEngine::play`，与 `MeshRenderer` → `MeshRef` 的分层一致 —— 引擎/场景层
+/// 不持有任何音频句柄。
+///
+/// 空间化只做**距离衰减**：`spatial_blend = 0` 时按 2D 播放（不衰减），`= 1` 时
+/// 完全按 [`AudioSource::volume_at`] 衰减；声像（左右声道）还没做。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::AudioSource")]
+#[serde(default)]
+pub struct AudioSource {
+    /// 音频资源路径，相对 `assets/`（`.ogg` / `.wav` / `.mp3` / `.flac`）。
+    /// 空字符串 = 不播放。
+    pub sound_path: String,
+    /// 音量，`0.0..=1.0`（乘上距离衰减与监听者增益）。
+    pub volume: f32,
+    /// 循环播放：播完自动从头再来。
+    pub looped: bool,
+    /// 场景加载后自动播放；关掉后组件只是「装了个片段」，需要代码/编辑器手动触发。
+    pub play_on_awake: bool,
+    /// 3D 空间化程度：`0.0` = 纯 2D（不衰减），`1.0` = 完全按距离衰减。
+    pub spatial_blend: f32,
+    /// 开始衰减的近距离（世界单位）。
+    pub min_distance: f32,
+    /// 衰减到静止的远距离（世界单位）。
+    pub max_distance: f32,
+}
+
+impl Default for AudioSource {
+    fn default() -> Self {
+        Self {
+            sound_path: String::new(),
+            volume: 1.0,
+            looped: false,
+            play_on_awake: true,
+            spatial_blend: 0.0,
+            min_distance: 1.0,
+            max_distance: 50.0,
+        }
+    }
+}
+
+impl AudioSource {
+    /// 是否配置了片段（空路径 = 静默占位）。
+    pub fn has_sound(&self) -> bool {
+        !self.sound_path.is_empty()
+    }
+
+    /// 给定与监听者的距离时的**实际音量**（已含 `volume` 与 `spatial_blend`）。
+    ///
+    /// 曲线：`min_distance` 内为 1.0，之后线性衰减，`max_distance` 处为 0，
+    /// 再远保持 0。`spatial_blend` 把这条曲线与「2D 的 1.0」线性混合。
+    pub fn volume_at(&self, distance: f32) -> f32 {
+        let near = self.min_distance.max(0.0);
+        let far = self.max_distance.max(near);
+        let attenuation = if !distance.is_finite() || distance >= far {
+            0.0
+        } else if distance <= near || far <= near {
+            1.0
+        } else {
+            1.0 - (distance - near) / (far - near)
+        };
+        let blend = self.spatial_blend.clamp(0.0, 1.0);
+        self.volume.clamp(0.0, 1.0) * (1.0 - blend * (1.0 - attenuation))
+    }
+}
+
+/// 听者 = `AudioListener`。
+///
+/// 位置取实体的 `LocalToWorld`；场景里没有听者时宿主退回到「第一个相机实体」，
+/// 再没有就用世界原点。多个听者时只认第一个（同 `Skybox` 的约定）。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::AudioListener")]
+#[serde(default)]
+pub struct AudioListener {
+    /// 全局增益，`0.0..=1.0`（乘在每个 `AudioSource` 的音量上）。
+    pub gain: f32,
+}
+
+impl Default for AudioListener {
+    fn default() -> Self {
+        Self { gain: 1.0 }
     }
 }
 
