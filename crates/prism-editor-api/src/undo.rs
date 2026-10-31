@@ -1,9 +1,9 @@
-//! Unity `UnityEditor.Undo` 形状的门面。
+//! 编辑器门面。
 //!
 //! 编辑器的撤销/重做在前端按「字段」合并连续输入；这一层提供与之对应的
-//! **快照栈**，供宿主（Tauri 后端 / 未来的原生编辑器）以 Unity 的方式登记操作。
+//! **快照栈**，供宿主（Tauri 后端 / 未来的原生编辑器）以引擎的方式登记操作。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `Undo.RecordObject(obj, name)` | [`UndoStack::record_object`] |
 //! | `Undo.RegisterCreatedObjectUndo(obj, name)` | [`UndoStack::register_created_object_undo`] |
@@ -152,7 +152,7 @@ impl<T: Clone> UndoStack<T> {
 
     /// 合并最近的 `count` 步（`Undo.CollapseUndoOperations`）。`count < 2` 无操作。
     ///
-    /// 与 Unity 一致：先丢弃重做栈，再合并已应用的最后 `count` 步。
+    /// 先丢弃重做栈，再合并已应用的最后 `count` 步。
     pub fn collapse_undo_operations(&mut self, count: usize) {
         self.records.truncate(self.index);
         let count = count.min(self.index);

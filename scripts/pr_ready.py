@@ -12,8 +12,8 @@
   * 只对**改动过的 .rs 文件**跑 rustfmt（仓库既有 fmt 漂移不算在每个 PR 头上）；
   * 改动到的根 workspace crate：clippy --all-targets -D warnings + cargo test；
   * 改到 shader/reflection/bindings：在临时目录重跑 shader-bindgen，比对是否漂移；
-  * 改到 editor/：pnpm build；schema 变更时比对 fixture 的 schema/templates 是否过期；
-  * 改到 projects/*、launcher/、editor/src-tauri/：各自 cargo check（独立 workspace）；
+  * 改到 editor/：cargo test（独立 workspace，含数据层与 egui 壳）；
+  * 改到 projects/*、launcher/：各自 cargo check（独立 workspace）；
   * 拦截生成物 / 签名材料（.spv、.pak、keystore 等）和空白错误。
 
 stdout 只输出 Markdown；进度和失败详情走 stderr。任何检查失败 → 退出码 1。
@@ -422,94 +422,19 @@ def format_check(files: list[str], verbose: bool) -> Check:
     return check
 
 
-def editor_fixture_check(changed: list[str]) -> Check:
-    check = Check(
-        "editor fixture drift",
-        ["cargo", "run", "-q", "-p", "prism-editor-api", "--example", "dump_fixture"],
-    )
-    check.done = True
-    relevant = (
-        "crates/prism-scene/src/components.rs",
-        "crates/prism-scene/src/ui.rs",
-        "editor/public/demo.json",
-    )
-    if not (has_prefix(changed, "crates/prism-editor-api/") or any(p in changed for p in relevant)):
-        check.status = "skip"
-        check.detail = "schema untouched"
-        return check
-
-    eprint("→ editor fixture drift: regenerate and compare schema/templates")
-    code, out = run(
-        ["cargo", "run", "-q", "-p", "prism-editor-api", "--example", "dump_fixture"]
-    )
-    if code != 0:
-        check.status = "fail"
-        check.detail = "dump_fixture failed"
-        check.output = out
-        eprint("\n".join(out.rstrip().splitlines()[-25:]))
-        return check
-
-    import json
-
-    # 只比注册表派生的部分；assets/docs 依赖本地工作区（未提交场景、external 素材）。
-    keys = ("schema", "presets", "templatesByKind", "templateDocs")
-    try:
-        json_start = out.find("{")
-        json_end = out.rfind("}")
-        if json_start != -1 and json_end != -1:
-            out = out[json_start : json_end + 1]
-        fresh = json.loads(out)
-        committed = json.loads((ROOT / "editor" / "public" / "demo.json").read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        check.status = "fail"
-        check.detail = f"invalid fixture JSON: {exc}"
-        return check
-
-    stale = [key for key in keys if fresh.get(key) != committed.get(key)]
-    if stale:
-        check.status = "fail"
-        check.detail = f"stale: {', '.join(stale)} (run `cd editor && pnpm fixture`)"
-        eprint(f"  FAILED: {check.detail}")
-    else:
-        check.status = "ok"
-        check.detail = "schema/templates up to date"
-        eprint("  ok")
-    return check
-
-
-def editor_build_check(changed: list[str]) -> Check:
-    check = Check("editor build", ["pnpm", "build"], ROOT / "editor")
-    if not has_prefix(changed, "editor/"):
-        check.status = "skip"
-        check.detail = "editor untouched"
-        check.done = True
-        return check
-    if not (ROOT / "editor" / "node_modules").is_dir():
-        check.status = "skip"
-        check.detail = "node_modules missing: cd editor && pnpm install"
-        check.done = True
-        return check
-    if not shutil.which("pnpm"):
-        check.status = "skip"
-        check.detail = "pnpm not on PATH"
-        check.done = True
-        return check
-    return check
-
-
-def editor_egui_checks(changed: list[str], quick: bool) -> list[Check]:
-    """`editor-egui/` 是独立 workspace（egui + ash），只能在有 Vulkan 的桌面上运行。
+def editor_checks(changed: list[str], quick: bool) -> list[Check]:
+    """`editor/` 是独立 workspace（egui + ash），只能在有 Vulkan 的桌面上运行。
 
     Termux 上只做类型检查：它同时链接 `prism-render` / `prism-engine`，所以
     根 workspace 的渲染 / 引擎改动也要复查一遍编辑器。
     """
-    manifest = ROOT / "editor-egui" / "Cargo.toml"
+    manifest = ROOT / "editor" / "Cargo.toml"
     tests = Check(
-        "editor-egui tests",
+        "editor tests",
         ["cargo", "test", "--manifest-path", str(manifest)],
     )
     check = Check(
-        "editor-egui check",
+        "editor check",
         [
             "cargo",
             "check",
@@ -521,7 +446,7 @@ def editor_egui_checks(changed: list[str], quick: bool) -> list[Check]:
     )
 
     touched = (
-        has_prefix(changed, "editor-egui/")
+        has_prefix(changed, "editor/")
         or has_prefix(changed, "crates/prism-render/")
         or has_prefix(changed, "crates/prism-engine/")
         or has_prefix(changed, "crates/prism-scene/")
@@ -529,7 +454,7 @@ def editor_egui_checks(changed: list[str], quick: bool) -> list[Check]:
     if not touched:
         for item in (tests, check):
             item.status = "skip"
-            item.detail = "editor-egui untouched"
+            item.detail = "editor untouched"
             item.done = True
         return [tests, check]
 
@@ -613,17 +538,13 @@ def main() -> int:
     if args.all or any(path.endswith("Cargo.toml") for path in changed):
         checks.append(feature_matrix_check())
 
-    checks.extend(editor_egui_checks(changed, args.quick))
+    checks.extend(editor_checks(changed, args.quick))
 
     if not args.quick:
-        checks.append(editor_fixture_check(changed))
-        checks.append(editor_build_check(changed))
-
         standalone = [
             ("projects/prisma", "projects/prisma/"),
             ("projects/prisma-sponza", "projects/prisma-sponza/"),
             ("launcher", "launcher/"),
-            ("editor/src-tauri", "editor/src-tauri/"),
         ]
         for name, prefix in standalone:
             manifest = ROOT / name / "Cargo.toml"
@@ -648,9 +569,9 @@ def main() -> int:
     for check in checks:
         if check.name.startswith("test (") and check.status == "ok":
             check.detail = test_summary(check.output)
-        elif check.name == "editor-egui check" and check.status == "ok":
+        elif check.name == "editor check" and check.status == "ok":
             check.detail = "x86_64-pc-windows-gnu"
-        elif check.name == "editor-egui tests" and check.status == "ok":
+        elif check.name == "editor tests" and check.status == "ok":
             check.detail = test_summary(check.output)
 
         elif check.name.startswith("Lego 特性矩阵") and check.status == "ok":

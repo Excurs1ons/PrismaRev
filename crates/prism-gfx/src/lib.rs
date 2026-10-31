@@ -1,4 +1,4 @@
-//! 跨 crate 共享的渲染状态数据（`UnityEngine` / `UnityEngine.Rendering` 枚举的 Rust 镜像）。
+//! 跨 crate 共享的渲染状态数据（渲染状态枚举）。
 //!
 //! 这些类型同时被两侧使用：
 //! - `prism-scene`：作者格式（`.scene.json`）、反射 schema、RSCN 编码；
@@ -17,9 +17,9 @@
 use prism_reflect::{FieldType, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
-/// 相机清屏方式 = `UnityEngine.CameraClearFlags`。
+/// 相机清屏方式。
 ///
-/// 数值与 Unity 一致：`(int)Skybox == 1` … `(int)Nothing == 4`（Unity 的 `0` 是
+/// 数值固定：`(int)Skybox == 1` … `(int)Nothing == 4`（引擎的 `0` 是
 /// 未设置的非法值，这里用 [`Default`] 代替）。序列化形式是变体名
 /// （`"Skybox"` / `"SolidColor"` / `"Depth"` / `"Nothing"`），与 `.scene.json` 里
 /// 其它枚举（`TextAlign`）一致。
@@ -37,8 +37,8 @@ pub enum CameraClearFlags {
 }
 
 impl CameraClearFlags {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Skybox => 1,
             Self::SolidColor => 2,
@@ -47,8 +47,8 @@ impl CameraClearFlags {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             1 => Some(Self::Skybox),
             2 => Some(Self::SolidColor),
@@ -89,22 +89,22 @@ impl ReflectType for CameraClearFlags {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("CameraClearFlags 数值越界: {raw}")))?;
-        Self::from_unity_value(raw).ok_or_else(|| {
+        Self::from_ordinal_value(raw).ok_or_else(|| {
             ReflectError::BadData(format!("invalid CameraClearFlags discriminant {raw}"))
         })
     }
 }
 
-/// 光源类型 = `UnityEngine.LightType`（取值与 Unity 一致）。
+/// 光源类型（取值固定）。
 ///
-/// Unity 的 Inspector 只让选运行时支持的类型；这里保留完整枚举以便**无损**对照与
+/// 引擎的 Inspector 只让选运行时支持的类型；这里保留完整枚举以便**无损**对照与
 /// 迁移，但渲染器目前只实现 [`Spot`](Self::Spot) / [`Directional`](Self::Directional) /
 /// [`Point`](Self::Point)（见 [`LightType::is_rendered`]）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,7 +116,7 @@ pub enum LightType {
     /// 点光源（全向）。
     #[default]
     Point,
-    /// 矩形面光源 = Unity `LightType.Rectangle`（`Area` 的新名字）。
+    /// 矩形面光源 = `LightType.Rectangle`（`Area` 的新名字）。
     Rectangle,
     /// 圆形面光源。
     Disc,
@@ -129,8 +129,8 @@ pub enum LightType {
 }
 
 impl LightType {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Spot => 0,
             Self::Directional => 1,
@@ -143,8 +143,8 @@ impl LightType {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Spot),
             1 => Some(Self::Directional),
@@ -161,7 +161,7 @@ impl LightType {
     /// 当前渲染器是否真的会绘制该类型。
     ///
     /// 面光源 / 盒形 / 管状只是 schema 对齐，`collect_lights` 会跳过它们
-    /// （Unity 里这类光源也只用于烘焙或需要额外管线支持）。
+    /// （里这类光源也只用于烘焙或需要额外管线支持）。
     pub const fn is_rendered(self) -> bool {
         matches!(self, Self::Spot | Self::Directional | Self::Point)
     }
@@ -186,19 +186,19 @@ impl ReflectType for LightType {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("LightType 数值越界: {raw}")))?;
-        Self::from_unity_value(raw)
+        Self::from_ordinal_value(raw)
             .ok_or_else(|| ReflectError::BadData(format!("invalid LightType discriminant {raw}")))
     }
 }
 
-/// 阴影模式 = `UnityEngine.LightShadows`。
+/// 阴影模式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LightShadows {
     /// 不投阴影。
@@ -211,8 +211,8 @@ pub enum LightShadows {
 }
 
 impl LightShadows {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::None => 0,
             Self::Hard => 1,
@@ -220,8 +220,8 @@ impl LightShadows {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::None),
             1 => Some(Self::Hard),
@@ -246,20 +246,20 @@ impl ReflectType for LightShadows {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("LightShadows 数值越界: {raw}")))?;
-        Self::from_unity_value(raw).ok_or_else(|| {
+        Self::from_ordinal_value(raw).ok_or_else(|| {
             ReflectError::BadData(format!("invalid LightShadows discriminant {raw}"))
         })
     }
 }
 
-/// 光源渲染模式 = `UnityEngine.LightRenderMode`。
+/// 光源渲染模式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LightRenderMode {
     /// 由渲染器决定（逐像素还是逐顶点）。
@@ -272,8 +272,8 @@ pub enum LightRenderMode {
 }
 
 impl LightRenderMode {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Auto => 0,
             Self::ForcePixel => 1,
@@ -281,8 +281,8 @@ impl LightRenderMode {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Auto),
             1 => Some(Self::ForcePixel),
@@ -302,20 +302,20 @@ impl ReflectType for LightRenderMode {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("LightRenderMode 数值越界: {raw}")))?;
-        Self::from_unity_value(raw).ok_or_else(|| {
+        Self::from_ordinal_value(raw).ok_or_else(|| {
             ReflectError::BadData(format!("invalid LightRenderMode discriminant {raw}"))
         })
     }
 }
 
-/// 阴影投射模式 = `UnityEngine.Rendering.ShadowCastingMode`。
+/// 阴影投射模式。
 ///
 /// 挂在渲染器上（见 `prism_scene::components::MeshRenderer::shadow_casting_mode`），
 /// 决定该物体**主通道是否可见**以及**是否写阴影贴图**。
@@ -323,12 +323,12 @@ impl ReflectType for LightRenderMode {
 pub enum ShadowCastingMode {
     /// 不投影、正常渲染。
     Off,
-    /// 正常渲染 + 投影（默认，等价于 Unity 的 `On`）。
+    /// 正常渲染 + 投影（默认，等价于引擎的 `On`）。
     #[default]
     On,
     /// 双面投影 + 正常渲染。
     ///
-    /// 对应 Unity `ShadowCastingMode.TwoSided`：阴影渲染时**关闭背面剔除**
+    /// 对应 `ShadowCastingMode.TwoSided`：阴影渲染时**关闭背面剔除**
     /// （即使材质本身开启了背面剔除），因此单面几何体也会从两面投射阴影
     /// （见 [`casts_two_sided_shadows`](Self::casts_two_sided_shadows)）。
     TwoSided,
@@ -337,8 +337,8 @@ pub enum ShadowCastingMode {
 }
 
 impl ShadowCastingMode {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Off => 0,
             Self::On => 1,
@@ -347,8 +347,8 @@ impl ShadowCastingMode {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Off),
             1 => Some(Self::On),
@@ -368,9 +368,9 @@ impl ShadowCastingMode {
         !matches!(self, Self::ShadowsOnly)
     }
 
-    /// 阴影渲染是否关闭背面剔除（Unity `ShadowCastingMode.TwoSided`）。
+    /// 阴影渲染是否关闭背面剔除（`ShadowCastingMode.TwoSided`）。
     ///
-    /// Unity 文档：`TwoSided` 会在**阴影渲染时关闭背面剔除**，即使物体材质
+    /// 文档：`TwoSided` 会在**阴影渲染时关闭背面剔除**，即使物体材质
     /// 本身开了背面剔除。因此 `Off` / `On` / `ShadowsOnly` 走背面剔除
     /// （`false`），只有 `TwoSided` 双面投射（`true`）。只影响阴影通道，
     /// 不影响 [`visible_in_main_pass`](Self::visible_in_main_pass)。
@@ -389,20 +389,20 @@ impl ReflectType for ShadowCastingMode {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("ShadowCastingMode 数值越界: {raw}")))?;
-        Self::from_unity_value(raw).ok_or_else(|| {
+        Self::from_ordinal_value(raw).ok_or_else(|| {
             ReflectError::BadData(format!("invalid ShadowCastingMode discriminant {raw}"))
         })
     }
 }
 
-/// 剔除模式 = `UnityEngine.Rendering.CullMode`（取值与 Unity 一致）。
+/// 剔除模式（取值固定）。
 ///
 /// 默认 [`Back`](Self::Back)，与 `prism-render` 现有图形管线的
 /// `vk::CullModeFlags::BACK` 一致。真正翻译成 Vulkan 状态的是 `prism-render`。
@@ -418,8 +418,8 @@ pub enum CullMode {
 }
 
 impl CullMode {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Off => 0,
             Self::Front => 1,
@@ -427,8 +427,8 @@ impl CullMode {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Off),
             1 => Some(Self::Front),
@@ -453,22 +453,22 @@ impl ReflectType for CullMode {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("CullMode 数值越界: {raw}")))?;
-        Self::from_unity_value(raw)
+        Self::from_ordinal_value(raw)
             .ok_or_else(|| ReflectError::BadData(format!("invalid CullMode discriminant {raw}")))
     }
 }
 
-/// 深度/模板比较函数 = `UnityEngine.Rendering.CompareFunction`（取值与 Unity 一致）。
+/// 深度/模板比较函数（取值固定）。
 ///
-/// 默认 [`LessEqual`](Self::LessEqual)：Unity 着色器里 `ZTest` 的默认值。
-/// [`Disabled`](Self::Disabled) 对应 Unity 的“关闭深度测试”，Vulkan 没有对应的
+/// 默认 [`LessEqual`](Self::LessEqual)：着色器里 `ZTest` 的默认值。
+/// [`Disabled`](Self::Disabled) 对应引擎的“关闭深度测试”，Vulkan 没有对应的
 /// `vk::CompareOp`，由 `prism-render` 用它自己的深度测试开关
 /// （`depth_test_enable(false)`，即 `VK_FALSE`）表达，而不是拿某个比较运算去反转。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -495,8 +495,8 @@ pub enum CompareFunction {
 }
 
 impl CompareFunction {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Disabled => 0,
             Self::Never => 1,
@@ -510,8 +510,8 @@ impl CompareFunction {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Disabled),
             1 => Some(Self::Never),
@@ -552,22 +552,22 @@ impl ReflectType for CompareFunction {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("CompareFunction 数值越界: {raw}")))?;
-        Self::from_unity_value(raw).ok_or_else(|| {
+        Self::from_ordinal_value(raw).ok_or_else(|| {
             ReflectError::BadData(format!("invalid CompareFunction discriminant {raw}"))
         })
     }
 }
 
-/// 混合因子 = `UnityEngine.Rendering.BlendMode`（取值与 Unity 一致）。
+/// 混合因子（取值固定）。
 ///
-/// Unity 的混合状态是「源因子 × 目标因子 + 混合运算」，这个枚举描述
+/// 引擎的混合状态是「源因子 × 目标因子 + 混合运算」，这个枚举描述
 /// **因子**；混合运算见 [`BlendOp`]。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BlendMode {
@@ -597,8 +597,8 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Zero => 0,
             Self::One => 1,
@@ -614,8 +614,8 @@ impl BlendMode {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Zero),
             1 => Some(Self::One),
@@ -655,21 +655,21 @@ impl ReflectType for BlendMode {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("BlendMode 数值越界: {raw}")))?;
-        Self::from_unity_value(raw)
+        Self::from_ordinal_value(raw)
             .ok_or_else(|| ReflectError::BadData(format!("invalid BlendMode discriminant {raw}")))
     }
 }
 
-/// 混合运算 = `UnityEngine.Rendering.BlendOp`。
+/// 混合运算。
 ///
-/// 与 [`BlendMode`] 一起构成 Unity 材质的混合状态：
+/// 与 [`BlendMode`] 一起构成 材质的混合状态：
 /// `结果 = srcFactor × src op dstFactor × dst`。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BlendOp {
@@ -687,8 +687,8 @@ pub enum BlendOp {
 }
 
 impl BlendOp {
-    /// Unity 的枚举数值。
-    pub const fn unity_value(self) -> u32 {
+    /// 引擎的枚举数值。
+    pub const fn ordinal_value(self) -> u32 {
         match self {
             Self::Add => 0,
             Self::Subtract => 1,
@@ -698,8 +698,8 @@ impl BlendOp {
         }
     }
 
-    /// 从 Unity 枚举数值还原；未知值返回 `None`。
-    pub const fn from_unity_value(value: u32) -> Option<Self> {
+    /// 从枚举数值还原；未知值返回 `None`。
+    pub const fn from_ordinal_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Add),
             1 => Some(Self::Subtract),
@@ -721,21 +721,21 @@ impl ReflectType for BlendOp {
     }
 
     fn to_value(&self) -> Value {
-        Value::U64(u64::from(self.unity_value()))
+        Value::U64(u64::from(self.ordinal_value()))
     }
 
     fn from_value(value: Value) -> Result<Self, ReflectError> {
         let raw = value.as_u64()?;
         let raw = u32::try_from(raw)
             .map_err(|_| ReflectError::BadData(format!("BlendOp 数值越界: {raw}")))?;
-        Self::from_unity_value(raw)
+        Self::from_ordinal_value(raw)
             .ok_or_else(|| ReflectError::BadData(format!("invalid BlendOp discriminant {raw}")))
     }
 }
 
-/// 渲染队列 = `UnityEngine.Rendering.RenderQueue`。
+/// 渲染队列。
 ///
-/// **形状差异**：Unity 的 `RenderQueue` 是包裹一个 `int` 的 struct（不是枚举），
+/// **形状差异**：引擎的 `RenderQueue` 是包裹一个 `int` 的 struct（不是枚举），
 /// 具名队列只是 `static readonly int` 常量。这里保持同样的形状：i32 newtype +
 /// 关联常量，这样作者数据里的任意队列值都能无损读写。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -760,14 +760,14 @@ impl RenderQueue {
         Self(value)
     }
 
-    /// 队列数值（Unity 里的 `RenderQueue.value`）。
+    /// 队列数值（里的 `RenderQueue.value`）。
     pub const fn value(self) -> i32 {
         self.0
     }
 
     /// 是否属于不透明区间（`[0, GeometryLast]`）。
     ///
-    /// 负数虽然允许存在（存档里可以无损保存任意队列值），但不在 Unity 的不透明
+    /// 负数虽然允许存在（存档里可以无损保存任意队列值），但不在引擎的不透明
     /// 区间内，所以下界必须是 0。
     pub const fn is_opaque(self) -> bool {
         self.0 >= 0 && self.0 <= Self::GEOMETRY_LAST
@@ -802,11 +802,11 @@ impl ReflectType for RenderQueue {
     }
 }
 
-/// 色温（开尔文）→ 线性 RGB，对应 Unity `Mathf.CorrelatedColorTemperatureToRGB`。
+/// 色温（开尔文）→ 线性 RGB，对应 `Mathf.CorrelatedColorTemperatureToRGB`。
 ///
-/// Unity 的实现是 native 的；这里用常用的黑体辐射近似（Tanner Helland 的分段
+/// 引擎的实现是 native 的；这里用常用的黑体辐射近似（Tanner Helland 的分段
 /// 拟合），先按 sRGB 得到 0–1 分量、再转成线性空间，并裁到 `[1000, 40000]` K
-/// （与 Unity Inspector 的取值范围一致）。结果**不**做归一化：6500 K 接近
+/// （与 Inspector 的取值范围一致）。结果**不**做归一化：6500 K 接近
 /// `(1, 1, 1)`，色温只是乘到 `Light.color` 上的滤色片。
 pub fn correlated_color_temperature_to_rgb(kelvin: f32) -> glam::Vec3 {
     let kelvin = if kelvin.is_finite() {
@@ -818,7 +818,7 @@ pub fn correlated_color_temperature_to_rgb(kelvin: f32) -> glam::Vec3 {
 
     let srgb = |c: f32| {
         let c = c.clamp(0.0, 255.0) / 255.0;
-        // sRGB → 线性：Unity 的灯颜色在渲染里是线性空间。
+        // sRGB → 线性：引擎的灯颜色在渲染里是线性空间。
         if c <= 0.04045 {
             c / 12.92
         } else {
@@ -853,15 +853,15 @@ mod tests {
     use prism_reflect::ReflectType;
 
     #[test]
-    fn unity_values_match_unity_ordering() {
-        assert_eq!(CameraClearFlags::Skybox.unity_value(), 1);
-        assert_eq!(CameraClearFlags::SolidColor.unity_value(), 2);
-        assert_eq!(CameraClearFlags::Depth.unity_value(), 3);
-        assert_eq!(CameraClearFlags::Nothing.unity_value(), 4);
+    fn clear_flags_ordinals_match() {
+        assert_eq!(CameraClearFlags::Skybox.ordinal_value(), 1);
+        assert_eq!(CameraClearFlags::SolidColor.ordinal_value(), 2);
+        assert_eq!(CameraClearFlags::Depth.ordinal_value(), 3);
+        assert_eq!(CameraClearFlags::Nothing.ordinal_value(), 4);
     }
 
     #[test]
-    fn from_unity_value_round_trips_and_rejects_unknown() {
+    fn from_ordinal_value_round_trips_and_rejects_unknown() {
         for flags in [
             CameraClearFlags::Skybox,
             CameraClearFlags::SolidColor,
@@ -869,12 +869,12 @@ mod tests {
             CameraClearFlags::Nothing,
         ] {
             assert_eq!(
-                CameraClearFlags::from_unity_value(flags.unity_value()),
+                CameraClearFlags::from_ordinal_value(flags.ordinal_value()),
                 Some(flags)
             );
         }
-        assert_eq!(CameraClearFlags::from_unity_value(0), None);
-        assert_eq!(CameraClearFlags::from_unity_value(5), None);
+        assert_eq!(CameraClearFlags::from_ordinal_value(0), None);
+        assert_eq!(CameraClearFlags::from_ordinal_value(5), None);
     }
 
     #[test]
@@ -888,7 +888,7 @@ mod tests {
         assert!(CameraClearFlags::Depth.clears_depth());
         assert!(!CameraClearFlags::Nothing.clears_depth());
 
-        // 只有 Skybox 会绘制天空盒背景（Unity `Camera.clearFlags` 语义）。
+        // 只有 Skybox 会绘制天空盒背景（`Camera.clearFlags` 语义）。
         assert!(CameraClearFlags::Skybox.draws_skybox());
         assert!(!CameraClearFlags::SolidColor.draws_skybox());
         assert!(!CameraClearFlags::Depth.draws_skybox());
@@ -924,14 +924,14 @@ mod tests {
     }
 
     #[test]
-    fn light_type_matches_unity_ordering() {
-        // Unity: Spot=0, Directional=1, Point=2, Rectangle(Area)=3, Disc=4,
+    fn light_type_ordinals() {
+        // : Spot=0, Directional=1, Point=2, Rectangle(Area)=3, Disc=4,
         // Pyramid=5, Box=6, Tube=7。
-        assert_eq!(LightType::Spot.unity_value(), 0);
-        assert_eq!(LightType::Directional.unity_value(), 1);
-        assert_eq!(LightType::Point.unity_value(), 2);
-        assert_eq!(LightType::Rectangle.unity_value(), 3);
-        assert_eq!(LightType::Tube.unity_value(), 7);
+        assert_eq!(LightType::Spot.ordinal_value(), 0);
+        assert_eq!(LightType::Directional.ordinal_value(), 1);
+        assert_eq!(LightType::Point.ordinal_value(), 2);
+        assert_eq!(LightType::Rectangle.ordinal_value(), 3);
+        assert_eq!(LightType::Tube.ordinal_value(), 7);
 
         for ty in [
             LightType::Spot,
@@ -943,9 +943,9 @@ mod tests {
             LightType::Box,
             LightType::Tube,
         ] {
-            assert_eq!(LightType::from_unity_value(ty.unity_value()), Some(ty));
+            assert_eq!(LightType::from_ordinal_value(ty.ordinal_value()), Some(ty));
         }
-        assert_eq!(LightType::from_unity_value(8), None);
+        assert_eq!(LightType::from_ordinal_value(8), None);
         assert_eq!(LightType::default(), LightType::Point);
     }
 
@@ -962,19 +962,19 @@ mod tests {
     }
 
     #[test]
-    fn light_shadows_and_render_mode_match_unity() {
-        assert_eq!(LightShadows::None.unity_value(), 0);
-        assert_eq!(LightShadows::Hard.unity_value(), 1);
-        assert_eq!(LightShadows::Soft.unity_value(), 2);
+    fn light_shadows_and_render_mode_ordinals() {
+        assert_eq!(LightShadows::None.ordinal_value(), 0);
+        assert_eq!(LightShadows::Hard.ordinal_value(), 1);
+        assert_eq!(LightShadows::Soft.ordinal_value(), 2);
         assert!(!LightShadows::None.casts_shadows());
         assert!(LightShadows::Hard.casts_shadows());
         assert!(LightShadows::Soft.casts_shadows());
-        assert_eq!(LightShadows::from_unity_value(3), None);
+        assert_eq!(LightShadows::from_ordinal_value(3), None);
 
-        assert_eq!(LightRenderMode::Auto.unity_value(), 0);
-        assert_eq!(LightRenderMode::ForcePixel.unity_value(), 1);
-        assert_eq!(LightRenderMode::ForceVertex.unity_value(), 2);
-        assert_eq!(LightRenderMode::from_unity_value(3), None);
+        assert_eq!(LightRenderMode::Auto.ordinal_value(), 0);
+        assert_eq!(LightRenderMode::ForcePixel.ordinal_value(), 1);
+        assert_eq!(LightRenderMode::ForceVertex.ordinal_value(), 2);
+        assert_eq!(LightRenderMode::from_ordinal_value(3), None);
     }
 
     #[test]
@@ -1006,7 +1006,7 @@ mod tests {
     fn light_enums_reflect_round_trip_uses_u8() {
         // 反射用 u8 编码（与 `CameraClearFlags` 一致），这样不需要额外的类型表条目。
         for ty in [LightType::Spot, LightType::Directional, LightType::Point] {
-            assert_eq!(ty.to_value(), Value::U64(u64::from(ty.unity_value())));
+            assert_eq!(ty.to_value(), Value::U64(u64::from(ty.ordinal_value())));
             assert_eq!(LightType::from_value(ty.to_value()).unwrap(), ty);
         }
         assert_eq!(LightType::field_type(), FieldType::U8);
@@ -1016,12 +1016,12 @@ mod tests {
     }
 
     #[test]
-    fn shadow_casting_mode_matches_unity_and_predicates() {
-        assert_eq!(ShadowCastingMode::Off.unity_value(), 0);
-        assert_eq!(ShadowCastingMode::On.unity_value(), 1);
-        assert_eq!(ShadowCastingMode::TwoSided.unity_value(), 2);
-        assert_eq!(ShadowCastingMode::ShadowsOnly.unity_value(), 3);
-        assert_eq!(ShadowCastingMode::from_unity_value(4), None);
+    fn shadow_casting_mode_ordinals_and_predicates() {
+        assert_eq!(ShadowCastingMode::Off.ordinal_value(), 0);
+        assert_eq!(ShadowCastingMode::On.ordinal_value(), 1);
+        assert_eq!(ShadowCastingMode::TwoSided.ordinal_value(), 2);
+        assert_eq!(ShadowCastingMode::ShadowsOnly.ordinal_value(), 3);
+        assert_eq!(ShadowCastingMode::from_ordinal_value(4), None);
         assert_eq!(ShadowCastingMode::default(), ShadowCastingMode::On);
         assert_eq!(
             ShadowCastingMode::enum_variants().unwrap(),
@@ -1038,7 +1038,7 @@ mod tests {
         assert!(ShadowCastingMode::TwoSided.visible_in_main_pass());
         assert!(!ShadowCastingMode::ShadowsOnly.visible_in_main_pass());
 
-        // Unity：只有 `TwoSided` 在阴影通道关闭背面剔除。
+        // ：只有 `TwoSided` 在阴影通道关闭背面剔除。
         assert!(!ShadowCastingMode::Off.casts_two_sided_shadows());
         assert!(!ShadowCastingMode::On.casts_two_sided_shadows());
         assert!(ShadowCastingMode::TwoSided.casts_two_sided_shadows());
@@ -1084,12 +1084,12 @@ mod tests {
     }
 
     #[test]
-    fn cull_mode_matches_unity() {
-        // Unity: Off=0, Front=1, Back=2。
-        assert_eq!(CullMode::Off.unity_value(), 0);
-        assert_eq!(CullMode::Front.unity_value(), 1);
-        assert_eq!(CullMode::Back.unity_value(), 2);
-        assert_eq!(CullMode::from_unity_value(3), None);
+    fn cull_mode_ordinals() {
+        // : Off=0, Front=1, Back=2。
+        assert_eq!(CullMode::Off.ordinal_value(), 0);
+        assert_eq!(CullMode::Front.ordinal_value(), 1);
+        assert_eq!(CullMode::Back.ordinal_value(), 2);
+        assert_eq!(CullMode::from_ordinal_value(3), None);
         assert_eq!(CullMode::default(), CullMode::Back);
         assert_eq!(
             CullMode::enum_variants().unwrap(),
@@ -1111,8 +1111,8 @@ mod tests {
     }
 
     #[test]
-    fn compare_function_matches_unity() {
-        // Unity: Disabled=0 … Always=8。
+    fn compare_function_ordinals() {
+        // : Disabled=0 … Always=8。
         let all = [
             (CompareFunction::Disabled, 0),
             (CompareFunction::Never, 1),
@@ -1125,12 +1125,12 @@ mod tests {
             (CompareFunction::Always, 8),
         ];
         for (func, value) in all {
-            assert_eq!(func.unity_value(), value);
-            assert_eq!(CompareFunction::from_unity_value(value), Some(func));
+            assert_eq!(func.ordinal_value(), value);
+            assert_eq!(CompareFunction::from_ordinal_value(value), Some(func));
             assert_eq!(CompareFunction::from_value(func.to_value()).unwrap(), func);
         }
-        assert_eq!(CompareFunction::from_unity_value(9), None);
-        // Unity 着色器里 `ZTest` 的默认值是 LessEqual。
+        assert_eq!(CompareFunction::from_ordinal_value(9), None);
+        // 着色器里 `ZTest` 的默认值是 LessEqual。
         assert_eq!(CompareFunction::default(), CompareFunction::LessEqual);
         assert!(!CompareFunction::Disabled.is_enabled());
         assert!(CompareFunction::LessEqual.is_enabled());
@@ -1152,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn blend_mode_matches_unity() {
+    fn blend_mode_ordinals() {
         let all = [
             (BlendMode::Zero, 0),
             (BlendMode::One, 1),
@@ -1167,11 +1167,11 @@ mod tests {
             (BlendMode::OneMinusSrcAlpha, 10),
         ];
         for (mode, value) in all {
-            assert_eq!(mode.unity_value(), value);
-            assert_eq!(BlendMode::from_unity_value(value), Some(mode));
+            assert_eq!(mode.ordinal_value(), value);
+            assert_eq!(BlendMode::from_ordinal_value(value), Some(mode));
             assert_eq!(BlendMode::from_value(mode.to_value()).unwrap(), mode);
         }
-        assert_eq!(BlendMode::from_unity_value(11), None);
+        assert_eq!(BlendMode::from_ordinal_value(11), None);
         // 不透明混合 = One / Zero。
         assert_eq!(BlendMode::default(), BlendMode::One);
         assert_eq!(BlendMode::enum_variants().unwrap().len(), 11);
@@ -1180,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn blend_op_matches_unity() {
+    fn blend_op_ordinals() {
         let table = [
             (BlendOp::Add, 0),
             (BlendOp::Subtract, 1),
@@ -1189,14 +1189,14 @@ mod tests {
             (BlendOp::Max, 4),
         ];
         for (op, value) in table {
-            assert_eq!(op.unity_value(), value);
-            assert_eq!(BlendOp::from_unity_value(value), Some(op));
+            assert_eq!(op.ordinal_value(), value);
+            assert_eq!(BlendOp::from_ordinal_value(value), Some(op));
             assert_eq!(
                 BlendOp::from_value(Value::U64(u64::from(value))).unwrap(),
                 op
             );
         }
-        assert_eq!(BlendOp::from_unity_value(5), None);
+        assert_eq!(BlendOp::from_ordinal_value(5), None);
         assert_eq!(BlendOp::default(), BlendOp::Add);
         assert_eq!(BlendOp::enum_variants().unwrap().len(), 5);
         assert_eq!(BlendOp::enum_variants().unwrap()[2], "ReverseSubtract");
@@ -1204,7 +1204,7 @@ mod tests {
     }
 
     #[test]
-    fn render_queue_uses_unity_numeric_values() {
+    fn render_queue_numeric_values() {
         assert_eq!(RenderQueue::BACKGROUND, 1000);
         assert_eq!(RenderQueue::GEOMETRY, 2000);
         assert_eq!(RenderQueue::ALPHA_TEST, 2450);
@@ -1221,7 +1221,7 @@ mod tests {
         assert!(!RenderQueue::new(2501).is_opaque());
         assert!(RenderQueue::new(2501).is_transparent());
         assert!(RenderQueue::new(3000).is_transparent());
-        // 负数可以无损保存，但不属于 Unity 的不透明区间 `[0, GeometryLast]`。
+        // 负数可以无损保存，但不属于引擎的不透明区间 `[0, GeometryLast]`。
         assert!(!RenderQueue::new(-1).is_opaque());
         assert!(!RenderQueue::new(-1).is_transparent());
         assert!(!RenderQueue::new(-1000).is_opaque());

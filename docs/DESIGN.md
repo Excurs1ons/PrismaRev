@@ -588,7 +588,7 @@ pub struct SceneReadView<'a> {
 | crate | 角色 | 职责 | 主要依赖 |
 |-------|------|------|----------|
 | `prism-asset` | 运行时 | `AssetId`（64 bit gen+serial）、`AssetType`、`Handle<T>`、`.pak`（RPAK + zstd + xxh3）、`ResourceManager`（懒加载/预算/热重载）、streaming | serde, zstd, tokio（feature-gated） |
-| `prism-gfx` | 共享数据 | Unity 形状的渲染状态枚举（`CullMode`/`CompareFunction`/`BlendMode`/`RenderQueue`/`ShadowCastingMode`/光照与相机枚举）+ 反射编码；Vulkan-free、ECS-free | `prism-reflect`、serde、glam |
+| `prism-gfx` | 共享数据 | 形状的渲染状态枚举（`CullMode`/`CompareFunction`/`BlendMode`/`RenderQueue`/`ShadowCastingMode`/光照与相机枚举）+ 反射编码；Vulkan-free、ECS-free | `prism-reflect`、serde、glam |
 | `prism-scene` | schema | 场景/UI 组件、`ComponentRegistry`、`.scene.json` 作者格式、RSCN v4 编解码 | `prism-ecs`、`prism-reflect`、`prism-gfx`、serde |
 | `prism-cooker` | 构建期 | importer 框架、cooker 框架、CookProfile、资产数据库/导入缓存、`SceneCooker`、CLI `prism-cook` | `prism-asset`、`prism-scene`、image、gltf |
 | `prism-build-pipeline` | 编排 | `bake-gi`、`cook`、`heightmap` 等批处理入口；调用 cooker，不进入运行时 | `prism-cooker`、`prism-engine` |
@@ -982,8 +982,8 @@ id 的语义和编辑器的下标重映射**不能分开落地**：只要 `paren
 实现（三处，方言必须一致，改一处要同步另外两处）：
 
 - `crates/prism-engine/src/config/ini.rs` —— 引擎读取（`AppConfig::from_ini`）；
-- `crates/prism-editor-api/src/ini.rs` —— Web 编辑器的文档模型（保留未知段）；
-- `editor-gpui/crates/prism-editor-gpui-core/src/ini.rs` —— GPUI/egui 数据层（独立 workspace）。
+- `crates/prism-editor-api/src/ini.rs` —— MCP / 工具的文档模型（保留未知段）；
+- `editor/crates/prism-editor-gpui-core/src/ini.rs` —— 编辑器数据层（独立 workspace）。
 
 #### 加载顺序与迁移
 
@@ -993,7 +993,7 @@ id 的语义和编辑器的下标重映射**不能分开落地**：只要 `paren
 2. `assets/scenes.json` → 回退 `assets/scenes.toml`（同上；`.pak` 内的旧清单
    `scenes.toml` 同样可解析，所以旧场景包不会失效）。
 
-**写端只产出新格式**：Web 编辑器、GPUI/egui 编辑器、构建流水线都不再写 `.toml`。
+**写端只产出新格式**：编辑器与构建流水线都不再写 `.toml`。
 
 一次性迁移由 `prism-build-pipeline build-scenes` 完成：
 `migrate_legacy_config(assets/)` 在**新文件不存在**时把 `settings.toml` 重排成
@@ -1184,7 +1184,7 @@ profile、同一 target、同一条构建命令，差值只来自文本后端。
 | `release` | 编辑器 / 工具 / CI | `opt-level = 3`、`lto = "thin"`、`panic = unwind` |
 | `dist` | 玩家 / Android 打包 | `lto = "fat"`、`codegen-units = 1`、`panic = "abort"`、`strip = "symbols"` |
 
-`panic = "abort"` **不能**进 `release`：editor-egui 在进程内跑引擎，abort 会让整个编辑器
+`panic = "abort"` **不能**进 `release`：editor 在进程内跑引擎，abort 会让整个编辑器
 崩溃而不是让某个视口失败。用法：`cargo build --profile dist`（Android 打包脚本已切到它）。
 
 实测（`projects/prisma`，默认 feature，Termux aarch64）：

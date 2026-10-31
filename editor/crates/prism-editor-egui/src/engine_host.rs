@@ -1,0 +1,527 @@
+//! 编辑器内嵌的引擎实例（**零拷贝**宿主）。
+//!
+//! 与 `prism-app` 的 hosted 模式不同，这里**不建渲染线程**：
+//! 编辑器在 egui 的绘制线程上同步驱动 `Engine` + `GraphRenderer`，
+//! 渲染结果留在 `GraphRenderer` 自己的离屏图像里，随后把 `VkImageView`
+//! 交给 egui 采样（[`crate::viewport`]）。因此：
+//!
+//! - 只有一条队列、一个线程 → 不需要跨线程 semaphore / fence；
+//! - 没有 `vkCmdCopyImageToBuffer`，也没有 CPU 像素回读。
+//!
+//! 资产上传同样同步完成：`GpuAssetResolver::prepare_requests` →（渲染器）
+//! `apply_asset_requests` → `apply_results` 写回 ECS，原本分属两个线程的
+//! 两段在这里串起来。
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::Context as _;
+use glam::{Mat4, Quat, Vec3};
+use prism_engine::asset_resolver::GpuAssetResolver;
+use prism_engine::ecs::{Entity, World};
+use prism_engine::input::InputManager;
+use prism_engine::render_settings::RenderSettings;
+use prism_engine::render_system::{extract_frame_packet_into, FramePacket};
+use prism_engine::scene::components::{Camera, LocalToWorld, LocalTransform};
+use prism_engine::Engine;
+use prism_render::descriptor::FrameUBOData;
+use prism_render::{FrameInput, GraphRenderer, VulkanContext};
+
+/// 视口种类：Scene view 用编辑器轨道相机，Game view 用文档相机。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewKind {
+    Scene,
+    Game,
+}
+
+#[allow(dead_code)]
+impl ViewKind {
+    pub fn icon(self) -> &'static str {
+        match self {
+            ViewKind::Scene => "🎬",
+            ViewKind::Game => "🎮",
+        }
+    }
+}
+
+/// 一个视口背后的引擎实例。
+pub struct EngineHost {
+    kind: ViewKind,
+    engine: Engine,
+    asset_resolver: GpuAssetResolver,
+    renderer: GraphRenderer,
+    input: InputManager,
+    packet: FramePacket,
+    settings: RenderSettings,
+    /// `.scene.json` 文档顺序的实体表（= 层级 / 检查器下标）。
+    entities: Vec<Entity>,
+    editor_camera: Option<Entity>,
+    width: u32,
+    height: u32,
+    /// Scene view 的编辑器相机是否用场景天空盒当背景（引擎默认开）。
+    show_skybox: bool,
+    /// 下一次出帧后把离屏图像读回写到这个路径（编辑器截图）。
+    capture_path: Option<PathBuf>,
+    simulate: bool,
+    paused: bool,
+    step_pending: bool,
+    accumulator: Duration,
+    last_tick: Instant,
+    scene_loaded: bool,
+}
+
+#[allow(dead_code)]
+impl EngineHost {
+    pub fn new(
+        kind: ViewKind,
+        context: Arc<VulkanContext>,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<Self> {
+        let mut engine = Engine::empty();
+        engine.runtime_initialize();
+
+        let mut asset_resolver = GpuAssetResolver::new();
+        asset_resolver.load_resource_package();
+
+        let width = width.max(1);
+        let height = height.max(1);
+        let renderer = GraphRenderer::offscreen_new_with_context(context, width, height, None)
+            .context("create offscreen renderer")?;
+
+        Ok(Self {
+            kind,
+            engine,
+            asset_resolver,
+            renderer,
+            input: InputManager::new(),
+            packet: FramePacket::default(),
+            settings: RenderSettings::default(),
+            entities: Vec::new(),
+            editor_camera: None,
+            width,
+            height,
+            show_skybox: true,
+            capture_path: None,
+            simulate: false,
+            paused: false,
+            step_pending: false,
+            accumulator: Duration::ZERO,
+            last_tick: Instant::now(),
+            scene_loaded: false,
+        })
+    }
+
+    pub fn kind(&self) -> ViewKind {
+        self.kind
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.scene_loaded
+    }
+
+    pub fn input_mut(&mut self) -> &mut InputManager {
+        &mut self.input
+    }
+
+    pub fn world_mut(&mut self) -> &mut World {
+        self.engine.world_mut()
+    }
+
+    pub fn world(&self) -> &World {
+        self.engine.world()
+    }
+
+    pub fn entities(&self) -> &[Entity] {
+        &self.entities
+    }
+
+    pub fn renderer(&self) -> &GraphRenderer {
+        &self.renderer
+    }
+
+    pub fn settings_mut(&mut self) -> &mut RenderSettings {
+        &mut self.settings
+    }
+
+    /// 从 `.scene.json` 重建世界（与 Tauri / GPUI 编辑器同一条路径）。
+    pub fn load_scene(&mut self, path: &Path) -> Result<usize, String> {
+        // 旧世界的实体句柄全部失效，helper 实体要重新创建。
+        self.editor_camera = None;
+        self.engine = Engine::empty();
+        self.asset_resolver = GpuAssetResolver::new();
+        self.asset_resolver.load_resource_package();
+        let entities = self.engine.load_scene_json_file(path)?;
+        self.engine.runtime_initialize();
+        self.engine
+            .world_mut()
+            .insert_resource(prism_engine::ui::ScreenSize::new(self.width, self.height));
+
+        // 场景声明式光照：有环境贴图才卷积，否则沿用廉价空 IBL。
+        let env_bytes = self
+            .engine
+            .current_scene_env_bytes_with_provider(&mut self.asset_resolver.resource_manager);
+        if let Err(error) = self.renderer.set_environment(env_bytes) {
+            log::warn!("set scene environment failed: {error:#}");
+        }
+
+        let count = entities.len();
+        self.entities = entities;
+        self.scene_loaded = true;
+
+        // 加载器只保证根实体的 `LocalToWorld`；立刻传播一次，让相机 / 高亮
+        // 在第一帧就落在正确位置。
+        prism_engine::scene::systems::hierarchy::hierarchy_system(self.engine.world_mut());
+
+        self.ensure_helper_entities();
+        self.accumulator = Duration::ZERO;
+        self.last_tick = Instant::now();
+        Ok(count)
+    }
+
+    /// Scene view 的编辑器相机 + 背景策略。
+    ///
+    /// 引擎的 Scene view 默认把场景天空盒当背景（`SceneViewState.showSkybox`），
+    /// 所以这里的编辑器相机默认是 `Skybox` 而不是纯色。
+    fn editor_clear_flags(&self) -> prism_scene::CameraClearFlags {
+        if self.show_skybox {
+            prism_scene::CameraClearFlags::Skybox
+        } else {
+            prism_scene::CameraClearFlags::SolidColor
+        }
+    }
+
+    /// 切换 Scene view 背景（天空盒 / 纯色），立即作用到编辑器相机。
+    pub fn set_show_skybox(&mut self, on: bool) {
+        if self.show_skybox == on {
+            return;
+        }
+        self.show_skybox = on;
+        let Some(entity) = self.editor_camera else {
+            return;
+        };
+        let flags = self.editor_clear_flags();
+        if let Some(camera) = self.engine.world_mut().get_mut::<Camera>(entity) {
+            camera.clear_flags = flags;
+        }
+    }
+
+    /// 编辑器相机 + 选中标记（只在 Scene view 创建）。
+    fn ensure_helper_entities(&mut self) {
+        if self.kind == ViewKind::Scene {
+            if self.editor_camera.is_none() {
+                let camera = Camera {
+                    depth: 1000.0,
+                    far: 5000.0,
+                    aspect: self.width as f32 / self.height.max(1) as f32,
+                    clear_flags: self.editor_clear_flags(),
+                    background_color: [0.11, 0.12, 0.14, 1.0],
+                    ..Camera::default()
+                };
+                let world = self.engine.world_mut();
+                let entity = world.spawn();
+                world.insert(entity, camera);
+                world.insert(entity, LocalTransform::default());
+                world.insert(entity, LocalToWorld(Mat4::IDENTITY));
+                self.editor_camera = Some(entity);
+            }
+        }
+    }
+
+    /// 把轨道相机写进编辑器相机实体（Scene view 每帧调用）。
+    ///
+    /// 与 Tauri 编辑器一致：`LocalTransform` 与 `LocalToWorld` 同时写，
+    /// 因为 extract 只读 `LocalToWorld`，而相机实体没有父级、不参与传播。
+    pub fn place_editor_camera(&mut self, yaw: f32, pitch: f32, distance: f32, target: [f32; 3]) {
+        let Some(entity) = self.editor_camera else {
+            return;
+        };
+        let target = Vec3::from_array(target);
+        // Keep the rendered camera on the same orbit as `OrbitCamera::eye()`:
+        // yaw is world-Y, while positive pitch raises the eye toward +Y.
+        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
+        let eye = target + rotation * Vec3::new(0.0, 0.0, distance.max(0.05));
+        let forward = (target - eye).normalize_or_zero();
+        let look = if forward.length_squared() > 0.0 {
+            Quat::from_rotation_arc(Vec3::NEG_Z, forward)
+        } else {
+            Quat::IDENTITY
+        };
+
+        let world = self.engine.world_mut();
+        world.insert(
+            entity,
+            LocalTransform {
+                position: eye,
+                rotation: look,
+                scale: Vec3::ONE,
+            },
+        );
+        world.insert(
+            entity,
+            LocalToWorld(Mat4::from_rotation_translation(look, eye)),
+        );
+        if let Some(camera) = world.get_mut::<Camera>(entity) {
+            camera.aspect = self.width as f32 / self.height.max(1) as f32;
+        }
+    }
+
+    pub fn set_simulate(&mut self, simulate: bool) {
+        if self.simulate != simulate {
+            self.accumulator = Duration::ZERO;
+            self.last_tick = Instant::now();
+            self.paused = false;
+            self.step_pending = false;
+        }
+        self.simulate = simulate;
+    }
+
+    pub fn is_simulating(&self) -> bool {
+        self.simulate
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    pub fn step(&mut self) {
+        self.paused = true;
+        self.step_pending = true;
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+        let width = width.max(1);
+        let height = height.max(1);
+        if (width, height) == (self.width, self.height) {
+            return Ok(());
+        }
+        self.width = width;
+        self.height = height;
+        self.renderer.resize_offscreen(width, height)?;
+        if self.kind == ViewKind::Scene {
+            // 尺寸变化后编辑器相机的 aspect 要跟上。
+            if let Some(entity) = self.editor_camera {
+                if let Some(camera) = self.engine.world_mut().get_mut::<Camera>(entity) {
+                    camera.aspect = width as f32 / height as f32;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 推进模拟（Play）或只传播层级（编辑态），并把资产上传同步做完。
+    pub fn tick(&mut self) {
+        // ECS UI 布局依赖 `ScreenSize`；离屏宿主没有 winit 窗口，自己写。
+        self.engine
+            .world_mut()
+            .insert_resource(prism_engine::ui::ScreenSize::new(self.width, self.height));
+        let now = Instant::now();
+        let elapsed = now
+            .saturating_duration_since(self.last_tick)
+            .min(Duration::from_millis(100));
+        self.last_tick = now;
+
+        let mut run_fixed = 0u32;
+        if self.simulate && !self.paused {
+            self.accumulator += elapsed;
+            const FIXED_STEP: Duration = Duration::from_nanos(16_666_667);
+            while self.accumulator >= FIXED_STEP && run_fixed < 8 {
+                self.engine
+                    .fixed_update(FIXED_STEP.as_secs_f32(), &self.input);
+                self.accumulator -= FIXED_STEP;
+                run_fixed += 1;
+            }
+        }
+
+        if self.simulate && (!self.paused || self.step_pending) {
+            let dt = if self.step_pending {
+                xstep_dt()
+            } else {
+                elapsed.as_secs_f32()
+            };
+            self.step_pending = false;
+            self.engine.update(dt, &self.input);
+            self.engine.late_update();
+        } else {
+            // 编辑态（或暂停）：不跑游戏 system，只传播层级。
+            self.accumulator = Duration::ZERO;
+            prism_engine::scene::systems::hierarchy::hierarchy_system(self.engine.world_mut());
+        }
+
+        self.pump_assets();
+        self.input.begin_frame();
+    }
+
+    /// 资产解析：CPU 段 → GPU 上传 → 结果写回 ECS，全部同步。
+    fn pump_assets(&mut self) {
+        let requests = self
+            .asset_resolver
+            .prepare_requests(self.engine.world_mut());
+        if !requests.is_empty() {
+            let (entities, stripped): (Vec<Entity>, Vec<_>) = requests.into_iter().unzip();
+            let results = self.renderer.apply_asset_requests(stripped);
+            let paired: Vec<(Entity, _)> = entities.into_iter().zip(results).collect();
+            self.asset_resolver
+                .apply_results(self.engine.world_mut(), &paired);
+        }
+    }
+
+    /// 渲染一帧到离屏图像，并把图像转成可采样的
+    /// `SHADER_READ_ONLY_OPTIMAL`。返回 `(image_view, extent)`。
+    pub fn render(&mut self) -> anyhow::Result<Option<(ash::vk::ImageView, ash::vk::Extent2D)>> {
+        let aspect = self.width as f32 / self.height.max(1) as f32;
+        extract_frame_packet_into(
+            self.engine.world_mut(),
+            aspect,
+            &Mat4::IDENTITY,
+            &mut self.packet,
+        );
+        self.packet.settings = self.settings.clone();
+
+        let extent = self.renderer.extent();
+        let scene = &self.packet.scene;
+        let frame_data = FrameUBOData {
+            view_proj: scene.view_proj.to_cols_array_2d(),
+            camera_position: [
+                scene.eye.x,
+                scene.eye.y,
+                scene.eye.z,
+                scene.lights.len() as f32,
+            ],
+            light_direction: scene.light_direction.to_array(),
+            light_color: scene.light_color.to_array(),
+            view: scene.view.to_cols_array_2d(),
+            light_view_proj: scene.light_view_proj.to_cols_array_2d(),
+            tonemap_mode: self.settings.tonemap_mode,
+            viewport_size: [extent.width as f32, extent.height as f32],
+            exposure: scene.exposure,
+            shadow_strength: scene.shadow_strength,
+            _pad2: [0.0; 3],
+        };
+
+        let input = FrameInput {
+            draw_items: &self.packet.draw_items,
+            gizmos: &self.packet.gizmos,
+            sprite_items: &self.packet.sprite_items,
+            skybox: self.packet.skybox,
+            frame_data: &frame_data,
+            light_view_proj: scene.light_view_proj.to_cols_array_2d(),
+            inv_projection: scene.inv_projection.to_cols_array_2d(),
+            debug_flags: self.settings.debug_flags,
+            tonemap_mode: self.settings.tonemap_mode,
+            debug_rt: self.settings.debug_rt,
+            proj22: scene.proj22,
+            proj32: scene.proj32,
+            lights: &scene.lights,
+            render_mode: self.settings.render_mode,
+            pt_max_bounces: self.settings.pt_max_bounces,
+            pt_ray_max_distance: self.settings.pt_ray_max_distance,
+            pt_max_iterations: self.settings.pt_max_iterations,
+            exposure: scene.exposure,
+            pt_lights: &scene.pt_lights,
+            // 编辑器只在「有变化」时重绘，因此每次渲染都视为新的累积起点。
+            pt_accum_dirty: true,
+            has_camera: scene.has_camera,
+            camera_orthographic: scene.camera_orthographic,
+            clear_color: scene.clear_color,
+            shadows_enabled: scene.shadows_enabled,
+            ui_overlay: Some(&self.packet.ui_overlay),
+            show_grid: self.settings.show_grid,
+        };
+
+        let Some(ctx) = self.renderer.begin_frame()? else {
+            return Ok(None);
+        };
+        let result = self
+            .renderer
+            .prepare(&ctx, &input)
+            .and_then(|_| self.renderer.execute(&ctx, &input))
+            .and_then(|_| self.renderer.present(&ctx))
+            .and_then(|_| self.renderer.end_frame(&ctx, false));
+        if let Err(error) = result {
+            return Err(error);
+        }
+
+        // 截图要读 `PRESENT_SRC_KHR` 布局的图像，所以必须在转采样布局**之前**做。
+        if let Some(path) = self.capture_path.take() {
+            match self.capture_offscreen(&path) {
+                Ok(path) => log::info!("viewport capture: {}", path.display()),
+                Err(error) => log::warn!("viewport capture failed: {error:#}"),
+            }
+        }
+
+        // PRESENT_SRC_KHR → SHADER_READ_ONLY_OPTIMAL：egui 的采样描述符要求
+        // 后者，且这一步在同一个队列上完成，不需要额外 semaphore。
+        self.renderer.offscreen_present_for_sampling()?;
+
+        Ok(self
+            .renderer
+            .offscreen_image_view()
+            .map(|view| (view, extent)))
+    }
+
+    /// 请求**下一次出帧**时把离屏图像读回并写成 PNG（编辑器截图用）。
+    pub fn request_capture(&mut self, path: PathBuf) {
+        self.capture_path = Some(path);
+    }
+
+    /// 离屏图像 → host-visible 缓冲区 → RGBA8 → PNG。
+    fn capture_offscreen(&mut self, path: &Path) -> anyhow::Result<PathBuf> {
+        let extent = self
+            .renderer
+            .offscreen_extent()
+            .context("no offscreen target to capture")?;
+        self.renderer.copy_offscreen_to_readback()?;
+        let pixels = self.renderer.readback_pixels()?;
+        prism_render::screenshot::save_rgba_png(path, extent.width, extent.height, &pixels, None)
+    }
+
+    pub fn shutdown(&mut self) {
+        self.engine.pre_shutdown();
+        self.engine.post_shutdown();
+    }
+}
+
+/// 单步模拟使用的固定步长。
+fn xstep_dt() -> f32 {
+    1.0 / 60.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_kind_metadata_is_stable() {
+        assert_eq!(ViewKind::Scene.icon(), "🎬");
+        assert_eq!(ViewKind::Game.icon(), "🎮");
+        assert_ne!(ViewKind::Scene, ViewKind::Game);
+    }
+
+    #[test]
+    fn simulation_step_uses_fixed_sixtieth_second() {
+        assert!((xstep_dt() - 1.0 / 60.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn editor_camera_rotation_matches_orbit_camera_eye_convention() {
+        let yaw = 0.0;
+        let pitch = 0.0;
+        let distance = 12.0;
+        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
+        let eye_offset = rotation * Vec3::new(0.0, 0.0, distance);
+        let (sin_yaw, cos_yaw) = yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = pitch.sin_cos();
+        let expected = Vec3::new(
+            distance * cos_pitch * sin_yaw,
+            distance * sin_pitch,
+            distance * cos_pitch * cos_yaw,
+        );
+        assert!((eye_offset - expected).length() < 1e-5);
+    }
+}

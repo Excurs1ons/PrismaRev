@@ -118,7 +118,7 @@ pub fn ui_layout_system(world: &mut World) {
 
 /// 根据 Style 和父容器矩形计算屏幕空间矩形。
 ///
-/// 语义对齐 Unity 的 `anchorMin` / `anchorMax` + `pivot`：
+/// 语义对齐引擎的 `anchorMin` / `anchorMax` + `pivot`：
 /// - **拉伸轴**（`min != max`）：位置由锚点与边距决定，`pivot` **不参与**
 ///   （否则全屏根元素会得到负的原点）；
 /// - **点锚点轴**（`min == max`）：尺寸取 `width`/`height`，位置按 `pivot` 对齐。

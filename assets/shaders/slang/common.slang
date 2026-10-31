@@ -23,7 +23,7 @@ public struct FrameUBO
     public float    viewportW;       // offset 244 - scene colour viewport width, px
     public float    viewportH;       // offset 248 - scene colour viewport height, px
     public float    exposure;        // offset 252 (multiplies all light radiance pre-tonemap)
-    public float    shadowStrength;  // offset 256 (Unity Light.shadowStrength; 0 = no shadow)
+    public float    shadowStrength;      // offset 256 (Light.shadowStrength; 0 = no shadow)
     public float3   _pad2;           // offset 260..271 (std140 tail pad to 272)
 };
 

@@ -1,23 +1,18 @@
-# egui 编辑器（`editor-egui/`）
+# egui 编辑器（`editor/`）
 
-PrismaRev 的第三个编辑器壳，也是**当前主线**：`editor-gpui/` 已停止维护，
-Web 编辑器（`editor/`，Tauri + Vue）仍是内容与发布的参考实现。
+PrismaRev 的编辑器（egui + ash），当前也是唯一编辑器。
 
 设计目标只有两条：
 
-1. **布局和功能对齐 Unity / Web 编辑器**：菜单 + 工具栏 + 状态栏、split-tree
+1. **经典桌面编辑器布局**：菜单 + 工具栏 + 状态栏、split-tree
    docking、层级 / 检查器 / 资产 / 文档 / 日志 / 历史、预制体、撤销、项目读写。
 2. **Scene / Game 视图零拷贝**：引擎渲染的图像直接被 UI 采样，不经过 CPU。
 
 ## 1. 为什么 egui 能做到零拷贝
 
-GPUI 0.2.2 的公开 API 只有 CPU 像素（`RenderImage`）和 macOS 专用的
-`surface(CVPixelBuffer)`，也不暴露 `wgpu::Device`，所以只能回读或走原生 overlay
-（详见 `docs/editor-gpui.md` §9）。
-
 egui 不是渲染器：它只产出 UI 的 mesh + 纹理 id，Vulkan 设备、命令缓冲区、
 swapchain 都在宿主手里。`egui-ash` 的 `AppCreator::create` 要求宿主自己创建
-instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模型：
+instance / device 并返回 `AshRenderState`，因此可以做到引擎的模型：
 
 ```text
 同一个 VkDevice / VkQueue
@@ -84,13 +79,12 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 ## 4. 交互
 
 - 轨道：左键/右键拖拽 → `OrbitCamera::orbit`；滚轮 → `zoom`；
-- 点选：屏幕坐标 → 射线 → 与文档实体的单位立方体代理求交（与 GPUI / Tauri
-  编辑器同一套 `viewport_math`，索引即 `.scene.json` 的 `entities[i]`）；
+- 点选：屏幕坐标 → 射线 → 与文档实体的单位立方体代理求交（与引擎同一套 `viewport_math`，索引即 `.scene.json` 的 `entities[i]`）；
 - 平移 gizmo：`pick_gizmo_axis` 命中轴后，按「屏幕位移 · 轴屏幕方向 / 每世界
   单位像素」换算世界位移，交给 `Workspace::translate_entity_world`；
 - 选中高亮复用引擎的 `Gizmo` 组件（世界三色轴箭头），不引入新的渲染概念。
 - 工具：`W` / `E` / `R` 切换移动 / 旋转 / 缩放 gizmo，`X` 切世界/局部，`G` 开关网格；
-  `S` 开关 Scene view 背景（场景天空盒 / 纯色，与 Unity 的
+  `S` 开关 Scene view 背景（场景天空盒 / 纯色，与引擎的
   `SceneViewState.showSkybox` 同语义，默认开）；
   旋转走 `pick_rotation_axis` + `screen_angle`，缩放走 `set_scale_axis`。
 - 空白拖拽 = 框选（`box_select`），`Alt`+拖 / 右键拖 = 轨道，双击 = 聚焦选中项。
@@ -99,12 +93,12 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 
 `logging.rs` 把 `env_logger` 包一层 tee：同一条 `log` 记录既进终端（`RUST_LOG`
 语义不变），也进 `prism-editor-core` 的 `LogBuffer`，所以 Console 面板能看到
-视口里 `prism_render` / `prism_engine` 的警告（与 Tauri 编辑器的 `EditorLogger`
+视口里 `prism_render` / `prism_engine` 的警告（与引擎日志
 是同一思路）。`Trace` 不转发，避免淹没窗口。
 
-## 4.2 菜单（Unity 结构）
+## 4.2 菜单（结构）
 
-菜单按 Unity 的分组组织，二 / 三级菜单里都是真实命令：
+菜单按引擎的分组组织，二 / 三级菜单里都是真实命令：
 
 | 菜单 | 二级 / 三级 |
 |---|---|
@@ -119,7 +113,7 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 `Build*` / `Cook Active Scene` / `Clean Build` 通过子进程调用 `prism-build-pipeline`
 或 `cargo`（编辑器仍然不链接 cooker），输出进 Console。
 
-快捷键（Unity 习惯）：`Ctrl+1..5` = Scene / Game / Inspector / Hierarchy / Project，
+快捷键（常用习惯）：`Ctrl+1..5` = Scene / Game / Inspector / Hierarchy / Project，
 `Ctrl+Shift+C` = Console，`Ctrl+B` = Build And Run，`Ctrl+I` = 反选，
 `W/E/R` = 移动 / 旋转 / 缩放，`X` 世界/局部，`G` 网格，`S` 天空盒，`F` 框住全部，`Del` 删除。
 
@@ -127,18 +121,18 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 可以整份导出/导入成 JSON 文件（与 Web 的 `prisma-editor.dock.v4` 同形）。
 
 `Create → Prefab Variant…`：把选中实例用 `extract_subtree_preserving_links` 存成
-「继承 base + 覆盖」的预制体文件，再把场景里的这个实例改指向新变体（Unity 行为）。
+「继承 base + 覆盖」的预制体文件，再把场景里的这个实例改指向新变体（行为）。
 
 ## 4.3 面板能力
 
-- **层级**：搜索、Unity 式拖拽（上/下 25% 插入、中间挂成子级）、就地重命名（双击）、
+- **层级**：搜索、引擎式拖拽（上/下 25% 插入、中间挂成子级）、就地重命名（双击）、
   显隐、复制 / 删除 / 改父级、Create 下拉；
 - **检查器**：单选 + 多选（公共组件批量改字段，一次撤销）；预制体区块（Revert /
   Sync All / Save as Prefab…）；组件卡头的复制 / 移除；Add Component 分类菜单；
 - **Project（资产）**：后退 / 前进 / 面包屑、目录浏览、类型过滤、搜索、重命名 /
   复制 / 删除 / 复制路径 / 实例化预制体；**资产可拖拽**：拖到目录 = 移动并改写引用，
   拖到层级实体 = 实例化预制体，拖到检查器的路径字段 = 直接写入路径（`AssetDrag` 载荷）。
-- **Docking**：拖动标签页（Unity 行为）：拖到另一个 leaf 的左/右/上/下 25% = 分屏，
+- **Docking**：拖动标签页（行为）：拖到另一个 leaf 的左/右/上/下 25% = 分屏，
   中间 = 合并成标签，拖出面板区 = 浮动窗口，拖到本 leaf 边缘 = 原地分屏。
 - **预制体**：实例区块有 Revert / Sync All / **Apply to Prefab**（当前子树覆盖预制体
   文件，再同步同源实例）/ Save as Prefab…（无链接时）。
@@ -153,7 +147,7 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 
 ## 4.4 内置截图与控制通道
 
-截图在编辑器进程里做（`editor-egui/crates/prism-editor-egui/src/screenshot.rs`）：
+截图在编辑器进程里做（`editor/crates/prism-editor-egui/src/screenshot.rs`）：
 
 | target | 取法 | 说明 |
 |---|---|---|
@@ -168,17 +162,11 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 `ping` / `status` / `capture` / `ui.snapshot` / `ui.click` / `ui.set` / `quit`。请求经 `mpsc` 排进 UI 线程，所以截图和
 界面状态是同一帧的；启动前三帧内的 `capture` 会延后到画面合成后再抓（否则是白图）。
 
-## 5. 与另外两个编辑器的关系
+## 5. 数据层
 
-| | Web（`editor/`） | GPUI（`editor-gpui/`） | egui（`editor-egui/`） |
-|---|---|---|---|
-| 状态 | 内容参考 / 发布 | 停止维护 | 主线 |
-| 数据层 | Rust + TS 各一份 | `prism-editor-gpui-core` | 复用 `prism-editor-gpui-core` |
-| 视口 | 进程内引擎 + CPU 通道 | CPU 回读（可选原生 surface） | **零拷贝（同设备纹理）** |
-
-`prism-editor-gpui-core` 只是历史命名，它不依赖 GPUI；egui 编辑器通过路径依赖
-直接使用它。将来如果 GPUI 目录整体删除，把该 crate 改名 / 迁到
-`crates/prism-editor-core` 即可（`editor-egui` 里只有一处 `package = ...` 需要改）。
+`editor/crates/prism-editor-gpui-core` 是与 UI 框架无关的数据层（历史包名，不依赖
+GPUI）：文档模型、schema、撤销栈、dock 树、日志缓冲、资产树、i18n、项目读写。
+egui 壳通过路径依赖直接使用它；将来可以改名为 `prism-editor-core`。
 
 ## 6. 未完成 / 风险
 
@@ -192,7 +180,7 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
   `prism-engine` 的资产解析器短路，不读 `.pak`、不需要 cook。对应的实体预设
   （`cube / sphere / cylinder / capsule / quad / plane`）在 `prism-editor-api`
   的 `entity_presets()` 里，GameObject → Create Other → 3D Object 直接用。
-  尺寸与 Unity 一致：box/sphere/cylinder 1 单位，capsule 总高 2（半径 0.5），
+  尺寸固定：box/sphere/cylinder 1 单位，capsule 总高 2（半径 0.5），
   quad/plane 是 `y = 0` 上的 1×1 XZ 面、法线 +Y。
 - **性能**：每次文档变化都会整场重载两个引擎实例（防抖 120ms），大场景下偏重；
   后续可以改成「只重建变化的实体」或引入 delta 上传。

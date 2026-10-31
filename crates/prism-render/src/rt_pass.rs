@@ -1,6 +1,6 @@
 //! RenderTexture 消费端示例 pass：全屏采样（bindless）→ swapchain。
 //!
-//! 演示 Unity 式 RT 消费：从 [`crate::rt_scheduler::RT_OUTPUT_H`] 拿调度器
+//! 演示引擎式 RT 消费：从 [`crate::rt_scheduler::RT_OUTPUT_H`] 拿调度器
 //! 发布的 bindless 槽位塞进 push constant，shader 从 `bindlessSrvs[]` 直接
 //! 采样 —— 与采样普通纹理无差别。RT 由 [`crate::rt_scheduler::RenderTextureScheduler`]
 //! 统一渲染，本 pass 只读不写，与 scene 零耦合。

@@ -191,7 +191,7 @@ compile_stage rt_render fragmentMain fragment
 emit_reflection rt_render vertexMain vertex fragmentMain fragment
 
 # rt_preview: vertex + fragment — fullscreen consumer that samples the
-# RenderTexture through the bindless SRV table (Unity-style RT usage).
+# RenderTexture through the bindless SRV table (经典 RT usage).
 compile_stage rt_preview vertexMain vertex
 compile_stage rt_preview fragmentMain fragment
 emit_reflection rt_preview vertexMain vertex fragmentMain fragment

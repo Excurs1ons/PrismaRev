@@ -261,7 +261,7 @@ float sample_shadow(float3 world_pos, float3 n)
             sum += shadowMap.SampleCmpLevelZero(shadowSampler, uv + offset, depth);
         }
     }
-    // Unity `Light.shadowStrength`: 0 = fully lit, 1 = full shadow.
+    // `Light.shadowStrength`: 0 = fully lit, 1 = full shadow.
     // (`lerp` 在 0 时直接返回 1.0，所以 shadows = None 的灯不会留下脏阴影。)
     return lerp(1.0, sum / 9.0, saturate(frame.shadowStrength));
 }
@@ -310,7 +310,7 @@ float3 eval_point_lights(float3 n, float3 v, float3 world_pos, float3 albedo,
 
         // Spot cone: smooth falloff between the inner and outer half angles.
         // `l` points surface -> light, so `-l` is the light -> surface direction
-        // we compare against the light's forward axis (Unity `transform.forward`).
+        // we compare against the light's forward axis (`transform.forward`).
         if (L.color.w > 0.5)
         {
             float cos_angle = dot(-l, normalize(L.direction.xyz));

@@ -118,7 +118,7 @@ pub fn build_scene_package(
     // 运行时期望的 RTEX 格式烘进包内，否则精灵永远解析不到贴图。
     stage_sprite_assets(asset_root, staging, &manifest)?;
     // 运行时生成的精灵（背景层、鱼、特效）不在场景 JSON 里，所以整个
-    // `sprites/` 目录都要烘进包内——和 Unity 的「Assets 目录即内容」一致。
+    // `sprites/` 目录都要烘进包内——和引擎的「Assets 目录即内容」一致。
     stage_sprite_folder(asset_root, staging)?;
 
     // Runtime always looks up the manifest as `scenes.json` inside the package.

@@ -95,7 +95,7 @@ impl RenderConfig {
 }
 
 // ---------------------------------------------------------------------------
-// App identity (company name, app name — like Unity's PlayerSettings)
+// App identity (company name, app name — like 's PlayerSettings)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
@@ -423,7 +423,7 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// App data directory (like Unity's Application.persistentDataPath)
+// App data directory (like 's Application.persistentDataPath)
 // ---------------------------------------------------------------------------
 
 /// Returns the platform-specific data directory for the application

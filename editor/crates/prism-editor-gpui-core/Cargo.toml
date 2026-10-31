@@ -1,0 +1,11 @@
+[package]
+name = "prism-editor-gpui-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PrismaRev 编辑器的数据层：dock 布局树、场景文档、schema、撤销栈、主题、日志"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

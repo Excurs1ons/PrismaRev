@@ -64,12 +64,12 @@ pub struct SceneChanges {
     /// 清屏方式 = 活动相机的 `Camera.clear_flags`（无相机时为 `Skybox`）。
     /// 只有 `Skybox` 会绘制天空盒背景，见 [`CameraClearFlags::draws_skybox`]。
     pub clear_flags: CameraClearFlags,
-    /// 主方向光是否投阴影 = Unity `Light.shadows != None`。
+    /// 主方向光是否投阴影 = `Light.shadows != None`。
     ///
     /// 为 `false` 时整帧跳过阴影贴图渲染（`ShadowMode::None`），
     /// 着色器也会因为 `shadow_strength = 0` 得到全亮结果。
     pub shadows_enabled: bool,
-    /// 阴影强度 = Unity `Light.shadowStrength`（0..=1，已 clamp）。
+    /// 阴影强度 = `Light.shadowStrength`（0..=1，已 clamp）。
     pub shadow_strength: f32,
 }
 
@@ -113,12 +113,12 @@ pub fn extract_frame_packet_into(
 
     // 2. Build the flat draw list and ECS-authored render helpers.
     let scene_view = scene::SceneReadView::new(world);
-    // Unity 的 `renderQueue` 顺序：不透明段按队列升序，透明段按距离从远到近。
+    // 引擎的 `renderQueue` 顺序：不透明段按队列升序，透明段按距离从远到近。
     // 排序必须在提交给渲染器之前完成（`ForwardPass` 只按列表顺序绘制）。
     scene_view.draw_items_into(&mut packet.draw_items);
     prism_render::sort_draw_items(&mut packet.draw_items, packet.scene.eye.to_array());
     scene_view.gizmo_instances_into(&mut packet.gizmos);
-    // Unity 只有 `clearFlags == Skybox` 时才绘制天空盒：其余清屏方式（纯色 /
+    // 只有 `clearFlags == Skybox` 时才绘制天空盒：其余清屏方式（纯色 /
     // 只清深度 / 不清）即使场景里有启用的 `Skybox` 实体也不画。`ForwardPass`
     // 对 `None` 直接跳过天空盒绘制，所以这里就是它的开关。
     packet.skybox = if packet.scene.clear_flags.draws_skybox() {
@@ -248,7 +248,7 @@ fn collect_scene_changes_into(
         .and_then(|entity| world.get::<Camera>(entity))
         .map(|cam| cam.orthographic)
         .unwrap_or(false);
-    // 2. 光源 —— 统一 `Light`（Unity 形状）与旧三组件归一成 `LightSample`。
+    // 2. 光源 —— 统一 `Light`（形状）与旧三组件归一成 `LightSample`。
     let samples = scene::systems::lights::collect_light_samples(world);
     let dir_light = samples
         .iter()
@@ -324,11 +324,11 @@ fn collect_scene_changes_into(
     // 5. Light-space view-projection (shadow 映射表
     let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
 
-    // 6. 清屏色 —— 与取景来自**同一台**相机（Unity `Camera.backgroundColor`）。
+    // 6. 清屏色 —— 与取景来自**同一台**相机（`Camera.backgroundColor`）。
     let clear_color = camera_entity
         .map(|entity| scene::systems::camera::clear_color(world, entity))
         .unwrap_or(scene::systems::camera::DEFAULT_CLEAR_COLOR);
-    // 清屏方式也来自同一台相机（Unity `Camera.clearFlags`）。
+    // 清屏方式也来自同一台相机（`Camera.clearFlags`）。
     let clear_flags = camera_entity
         .map(|entity| scene::systems::camera::clear_flags(world, entity))
         .unwrap_or_default();
@@ -522,7 +522,7 @@ pub fn dir_to_euler_xyz_deg(d: Vec3) -> Vec3 {
 // 矩阵 helpers
 // ---------------------------------------------------------------------------
 
-/// 方向光从「光传播方向」（Unity `transform.forward`）转换为
+/// 方向光从「光传播方向」（`transform.forward`）转换为
 /// `FrameUBO.lightDirection` 的「指向光源」约定（见 `common.slang`）。
 ///
 /// `LightSample.direction` 与光学的 `transform.forward` 一致；着色器和阴影相机都要求
@@ -660,7 +660,7 @@ mod tests {
         assert!(!fallback.camera_orthographic);
     }
 
-    /// Unity 语义：只有 `clearFlags == Skybox` 才会绘制天空盒背景。
+    /// 统一语义：只有 `clearFlags == Skybox` 才会绘制天空盒背景。
     ///
     /// 场景里放一个启用的 `Skybox` 实体，逐一切换相机的清屏方式；只有 `Skybox`
     /// 时 `FramePacket.skybox` 才是 `Some`，其余都应是 `None`（`ForwardPass`

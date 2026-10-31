@@ -49,7 +49,7 @@ pub struct EntityJson {
 /// 里的组件。
 ///
 /// - `LocalTransform`：loader / cooker 从 [`EntityJson::transform`] bake 出来。
-///   作者侧只有这一个“不可移除的 Transform”（对齐 Unity 的作者态），
+///   作者侧只有这一个“不可移除的 Transform”（对齐引擎的作者态），
 ///   `LocalTransform` 本身只属于运行时。允许两条路同时写会制造静默错位：
 ///   两个 loader 都是「先插 `LocalTransform` + 按它算出 `LocalToWorld`，
 ///   再 apply `components`」，于是组件载荷会覆盖 `LocalTransform`
@@ -64,7 +64,7 @@ pub const DERIVED_COMPONENTS: &[&str] = &[
 
 /// 作者格式的局部变换。
 ///
-/// 字段名对齐 Unity DOTS `LocalTransform`（`Position` / `Rotation` / `Scale`），
+/// 字段名对齐 数据导向 `LocalTransform`（`Position` / `Rotation` / `Scale`），
 /// 但它是**结构字段**而不是组件——见 [`DERIVED_COMPONENTS`]。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformJson {

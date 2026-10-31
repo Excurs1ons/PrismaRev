@@ -32,7 +32,7 @@ pub struct FieldSchema {
     pub variants: Option<Vec<String>>,
     /// 编辑器只读（`#[reflect(read_only)]`）。
     pub read_only: bool,
-    /// 字段绘制器 = Unity `PropertyDrawer`（`[Range]` / `[TextArea]` /
+    /// 字段绘制器 = `PropertyDrawer`（`[Range]` / `[TextArea]` /
     /// `[ColorUsage]` / `[CustomPropertyDrawer]`）。缺省（不序列化）时前端按
     /// `kind` 选默认控件。见 [`crate::property_drawer`]。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(rect.inner.as_ref().unwrap().kind, "f32");
     }
 
-    // —— 字段绘制器（Unity `PropertyDrawer` / `PropertyAttribute`） ——
+    // —— 字段绘制器（`PropertyDrawer` / `PropertyAttribute`） ——
 
     #[test]
     fn builtin_drawers_reach_editor_fields() {
@@ -498,7 +498,7 @@ mod tests {
             .expect("exposure drawer");
         assert_eq!(exposure.range_bounds(), Some((0.0, 5.0)));
 
-        // 类型级绘制器（Unity `[CustomPropertyDrawer(typeof(Anchors))]`）：
+        // 类型级绘制器（`[CustomPropertyDrawer(typeof(Anchors))]`）：
         // 凡是值类型为 `prism_engine::ui::Anchors` 的字段（如 `Style.anchors`）都获得该绘制器。
         drawers.register_type(
             "prism_engine::ui::Anchors",

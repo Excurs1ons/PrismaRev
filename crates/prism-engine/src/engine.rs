@@ -337,7 +337,7 @@ impl Engine {
 
     /// Fixed‑timestep 更新 physics, 确定性 simulation.
     ///
-    /// Unity `FixedUpdate()` · UE sub‑stepped tick.
+    /// `FixedUpdate()` · UE sub‑stepped tick.
     pub fn fixed_update(&mut self, fixed_dt: f32, input_manager: &InputManager) {
         // Camera/input is variable-rate and is updated exactly once in
         // `update`. Running it here as well double-consumed mouse deltas.
@@ -346,7 +346,7 @@ impl Engine {
 
     /// Variable‑timestep per‑frame 更新 game 逻辑 相机 输入
     ///
-    /// Unity 更新 · UE `Tick()`.
+    /// 更新 · UE `Tick()`.
     pub fn update(&mut self, dt: f32, input_manager: &InputManager) {
         let look_active = input_manager.pointer_locked;
         crate::scene::systems::camera::camera_controller_system(
@@ -385,7 +385,7 @@ impl Engine {
 
     /// Late 更新 音频 sync, 反向动力学 camera‑relative effects.
     ///
-    /// Unity `LateUpdate()`.
+    /// `LateUpdate()`.
     pub fn late_update(&mut self) {}
 
     // ======================================================================

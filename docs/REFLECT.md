@@ -97,7 +97,7 @@ registry.register_reflect_type::<glam::Vec3>();
   会被同名的新类型解码成字段全默认的实例，而且没有任何报错。
 - `to_object()` 的字段顺序由 `BTreeMap` 决定，编码结果确定。
 - **变换是结构字段，不是可挂载组件**：作者只写 `EntityJson::transform`，loader / cooker
-  负责把它 bake 成 `LocalTransform` + `LocalToWorld`（对齐 Unity：作者态的 `Transform`
+  负责把它 bake 成 `LocalTransform` + `LocalToWorld`（作者态的 `Transform`
   不可移除，`LocalTransform` 只属于运行时）。因此 `LocalTransform` 只在 `TypeRegistry`
   里登记类型，不在 `ComponentRegistry` 的可挂载列表里；`.scene.json` 的 `components`
   出现它会在迁移时折回 `transform`（`json::DERIVED_COMPONENTS`），手工构造的文档

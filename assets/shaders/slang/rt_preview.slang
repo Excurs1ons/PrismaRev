@@ -1,6 +1,6 @@
 // rt_preview.slang — 消费端示例：全屏采样 RenderTexture（bindless）。
 //
-// 展示 Unity 式 RT 消费：RenderTexture 在创建时注册进 bindless SRV 表，
+// 展示引擎式 RT 消费：RenderTexture 在创建时注册进 bindless SRV 表，
 // 拿到一个 TextureHandle；本 shader 用 push constant 接收该句柄，
 // 从 bindlessSrvs[] 直接采样 —— 与采样任何普通纹理无差别。
 

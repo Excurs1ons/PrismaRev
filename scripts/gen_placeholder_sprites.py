@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Generate original placeholder art for `projects/fishing/assets/sprites/`.
 
-The sprite directory is gitignored: it is produced either by
-`scripts/sync_fishing_art.py` (reference art, local only) or by this script
-(original placeholders, safe to commit-adjacent). Both write the same filenames
-so the scene file never changes.
+The sprite directory is gitignored: this script generates the placeholder set
+used by the fishing slice. Filenames match the scene file, so regenerating the
+art does not require touching scene data.
 
 Usage (repo root):  python scripts/gen_placeholder_sprites.py
 """
@@ -20,7 +19,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "projects" / "fishing" / "assets" / "sprites"
 
-# Must match `BACKGROUND` in scripts/sync_fishing_art.py.
+# Layer order: far -> near, parallel to lake_layers.json.
 BACKGROUND = [
     ("far-mountains", 0.06, (150, 176, 196)),
     ("mountain-right-left", 0.08, (132, 160, 182)),

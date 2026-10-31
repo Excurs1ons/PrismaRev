@@ -1,25 +1,25 @@
-//! Unity DOTS（`Unity.Collections`）形状的容器门面。
+//! 数据导向容器形状的容器门面。
 //!
-//! Unity 的 `Native*` 容器是手动管理的非托管内存，用 `Allocator` 指定生命周期，
+//! 引擎的 `Native*` 容器是手动管理的非托管内存，用 `Allocator` 指定生命周期，
 //! 并需要显式 `Dispose()`。Rust 端没有这段手动内存管理：这里的容器用
 //! `Box<[T]>` / `Vec<T>` 做**安全的所有权存储**，`Allocator` 只作为元数据保留
-//! （便于读代码时对照 Unity，也便于未来接自定义分配器），释放交给 `Drop`。
+//! （便于读代码时对照 ，也便于未来接自定义分配器），释放交给 `Drop`。
 //!
 //! 因此这是**形状对齐**，不是逐行移植：`Dispose` / `NativeArrayOptions` /
-//! `AtomicSafetyHandle` 等 Unity 特有的手动管理 API 不存在。
+//! `AtomicSafetyHandle` 等 特有的手动管理 API 不存在。
 //!
-//! 命名对应（Rust 用 snake_case，括号内为 Unity 原名）：
+//! 命名对应（Rust 用 snake_case，括号内为 原名）：
 //! [`NativeArray::len`]（`Length`）、[`NativeArray::copy_from`]（`CopyFrom`）、
 //! [`NativeList::add`]（`Add`）、[`NativeReference::value`]（`Value`）、
 //! [`NativeSlice`]（`NativeSlice`）。
 
-/// Unity `Allocator`：容器内存的生命周期分类。
+/// `Allocator`：容器内存的生命周期分类。
 ///
-/// 在 PrismaRev 里它不驱动真实分配，只记录“这个容器在 Unity 中会用什么分配器”，
+/// 在 PrismaRev 里它不驱动真实分配，只记录“这个容器在 中会用什么分配器”，
 /// 用于对照和未来的自定义分配器接入。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Allocator {
-    /// 未指定（Unity 的 `Allocator.Invalid`）。
+    /// 未指定（引擎的 `Allocator.Invalid`）。
     #[default]
     Invalid,
     /// 不需要释放的分配（`Allocator.None`）。
@@ -33,15 +33,15 @@ pub enum Allocator {
 }
 
 impl Allocator {
-    /// 是否是 Unity 认可的分配器（`Allocator.Invalid` 之外都算）。
+    /// 是否是认可的分配器（`Allocator.Invalid` 之外都算）。
     pub fn is_valid(self) -> bool {
         self != Allocator::Invalid
     }
 }
 
-/// Unity `NativeArray<T>` 形状的定长数组。
+/// `NativeArray<T>` 形状的定长数组。
 ///
-/// 创建时用 [`Default`] 填充（对应 Unity 默认的 `NativeArrayOptions.ClearMemory`），
+/// 创建时用 [`Default`] 填充（对应引擎默认的 `NativeArrayOptions.ClearMemory`），
 /// 下标访问与切片访问都走安全 Rust。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeArray<T> {
@@ -50,7 +50,7 @@ pub struct NativeArray<T> {
 }
 
 impl<T: Default> NativeArray<T> {
-    /// 创建 `len` 个元素的数组（Unity：`new NativeArray<T>(len, allocator)`）。
+    /// 创建 `len` 个元素的数组（`new NativeArray<T>(len, allocator)`）。
     pub fn new(len: usize, allocator: Allocator) -> Self {
         let data = std::iter::repeat_with(T::default)
             .take(len)
@@ -61,7 +61,7 @@ impl<T: Default> NativeArray<T> {
 }
 
 impl<T> NativeArray<T> {
-    /// 从已有 `Vec` 接管存储（Unity 没有直接对应物，等价于 `CopyFrom` 后释放源）。
+    /// 从已有 `Vec` 接管存储（没有直接对应物，等价于 `CopyFrom` 后释放源）。
     pub fn from_vec(values: Vec<T>, allocator: Allocator) -> Self {
         Self {
             data: values.into_boxed_slice(),
@@ -69,12 +69,12 @@ impl<T> NativeArray<T> {
         }
     }
 
-    /// 元素个数（Unity：`Length`）。
+    /// 元素个数（`Length`）。
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
-    /// 是否为空（Unity：`Length == 0`）。
+    /// 是否为空（`Length == 0`）。
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
@@ -114,7 +114,7 @@ impl<T> NativeArray<T> {
         self.data.iter_mut()
     }
 
-    /// 把 `source` 复制到开头，元素个数不变（Unity：`CopyFrom`）。
+    /// 把 `source` 复制到开头，元素个数不变（`CopyFrom`）。
     ///
     /// # Panics
     ///
@@ -132,7 +132,7 @@ impl<T> NativeArray<T> {
         self.data[..source.len()].copy_from_slice(source);
     }
 
-    /// 复制成 `Vec`（Unity：`ToArray`）。
+    /// 复制成 `Vec`（`ToArray`）。
     pub fn to_vec(&self) -> Vec<T>
     where
         T: Clone,
@@ -142,7 +142,7 @@ impl<T> NativeArray<T> {
 }
 
 impl<T: Clone> NativeArray<T> {
-    /// 用同一个值填满整个数组（Unity 没有对应物，常用 `for` 循环代替）。
+    /// 用同一个值填满整个数组（没有对应物，常用 `for` 循环代替）。
     pub fn fill(&mut self, value: T) {
         self.data.fill(value);
     }
@@ -186,9 +186,9 @@ impl<'a, T> IntoIterator for &'a mut NativeArray<T> {
     }
 }
 
-/// Unity `NativeSlice<T>` 形状的只读视图。
+/// `NativeSlice<T>` 形状的只读视图。
 ///
-/// Unity 的 `NativeSlice` 也可以写；Rust 端只提供只读视图，可变切片直接用
+/// 引擎的 `NativeSlice` 也可以写；Rust 端只提供只读视图，可变切片直接用
 /// `&mut [T]` / [`NativeArray::as_mut_slice`]。
 #[derive(Debug)]
 pub struct NativeSlice<'a, T> {
@@ -201,7 +201,7 @@ impl<'a, T> NativeSlice<'a, T> {
         Self { data }
     }
 
-    /// 元素个数（Unity：`Length`）。
+    /// 元素个数（`Length`）。
     pub fn len(&self) -> usize {
         self.data.len()
     }
@@ -221,7 +221,7 @@ impl<'a, T> NativeSlice<'a, T> {
         self.data.get(index)
     }
 
-    /// 取子区间（Unity：`Slice(start, length)`），越界返回 `None`。
+    /// 取子区间（`Slice(start, length)`），越界返回 `None`。
     pub fn slice(&self, start: usize, length: usize) -> Option<NativeSlice<'a, T>> {
         let end = start.checked_add(length)?;
         self.data.get(start..end).map(NativeSlice::new)
@@ -256,9 +256,9 @@ impl<'a, T> IntoIterator for NativeSlice<'a, T> {
     }
 }
 
-/// Unity `NativeList<T>` 形状的可增长列表。
+/// `NativeList<T>` 形状的可增长列表。
 ///
-/// 底层是 `Vec<T>`，`Capacity` 语义与 Unity 一致（不保证每次 `add` 都重新分配）。
+/// 底层是 `Vec<T>`，`Capacity` 语义与常见容器一致（不保证每次 `add` 都重新分配）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeList<T> {
     values: Vec<T>,
@@ -266,7 +266,7 @@ pub struct NativeList<T> {
 }
 
 impl<T> NativeList<T> {
-    /// 创建空列表（Unity：`new NativeList<T>(allocator)`）。
+    /// 创建空列表（`new NativeList<T>(allocator)`）。
     pub fn new(allocator: Allocator) -> Self {
         Self {
             values: Vec::new(),
@@ -287,12 +287,12 @@ impl<T> NativeList<T> {
         Self { values, allocator }
     }
 
-    /// 追加元素（Unity：`Add`）。
+    /// 追加元素（`Add`）。
     pub fn add(&mut self, value: T) {
         self.values.push(value);
     }
 
-    /// 元素个数（Unity：`Length`）。
+    /// 元素个数（`Length`）。
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -302,7 +302,7 @@ impl<T> NativeList<T> {
         self.values.is_empty()
     }
 
-    /// 当前容量（Unity：`Capacity`）。
+    /// 当前容量（`Capacity`）。
     pub fn capacity(&self) -> usize {
         self.values.capacity()
     }
@@ -332,17 +332,17 @@ impl<T> NativeList<T> {
         self.values.get_mut(index)
     }
 
-    /// 清空元素、保留容量（Unity：`Clear`）。
+    /// 清空元素、保留容量（`Clear`）。
     pub fn clear(&mut self) {
         self.values.clear();
     }
 
-    /// 删除并返回末尾元素（Unity：`RemoveAt(len - 1)`）。
+    /// 删除并返回末尾元素（`RemoveAt(len - 1)`）。
     pub fn pop(&mut self) -> Option<T> {
         self.values.pop()
     }
 
-    /// 在下标处插入，`index > len` 时返回 `false`（Unity：`Insert`，越界会抛异常）。
+    /// 在下标处插入，`index > len` 时返回 `false`（`Insert`，越界会抛异常）。
     pub fn insert(&mut self, index: usize, value: T) -> bool {
         if index > self.values.len() {
             return false;
@@ -351,7 +351,7 @@ impl<T> NativeList<T> {
         true
     }
 
-    /// 删除下标处元素并保持顺序，越界返回 `None`（Unity：`RemoveAt`）。
+    /// 删除下标处元素并保持顺序，越界返回 `None`（`RemoveAt`）。
     pub fn remove_at(&mut self, index: usize) -> Option<T> {
         if index >= self.values.len() {
             return None;
@@ -371,7 +371,7 @@ impl<T> NativeList<T> {
 }
 
 impl<T: Ord> NativeList<T> {
-    /// 升序排序（Unity：`Sort`）。
+    /// 升序排序（`Sort`）。
     pub fn sort(&mut self) {
         self.values.sort();
     }
@@ -409,9 +409,9 @@ impl<'a, T> IntoIterator for &'a mut NativeList<T> {
     }
 }
 
-/// Unity `NativeReference<T>` 形状的单值容器。
+/// `NativeReference<T>` 形状的单值容器。
 ///
-/// 常用于 job 之间传递一个值（Unity 里配 `NativeDisableParallelForRestriction`
+/// 常用于 job 之间传递一个值（里配 `NativeDisableParallelForRestriction`
 /// 之类的属性使用）；Rust 端就是一个带分配器元数据的 `Box<T>`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeReference<T> {
@@ -420,17 +420,17 @@ pub struct NativeReference<T> {
 }
 
 impl<T> NativeReference<T> {
-    /// 创建引用（Unity：`new NativeReference<T>(value, allocator)`）。
+    /// 创建引用（`new NativeReference<T>(value, allocator)`）。
     pub fn new(value: T, allocator: Allocator) -> Self {
         Self { value, allocator }
     }
 
-    /// 读取值（Unity：`Value`）。
+    /// 读取值（`Value`）。
     pub fn value(&self) -> &T {
         &self.value
     }
 
-    /// 覆盖值（Unity：`Value = ...`）。
+    /// 覆盖值（`Value = ...`）。
     pub fn set_value(&mut self, value: T) {
         self.value = value;
     }
@@ -451,7 +451,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn allocator_validity_matches_unity_semantics() {
+    fn allocator_validity_semantics() {
         assert!(!Allocator::Invalid.is_valid());
         assert!(Allocator::None.is_valid());
         assert!(Allocator::Temp.is_valid());

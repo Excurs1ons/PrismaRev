@@ -2,7 +2,7 @@
 
 > 状态：设计稿（M0 起点）
 > 目标项目：`projects/fishing/`（独立 workspace，与 `projects/prisma` 同级）
-> 引擎改动遵循 `docs/UNITY_ALIGNMENT.md`：新 API 按 Unity 概念/命名对齐，语义等价优先。
+> 引擎改动遵循 `docs/DESIGN.md` 的架构分层：新 API 先写规格，语义等价优先。
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### 非目标（明确排除，避免范围蔓延）
 
-- 不做 MonoBehaviour / C# 脚本系统（见 `UNITY_ALIGNMENT.md` §2）。
+- 不做 C# 脚本系统。
 - 不在 M0 做 3D 场景视口与地形笔刷（M2 再评估）。
 - 不为像素画引入第二套 ECS；精灵仍是普通组件。
 
@@ -41,7 +41,7 @@
 
 判定方法：**换一个游戏（比如种田游戏）还能原样复用吗？** 能 → 引擎；不能 → 用户项目。
 
-组件命名一律用 Unity 语义：`SpriteRenderer`、`Sprite`、`Camera.orthographic`、`AudioSource`、`TimeOfDay`（Unity 无同名类，取最接近的语义）。
+组件命名沿用引擎现有词汇：`SpriteRenderer`、`Sprite`、正交相机、`AudioSource`、`TimeOfDay`。
 
 ---
 
@@ -71,16 +71,16 @@
 
 ```rust
 pub struct SpriteRenderer {
-    pub sprite_path: String,      // Unity `SpriteRenderer.sprite`（资源路径）
+    pub sprite_path: String,      // 资源路径
     pub frame_size: [u32; 2],     // [0,0] = 整张纹理；否则为精灵表单帧尺寸
     pub frame_index: u32,         // 由 SpriteAnimation 或游戏代码驱动
-    pub pixels_per_unit: f32,     // 默认 100（Unity 默认）
+    pub pixels_per_unit: f32,     // 默认 100
     pub pivot: [f32; 2],          // 0..1，默认 [0.5, 0.5]
     pub color: [f32; 4],          // 顶点色乘算，默认白
     pub flip_x: bool,
     pub flip_y: bool,
-    pub sorting_layer: i32,       // Unity `sortingLayerName` 的数值形式
-    pub order_in_layer: i32,      // Unity `sortingOrder`
+    pub sorting_layer: i32,       // 排序层编号
+    pub order_in_layer: i32,      // 层内顺序
 }
 ```
 
@@ -187,7 +187,7 @@ impl SaveGame {
 
 ### 3.7 输入
 
-已有 Unity 风格 `Input` 门面（`input_facade.rs`），M0 够用；手柄/虚拟摇杆后置。
+已有只读 `Input` 门面（`input_facade.rs`），M0 够用；手柄/虚拟摇杆后置。
 
 ---
 
@@ -250,28 +250,25 @@ Idle ──按下抛竿──> Casting ──落水──> Waiting ──咬钩�
 
 ---
 
-## 7. 参考实现观察（Cast n Chill 解包）
+## 7. 美术规格
 
-从参考构建（Unity 6000.3.26f1 / IL2CPP / Addressables）解出的资源结构，只用于**测量规格**，
-素材本身在 `.local/reference/castnchill/`（gitignored，禁止提交或随包分发）：
+M0 采用 **640×360 虚拟分辨率 + 多层视差 + 每层 4 个时段变体**，而不是「一张大背景图 +
+全局色调」。内部渲染分辨率因此从 M1 提到 M0 必做项。
 
-| 观察 | 数值 | 对我们的含义 |
-|---|---|---|
-| 背景层尺寸 | 宽 500–4000 px，高 300–430 px | 视口高度 ≈ **360 px** → 虚拟分辨率 **640×360** |
-| 鱼的在水尺寸 | S≈14 / M≈16 / L≈20 / XL≈30 / XXL≈42 px | 占视口高度 4–12%，必须低分辨率渲染再放大 |
-| 分层命名 | `+<parallaxX>_<parallaxY>_layer-<sortOrder>@<time>` | 多层视差，X/Y 各自独立系数 |
-| 昼夜 | 每层 4 份 `@dawn/@day/@dusk/@night` | 不是全局调色，而是**整层换图** |
-| 鱼种 | `<Species>_<Tier>` + `<Species>_UI`；`<Species>0/1` 两帧游动 | 104 个条目（含拟饵/鱼竿） |
-| 音频 | FMOD 四条总线 Master/Music/UI/WorldSFX | 印证命名通道设计 |
-| 字体 | LanaPixel（CC-BY 4.0）、Silkscreen（免费） | 可直接使用，需在致谢中署名 |
+| 项 | 规格 |
+|---|---|
+| 背景层 | 宽 500–4000 px、高 300–430 px，按 ×0.04–×1.05 的视差系数由远到近排布 |
+| 鱼 | 分级尺寸 14 / 16 / 20 / 30 / 42 px，占视口高度 4–12%，必须低分辨率渲染再放大 |
+| 图层 | 每层独立 X/Y 视差；命名 `<层名>@<dawn|day|dusk|night>` |
+| 昼夜 | 每层 4 份贴图整层替换，不做全局调色 |
+| 鱼种 | `<Species>_<Tier>` + `<Species>_UI`；游动两帧 |
+| 音频 | 四条总线：Master / Music / UI / WorldSFX |
+| 字体 | LanaPixel（CC-BY 4.0）、Silkscreen，致谢中署名 |
 
-结论：M0 的正确形态是「**640×360 虚拟分辨率 + 分层视差 + 每层 4 个时段变体**」，
-而不是「一张大背景图 + 全局色调」。内部渲染分辨率因此从 M1 提到 M0 必做项。
+### 7.1 背景贴图按裁切块摆放
 
-### 7.1 背景贴图是**裁切块**，不是整屏背景
-
-每张背景贴图只是关卡里那块美术的一个矩形**裁切**，硬边就在贴图边界上。摆放时
-必须把被裁的那一侧推到屏幕外，否则画面里会看到一条笔直的竖边：
+每张背景贴图是关卡里一块美术的矩形**裁切**，硬边就在贴图边界上。摆放时必须把被裁的
+一侧推到屏幕外，否则画面里会看到一条笔直的竖边：
 
 | 判据（alpha 图） | 含义 | 摆放 |
 |---|---|---|

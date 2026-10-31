@@ -1,7 +1,7 @@
-//! Unity DOTS（`Unity.Entities.EntityManager`）风格的 [`World`] 门面。
+//! 数据导向（`.Entities.EntityManager`）风格的 [`World`] 门面。
 //!
 //! 这是**加法式对齐层**：核心数据结构仍是 [`World`] / [`Entity`]，此模块只是把
-//! Unity DOTS 的“结构化变更”入口换成一层的命名，方便熟悉 DOTS 的人上手，
+//! 数据导向 的“结构化变更”入口换成一层的命名，方便熟悉 DOTS 的人上手，
 //! 也让未来可能的 `SystemBase` 代码有统一入口。
 //!
 //! 命名对应（Rust 用 snake_case，括号内为 DOTS 原名）：

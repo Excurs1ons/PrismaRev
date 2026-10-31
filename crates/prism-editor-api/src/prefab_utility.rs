@@ -1,10 +1,10 @@
-//! Unity `UnityEditor.PrefabUtility` 形状的门面。
+//! 编辑器门面。
 //!
 //! 直接架在 [`crate::scene`] 的预制体原语之上；所有「预制体」都是
 //! `assets/**/*.prefab.json` 作者文档，反向链接记在实例根实体的
 //! [`crate::scene::PREFAB_LINK_COMPONENT`] 组件里。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `SaveAsPrefabAsset(instanceRoot, path)` | [`save_as_prefab_asset`] |
 //! | `SaveAsPrefabAssetAndConnect(instanceRoot, path, mode)` | [`save_as_prefab_asset_and_connect`] |
@@ -29,7 +29,7 @@ use serde_json::Value;
 use crate::asset_ops::normalize_asset_path;
 use crate::scene::{self, InstantiateResult, MoveResult, PrefabLink, PREFAB_LINK_COMPONENT};
 
-/// 新建预制体的默认目录（Unity 的 `Prefabs` 约定）。
+/// 新建预制体的默认目录（引擎的 `Prefabs` 约定）。
 pub const DEFAULT_PREFAB_FOLDER: &str = "assets/prefabs";
 
 /// 资产是不是预制体 = `PrefabAssetType`。
@@ -257,7 +257,7 @@ fn link_at(scene_doc: &Value, root: usize) -> Result<PrefabLink, String> {
         .ok_or_else(|| format!("实体下标 {root} 不是预制体实例根"))
 }
 
-/// 便于前端消费的反向链接 DTO（与 Unity 的 `PrefabInstance` 概念对应）。
+/// 便于前端消费的反向链接 DTO（与引擎的 `PrefabInstance` 概念对应）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PrefabInstanceInfo {

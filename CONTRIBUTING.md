@@ -13,7 +13,7 @@ PrismaRev 是从零实现的 Rust 游戏引擎：**Vulkan** 渲染，**Android �
 |---|---|
 | Rust stable（见 `rust-toolchain.toml`） | 全部 Rust 代码 |
 | Vulkan SDK（含 `slangc`） | 编译 `assets/shaders/slang/*.slang` → `.spv` |
-| Node 20+ / pnpm | `editor/`、Android 启动壳 `launcher/` 两个独立前端 workspace |
+| Node 20+ / pnpm | Android 启动壳 `launcher/`（Tauri + Vue） |
 | Android NDK（可选） | 打 APK，见 `scripts/build-android.ps1` |
 | Python 3.11+ | `scripts/pr_ready.py` 自检 |
 
@@ -29,9 +29,11 @@ scripts/run.ps1
 # 游戏（用户项目，独立 workspace）
 cd projects/prisma && cargo run
 
-# 桌面壳 / 编辑器（Tauri，独立 workspace）
+# Android 启动壳（Tauri，独立 workspace）
 cd launcher && pnpm tauri dev
-cd editor && pnpm install && pnpm tauri dev
+
+# 编辑器（egui + ash，独立 workspace）
+cd editor && cargo run -p prism-editor-egui
 ```
 
 测试：
@@ -39,7 +41,7 @@ cd editor && pnpm install && pnpm tauri dev
 ```bash
 cargo test
 cargo test -p prism-asset -p prism-scene -p prism-cooker
-cd editor && pnpm build          # 前端类型检查 + 构建
+cargo test --manifest-path editor/Cargo.toml   # 编辑器数据层 + 壳
 ```
 
 ## 提交前自检
@@ -51,7 +53,7 @@ python scripts/pr_ready.py --all      # 全 workspace + 所有独立 workspace
 ```
 
 它会根据分支改动决定跑什么：改动文件的 rustfmt、受影响 crate 的
-`clippy --all-targets -D warnings` 与测试、shader bindings 漂移、`editor/` 的 `pnpm build`、
+`clippy --all-targets -D warnings` 与测试、shader bindings 漂移、`editor/` 的测试、
 独立 workspace 的 `cargo check`，并拦截 `.spv` / `.pak` / keystore 等生成物。失败即退出非零。
 
 ## Pull Request
@@ -70,9 +72,8 @@ python scripts/pr_ready.py --all      # 全 workspace + 所有独立 workspace
   `prisma → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`。
   `prism-cooker` / `prism-build-pipeline` 只允许出现在构建侧。
 - 不要在 `prism-app` / `prism-engine` / `prism-render` 引入 egui 等 UI 框架。
-- `editor/` 的 Rust 侧只依赖 `prism-editor-api`，**不链接** engine / Vulkan / cooker。
+- `editor/` 是唯一的编辑器壳，允许链接 `prism-engine` / `prism-render`；`prism-editor-api` 只给 MCP / 工具用，不要把 UI 框架带进引擎。
 - 改 `.slang` 后必须重新编译并重跑 `shader-bindgen`；`shader_bindings/` 是提交的生成代码。
-- 改 `prism-scene` 组件后，跑 `cd editor && pnpm fixture` 更新浏览器预览数据。
 - 不提交 `.spv`、`.pak`、`target/`、`node_modules/`、IBL cache、密钥或本机绝对路径。
 
 ## 文档

@@ -1,6 +1,6 @@
-//! Unity 式 RenderTexture（CRT 风格）—— 离屏可采样渲染目标，自带更新调度配置。
+//! 引擎式 RenderTexture（CRT 风格）—— 离屏可采样渲染目标，自带更新调度配置。
 //!
-//! 对齐 Unity Custom Render Texture 的资源模型：
+//! Custom Render Texture 的资源模型：
 //!
 //! - **纯资源，无组件**：本类型只是 GPU 离屏图像 + 更新配置；"要不要渲染"
 //!   由 [`RtUpdateMode`] 决定，执行由引擎的 [`crate::rt_scheduler::RenderTextureScheduler`]
@@ -22,7 +22,7 @@ use crate::bindless::{BindlessTextureTable, TextureHandle};
 use crate::buffer::find_memory_type;
 use crate::context::VulkanContext;
 
-/// 更新模式（Unity `CustomRenderTextureUpdateMode`）。
+/// 更新模式（`CustomRenderTextureUpdateMode`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum RtUpdateMode {
     /// 加载/首次调度时渲染一次，之后不再自动更新。
@@ -182,7 +182,7 @@ impl RenderTexture {
     // CRT 配置（资源自带，调度器读取）
     // ------------------------------------------------------------------
 
-    /// 设置更新模式（Unity `CustomRenderTextureUpdateMode`）。
+    /// 设置更新模式（`CustomRenderTextureUpdateMode`）。
     pub fn set_update_mode(&mut self, mode: RtUpdateMode) -> &mut Self {
         self.update_mode = mode;
         self
@@ -392,7 +392,7 @@ impl RenderTexture {
     /// 单次提交把 RT 图像复制到 host-visible 缓冲并读回 RGBA8 像素。
     ///
     /// 每次调用创建临时 command pool + staging buffer（简单、无常驻资源），
-    /// 只适合低频调试读取（Unity: `ReadPixels`）。
+    /// 只适合低频调试读取（: `ReadPixels`）。
     pub fn readback(&self, context: &VulkanContext) -> anyhow::Result<Vec<u8>> {
         let device = &context.device;
         let pixel_size = match self.format {

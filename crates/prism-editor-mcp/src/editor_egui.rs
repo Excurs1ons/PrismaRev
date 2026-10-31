@@ -1,7 +1,7 @@
-//! `editor_*` 工具：驱动**正在运行的** egui 编辑器（`editor-egui/`）。
+//! `editor_*` 工具：驱动**正在运行的** egui 编辑器（`editor/`）。
 //!
 //! 编辑器在 `127.0.0.1:<port>` 上开一个本地控制通道，端口写在
-//! `<项目根>/target/editor-egui/control.port`。这个模块只做 TCP + JSON，
+//! `<项目根>/target/editor/control.port`。这个模块只做 TCP + JSON，
 //! 不链接 engine / render，也不开 Vulkan。
 //!
 //! | 工具 | 作用 |
@@ -139,7 +139,7 @@ pub fn definitions() -> Vec<ToolDef> {
                         "enum": ["window", "scene", "game"],
                         "description": "抓什么：整窗 / Scene view / Game view，默认 window"
                     },
-                    "path": { "type": "string", "description": "输出 PNG（相对项目根或绝对路径）；不给则写到 target/editor-egui/captures/" },
+                    "path": { "type": "string", "description": "输出 PNG（相对项目根或绝对路径）；不给则写到 target/editor/captures/" },
                     "size": { "type": "string", "description": "如 1920x1080（最近邻缩放在编辑器里做）" }
                 }
             }),
@@ -225,7 +225,7 @@ fn capture(root: &Path, args: &Value) -> Result<String, String> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_millis())
                 .unwrap_or_default();
-            root.join("target/editor-egui/captures")
+            root.join("target/editor/captures")
                 .join(format!("{target}-{stamp}.png"))
         }
     };
@@ -262,7 +262,7 @@ fn quit(host: &EditorHost) -> Result<String, String> {
 fn port_file(root: &Path) -> PathBuf {
     match std::env::var_os("PRISMREV_EDITOR_CONTROL") {
         Some(value) => PathBuf::from(value),
-        None => root.join("target/editor-egui/control.port"),
+        None => root.join("target/editor/control.port"),
     }
 }
 
@@ -303,8 +303,8 @@ fn request(root: &Path, body: Value) -> Result<Value, String> {
 
 fn default_command(root: &Path) -> String {
     let editor_root = find_editor_root(root).unwrap_or_else(|| root.to_path_buf());
-    let debug = editor_root.join("editor-egui/target/debug/prism-editor-egui");
-    let release = editor_root.join("editor-egui/target/release/prism-editor-egui");
+    let debug = editor_root.join("editor/target/debug/prism-editor-egui");
+    let release = editor_root.join("editor/target/release/prism-editor-egui");
     for candidate in [release, debug] {
         let with_exe = if cfg!(windows) {
             candidate.with_extension("exe")
@@ -318,14 +318,14 @@ fn default_command(root: &Path) -> String {
     // 没构建过就退回 cargo（会编译，慢但可用）。
     format!(
         "cargo run -p prism-editor-egui --manifest-path {}",
-        editor_root.join("editor-egui/Cargo.toml").display()
+        editor_root.join("editor/Cargo.toml").display()
     )
 }
 
 fn find_editor_root(root: &Path) -> Option<PathBuf> {
     let mut current = Some(root);
     while let Some(dir) = current {
-        if dir.join("editor-egui/Cargo.toml").is_file() {
+        if dir.join("editor/Cargo.toml").is_file() {
             return Some(dir.to_path_buf());
         }
         current = dir.parent();
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn finds_editor_from_nested_user_project() {
         let mut repo = std::env::current_dir().unwrap();
-        while !repo.join("editor-egui/Cargo.toml").is_file() {
+        while !repo.join("editor/Cargo.toml").is_file() {
             repo = repo.parent().expect("repository root").to_path_buf();
         }
         let fishing = repo.join("projects/fishing");

@@ -1,4 +1,4 @@
-//! Unity DOTS（`Unity.Entities`）风格的系统与系统组。
+//! 数据导向 ECS风格的系统与系统组。
 //!
 //! 对齐 `ISystem` / `SystemBase` / `ComponentSystemGroup`：
 //!
@@ -24,7 +24,7 @@ pub const SIMULATION_SYSTEM_GROUP: &str = "SimulationSystemGroup";
 /// 见 [`INITIALIZATION_SYSTEM_GROUP`]。
 pub const PRESENTATION_SYSTEM_GROUP: &str = "PresentationSystemGroup";
 
-/// DOTS `Unity.Entities.ISystem` 形状的系统接口。
+/// DOTS `.Entities.ISystem` 形状的系统接口。
 ///
 /// 只有 [`on_update`](ISystem::on_update) 是必需的；其余生命周期钩子默认空实现。
 pub trait ISystem: Send + Sync + 'static {

@@ -1,9 +1,9 @@
-//! PrismaRev web 编辑器的**后端数据层**。
+//! PrismaRev 编辑器 / MCP 的**后端数据层**。
 //!
 //! 这一层刻意保持纯净：只依赖 `prism-scene` / `prism-reflect`，
 //! **不依赖 egui、不依赖 Vulkan / 引擎 / 渲染**。它把「场景 schema」和
-//! 「`.scene.json` 文档 IO」暴露成可序列化的数据结构，供 Tauri 命令
-//! （见 `editor/src-tauri`）直接转成 JSON 传给 Vue 前端。
+//! 「`.scene.json` 文档 IO」暴露成可序列化的数据结构，供 MCP 工具
+//! （见 `crates/prism-editor-mcp`）直接转成 JSON。
 //!
 //! 职责划分：
 //! - [`schema`]：把 `prism-scene` 的组件注册表投影成前端可消费的属性面板
@@ -13,21 +13,19 @@
 //! - [`assets`]：`assets/` 目录枚举（含大小/分类）与 `.scene.json` 引用分析。
 //! - [`reflect_edit`]：**基于反射**的字段级写入（只读拒绝、类型校验、作者 JSON 往返）。
 //!
-//! Unity 形状的门面层（`UnityEditor` / `UnityEngine` 对齐，见
-//! `docs/UNITY_ALIGNMENT.md`）：
-//! - [`asset_database`]：`AssetDatabase`（枚举 / 查找 / GUID / 增删改 / 导入）。
-//! - [`asset_importer`]：`AssetImporter`（按扩展名投影导入器类名 / 主资产类型）。
-//! - [`prefab_utility`]：`PrefabUtility`（提取 / 实例化 / 还原 / 应用 / 解包）。
-//! - [`selection`]：`Selection`（实体选中集合 + 活动项 + 过滤）。
-//! - [`undo`]：`Undo`（快照式撤销栈 + 标签 / 合并 / 上限）。
-//! - [`editor_application`]：`EditorApplication`（播放模式 / 路径 / `delayCall`）。
-//! - [`scene_management`]：`SceneManager` + `EditorSceneManager`（打开 / 保存 / 加载状态）。
-//! - [`editor_window`]：Unity `EditorWindow` / `[MenuItem]` 的面板注册表
-//!   （id / 标题 / 菜单路径 / 命令 id），驱动前端 `PANELS` 与「窗口 / 帮助」菜单。
-//! - [`build_profile`]：`Build` / `Build.Profile`（构建目标组、`BuildOptions`、场景构建顺序）。
-//! - [`build_report`]：Unity `BuildReport` / `BuildSummary`（构建阶段、产物大小、结果）。
-//! - [`property_drawer`]：Unity `PropertyDrawer` / `PropertyAttribute` 的字段渲染声明
-//!   （`[Range]` / `[TextArea]` / `[ColorUsage]` / `[CustomPropertyDrawer]`）。
+//! 编辑器门面层（供 `editor/` 与自动化工具消费）：
+//! - [`asset_database`]：资产数据库（枚举 / 查找 / 标识符 / 增删改 / 导入）。
+//! - [`asset_importer`]：按扩展名投影导入器类别 / 主资产类型。
+//! - [`prefab_utility`]：预制体操作（提取 / 实例化 / 还原 / 应用 / 解包）。
+//! - [`selection`]：实体选中集合 + 活动项 + 过滤。
+//! - [`undo`]：快照式撤销栈 + 标签 / 合并 / 上限。
+//! - [`editor_application`]：编辑器运行时（播放模式 / 路径 / 延迟调用）。
+//! - [`scene_management`]：场景打开 / 保存 / 加载状态。
+//! - [`editor_window`]：面板注册表（id / 标题 / 菜单路径 / 命令 id），
+//!   驱动前端 `PANELS` 与「窗口 / 帮助」菜单。
+//! - [`build_profile`]：构建目标组、构建选项、场景构建顺序。
+//! - [`build_report`]：构建阶段、产物大小、结果。
+//! - [`property_drawer`]：字段渲染声明（范围 / 多行文本 / 颜色用法 / 自定义绘制）。
 //!
 //! 真正的编辑发生在 web UI 里：前端直接编辑 `.scene.json` 的 JSON 文档，
 //! schema 只作为控件类型与只读判断的提示。
@@ -66,7 +64,7 @@ pub use assets::{
     read_asset_bytes, read_asset_text, AssetInfo, AssetRef, AssetTextPreview, MAX_ASSETS,
     MAX_PREVIEW_BYTES, MAX_TEXT_PREVIEW_BYTES,
 };
-// Unity 形状门面（`delete_asset` / `move_asset` / `rename_asset` /
+// 形状门面（`delete_asset` / `move_asset` / `rename_asset` /
 // `instantiate_prefab` / `revert_prefab_instance` / `sync_prefab_instances` 等
 // 与既有导出同名，保留模块路径访问，不在根上重复导出）。
 pub use asset_database::{

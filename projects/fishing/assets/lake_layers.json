@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated lake stack for projects/fishing (far -> near = draw order). `x`/`y` is the layer's BOTTOM-CENTER anchor with the camera at camera_origin; `parallax` 0 = pinned to the screen, 1 = moves with the world. Layer names come from the reference level (scripts/build_lake_layers.py extracts the full 163-layer list); this file keeps the subset that has a usable texture, with hand-tuned y so the horizon lands on water_line. Art is local-only (gitignored).",
+  "_comment": "Lake stack for projects/fishing (far -> near = draw order). `x`/`y` is the layer's BOTTOM-CENTER anchor with the camera at camera_origin; `parallax` 0 = pinned to the screen, 1 = moves with the world. Hand-tuned so the horizon lands on water_line. Art is local-only (gitignored).",
   "camera_origin": [
     0.0,
     180.0

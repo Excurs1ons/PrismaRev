@@ -1,10 +1,10 @@
-//! Unity 场景管理门面：`UnityEngine.SceneManagement.SceneManager` +
-//! `UnityEditor.SceneManagement.EditorSceneManager`。
+//! 场景管理门面：编辑器接口 +
+//! 编辑器接口。
 //!
 //! 场景在 PrismaRev 里就是 `assets/scenes/*.scene.json` 作者文档，因此这里是
 //! 「文件级打开 / 保存 / 枚举」+ 一个显式的运行时加载状态机。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `EditorSceneManager.NewScene(setup)` | [`new_scene`] |
 //! | `EditorSceneManager.OpenScene(path)` | [`open_scene`] / [`open_scene_at_path`] |
@@ -14,7 +14,7 @@
 //! | `SceneManager.LoadScene(name, mode)` | [`SceneManagerState::load_scene`] |
 //! | `SceneManager.SetActiveScene(scene)` | [`SceneManagerState::set_active_scene`] |
 //!
-//! 差异：没有 Unity 的多场景编辑（additive 打开多个 `.scene.json` 同时编辑）——
+//! 差异：没有引擎的多场景编辑（additive 打开多个 `.scene.json` 同时编辑）——
 //! [`SceneManagerState`] 只记录「运行时加载了哪些场景」，不改变编辑器打开的文档。
 
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ use serde_json::Value;
 use crate::asset_database::asset_path_to_guid;
 use crate::scene::{self, SceneEntry};
 
-/// 场景描述 = `UnityEngine.SceneManagement.Scene`。
+/// 场景描述。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Scene {
@@ -47,7 +47,7 @@ pub struct Scene {
     pub build_index: i32,
 }
 
-/// 加载模式 = `UnityEngine.SceneManagement.LoadSceneMode`。
+/// 加载模式。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum LoadSceneMode {
@@ -85,7 +85,7 @@ impl SceneManagerState {
         self.active = Some(name.to_string());
     }
 
-    /// 卸载场景（PrismaRev 没有 Unity 的 `UnloadSceneAsync`）。
+    /// 卸载场景（PrismaRev 没有引擎的 `UnloadSceneAsync`）。
     pub fn unload_scene(&mut self, name: &str) -> bool {
         let before = self.loaded.len();
         self.loaded.retain(|scene| scene != name);

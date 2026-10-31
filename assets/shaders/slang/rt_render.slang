@@ -1,4 +1,4 @@
-// rt_render.slang — 输出到 RenderTexture 的离屏着色器（Unity 式 RenderTexture 演示）。
+// rt_render.slang — 输出到 RenderTexture 的离屏着色器（引擎式 RenderTexture 演示）。
 //
 // 渲染目标与着色器解耦：本 shader 只是往 color attachment 0 输出颜色，
 // 它不知道最终目标是一张 RenderTexture 还是 swapchain —— 目标由

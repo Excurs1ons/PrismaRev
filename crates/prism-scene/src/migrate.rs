@@ -1,6 +1,6 @@
 //! 作者格式 `.scene.json` / `.prefab.json` 的**版本迁移**。
 //!
-//! 对齐 Unity 的做法：老的资源在**反序列化之前**先被升级到当前 schema，
+//! 对齐引擎的做法：老的资源在**反序列化之前**先被升级到当前 schema，
 //! 所以 Rust 类型只需要描述“当前形状”这一种。
 //!
 //! 迁移在 JSON 值层面进行（[`serde_json::Value`]），因此 cooker、engine 开发加载器
@@ -11,7 +11,7 @@
 //! | version | 变化 |
 //! |---|---|
 //! | 1（或缺失） | 初始格式：`transform.translation`、`LocalTransform.translation` |
-//! | 2 | 变换分量 `translation` → `position`（对齐 Unity DOTS `LocalTransform.Position`） |
+//! | 2 | 变换分量 `translation` → `position`（对齐 数据导向 `LocalTransform.Position`） |
 //! | 3 | 实体加稳定 `id`，`parent` 从数组下标改为引用 `id`（`id = 下标` 的恒等映射） |
 
 use serde_json::{json, Map, Value};

@@ -128,7 +128,7 @@ pub struct FrameInput<'a> {
     /// (issue #10); the rasterizer already gets this from the projection
     /// matrix alone.
     pub camera_orthographic: bool,
-    /// 主方向光是否投阴影（Unity `Light.shadows != None`）。`false` 时整帧
+    /// 主方向光是否投阴影（`Light.shadows != None`）。`false` 时整帧
     /// 跳过阴影贴图渲染（`ShadowMode::None`），着色器侧也会得到 `shadowStrength = 0`。
     pub shadows_enabled: bool,
     /// 清空 颜色 for the scene 颜色 附件 Applied when the 渲染 pass
@@ -507,7 +507,7 @@ impl GraphRenderer {
             None
         };
 
-        // CRT 调度器：统一渲染所有注册的 RenderTexture（Unity 式）。
+        // CRT 调度器：统一渲染所有注册的 RenderTexture（引擎式）。
         let rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
 
         // Register all passes into the 图 in 执行 order.

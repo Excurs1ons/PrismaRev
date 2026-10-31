@@ -5,7 +5,7 @@
 //!
 //! Run once per 帧 **after** any local-transform or reparenting changes.
 //!
-//! 树形不一致时按 Unity 语义兜底（见 `#48`）：
+//! 树形不一致时按 统一语义兜底（见 `#48`）：
 //! - 没有 `LocalTransform` 的中间节点**不阻断传播**：它自己保持无
 //!   `LocalToWorld`，但子节点继续拿到它的累积矩阵；
 //! - `Parent` 指向已死实体、或父实体的 `Child` 里并没有列出它的子节点，
@@ -62,7 +62,7 @@ fn candidate_entities(world: &World) -> Vec<Entity> {
 }
 
 /// 实体是否挂在一个**有效的**父级下：父实体还活着，且父的 `Child` 列表里
-/// 确实列出了它。任何一条不满足都按根处理（Unity 里子物体会提升为根）。
+/// 确实列出了它。任何一条不满足都按根处理（里子物体会提升为根）。
 fn has_live_parent(world: &World, entity: Entity) -> bool {
     let Some(parent) = world.get::<Parent>(entity).map(|parent| parent.0) else {
         return false;
@@ -106,7 +106,7 @@ fn visit_children(
                 matrix
             }
             // 无变换的中间节点：自身不写 `LocalToWorld`，但把父矩阵原样
-            // 传给后代（Unity 里 Transform 缺失等价于单位变换）。
+            // 传给后代（里 Transform 缺失等价于单位变换）。
             None => parent_world,
         };
         visit_children(world, child, child_world, visited);

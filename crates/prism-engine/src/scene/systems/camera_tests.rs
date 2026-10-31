@@ -60,7 +60,7 @@ fn multiple_cameras_returns_first() {
 /// 取景与清屏必须来自同一台相机（issue #11）。
 ///
 /// 两台启用相机、`depth` 不同、背景色不同：view 必须来自 `depth` 最大的那台
-/// （Unity `Camera.main`），而清屏色要是**同一个实体**的背景色。
+/// （`Camera.main`），而清屏色要是**同一个实体**的背景色。
 #[test]
 fn view_and_clear_color_come_from_the_same_camera() {
     let mut world = World::new();
@@ -191,7 +191,7 @@ fn clear_flags_reads_the_camera_component() {
     assert_eq!(clear_flags(&world, entity), CameraClearFlags::SolidColor);
 }
 
-/// 实体上没有 `Camera` 时清屏方式退化为 Unity 默认的 `Skybox`。
+/// 实体上没有 `Camera` 时清屏方式退化为引擎默认的 `Skybox`。
 #[test]
 fn clear_flags_for_camera_less_entity_is_skybox() {
     let world = World::new();

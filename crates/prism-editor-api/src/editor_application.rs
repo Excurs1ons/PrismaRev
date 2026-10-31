@@ -1,9 +1,9 @@
-//! Unity `UnityEditor.EditorApplication` 形状的门面。
+//! 编辑器门面。
 //!
-//! Unity 的 `EditorApplication` 是全局静态门面；这里的「全局状态」是显式的
+//! 引擎的 `EditorApplication` 是全局静态门面；这里的「全局状态」是显式的
 //! [`EditorApplicationState`]，由宿主（Tauri 后端）持有并通过命令读写，避免静态可变状态。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `EditorApplication.isPlaying` / `isPaused` | [`EditorApplicationState::is_playing`] / [`is_paused`] |
 //! | `EditorApplication.isPlayingOrWillChangePlaymode` | [`EditorApplicationState::is_playing_or_will_change_playmode`] |
@@ -159,7 +159,7 @@ pub fn application_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// 引擎版本 = `Application.unityVersion`（这里是 `prism-editor-api` 的版本）。
+/// 引擎版本 = `Application.Version`（这里是 `prism-editor-api` 的版本）。
 pub fn engine_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
