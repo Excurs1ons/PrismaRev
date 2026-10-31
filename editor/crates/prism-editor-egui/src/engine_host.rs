@@ -247,6 +247,22 @@ impl EngineHost {
         &mut self.settings
     }
 
+    /// 局部光源预算 `(kept, total)`：实际画出来的 / 场景里启用的。
+    ///
+    /// `total > kept` 说明有灯被前向渲染的 `LIGHT_MAX` 挤掉了（#468），
+    /// 视口角标与检查器据此提示。
+    pub fn local_light_stats(&self) -> (usize, usize) {
+        (
+            self.packet.scene.local_lights_kept,
+            self.packet.scene.local_lights_total,
+        )
+    }
+
+    /// 被 `LIGHT_MAX` 挤掉的局部光实体（`.scene.json` 的 id）。
+    pub fn dropped_light_ids(&self) -> &[u32] {
+        &self.packet.scene.dropped_light_ids
+    }
+
     /// 从 `.scene.json` 重建世界（与 Tauri / GPUI 编辑器同一条路径）。
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, String> {
         // 旧世界的实体句柄全部失效：项目模块按这个代数丢弃缓存的句柄。

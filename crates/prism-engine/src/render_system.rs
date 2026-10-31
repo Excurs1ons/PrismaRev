@@ -37,6 +37,23 @@ fn warn_ignored_cameras(world: &World) {
     }
 }
 
+/// 上一次提示的「被丢弃局部光」数量（数量变化时才 warn，避免刷屏）。
+static LAST_DROPPED_LIGHTS: AtomicUsize = AtomicUsize::new(0);
+
+/// 局部光超过 `LIGHT_MAX` 时提示一次（#468）。
+///
+/// 上限本身是前向着色器的硬约束（SSBO 固定长度），但用户不该在「加了灯没反应」
+/// 之后自己猜。每帧都 warn 会刷屏，所以只在丢弃数量**变化**时打一条。
+fn warn_dropped_lights(total: usize, dropped: usize) {
+    let previous = LAST_DROPPED_LIGHTS.swap(dropped, Ordering::Relaxed);
+    if dropped > 0 && dropped != previous {
+        log::warn!(
+            "{dropped} of {total} local lights are not rendered: the forward pass only keeps the {} most important ones (intensity x range^2 / distance^2), see #468",
+            prism_render::LIGHT_MAX
+        );
+    }
+}
+
 /// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
 /// 勒克斯（或坎德拉）在 CPU 上乘以此因子，使着色器直接接收有效辐射度。
 /// `exposure` 随后成为应用于最终合成 HDR 颜色的纯亮度乘数。
@@ -69,7 +86,16 @@ pub struct SceneChanges {
     /// Light-space 正交 view-projection (shadow 映射表
     pub light_view_proj: Mat4,
     /// Point lights collected from the ECS 世界 上 to `LIGHT_MAX`).
+    ///
+    /// 超预算时按重要性挑（见 [`lights::local_light_importance`]），不再是文档顺序。
     pub lights: Vec<GpuLight>,
+    /// 场景里启用的局部光（点光 + 聚光）总数，截断**之前**的数量。
+    pub local_lights_total: usize,
+    /// 实际写进前向 SSBO 的局部光数量（≤ `LIGHT_MAX`）。
+    pub local_lights_kept: usize,
+    /// 被 `LIGHT_MAX` 挤掉的局部光实体（`.scene.json` 的 id；运行时实体没有 id，
+    /// 只计数不列名）。编辑器用它在检查器里标出「这盏灯没有画」。
+    pub dropped_light_ids: Vec<u32>,
     /// Analytic lights for path tracing (directional + point + spot).
     pub pt_lights: Vec<PtAnalyticLight>,
     /// Exposure multiplier from the 相机 实体
@@ -288,14 +314,39 @@ fn collect_scene_changes_into(
     let (shadows_enabled, shadow_strength) =
         scene::systems::lights::directional_shadow_state(&samples);
 
-    // 3. 局部光源（点光 + 聚光）上 to LIGHT_MAX) 进前向 SSBO。`color.w` 是类型位
-    //    （0 = 点光，1 = 聚光），聚光额外带朝向与内外锥余弦。
-    out.lights.clear();
-    for sample in samples
+    // 3. 局部光源（点光 + 聚光）进前向 SSBO，超过 LIGHT_MAX 时按重要性挑。
+    //    `color.w` 是类型位（0 = 点光，1 = 聚光），聚光额外带朝向与内外锥余弦。
+    //
+    //    以前是 `.take(LIGHT_MAX)`：谁被保留取决于 ECS 迭代顺序（≈ 文档顺序），
+    //    第九盏灯被静默丢掉，删掉前面某盏它又会突然出现（#468）。现在按
+    //    「强度 × 范围² / 相机距离²」排序，近处/亮/范围大的优先。
+    let mut locals: Vec<(usize, f32)> = samples
         .iter()
-        .filter(|sample| sample.kind != scene::systems::lights::LightKind::Directional)
-        .take(prism_render::LIGHT_MAX as usize)
-    {
+        .enumerate()
+        .filter(|(_, sample)| sample.kind != scene::systems::lights::LightKind::Directional)
+        .map(|(index, sample)| {
+            (
+                index,
+                scene::systems::lights::local_light_importance(sample, eye),
+            )
+        })
+        .collect();
+    out.local_lights_total = locals.len();
+    // 重要性降序；同分时按文档顺序，保证多帧之间稳定。
+    locals.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    locals.truncate(prism_render::LIGHT_MAX as usize);
+    // 回到文档顺序写 SSBO：内容一致，只是便于调试时逐盏对照层级面板。
+    locals.sort_unstable_by_key(|(index, _)| *index);
+    out.local_lights_kept = locals.len();
+    out.dropped_light_ids.clear();
+
+    out.lights.clear();
+    for (index, _) in &locals {
+        let sample = &samples[*index];
         let radiance = sample.color * sample.intensity * LUX_TO_RADIANCE_SCALE;
         let is_spot = sample.kind == scene::systems::lights::LightKind::Spot;
         out.lights.push(GpuLight {
@@ -324,6 +375,27 @@ fn collect_scene_changes_into(
             params: [sample.cos_inner, 0.0, 0.0, 0.0],
         });
     }
+
+    let dropped = out.local_lights_total - out.local_lights_kept;
+    if dropped > 0 {
+        let kept: std::collections::HashSet<usize> =
+            locals.iter().map(|(index, _)| *index).collect();
+        for (index, sample) in samples.iter().enumerate() {
+            if kept.contains(&index)
+                || sample.kind == scene::systems::lights::LightKind::Directional
+            {
+                continue;
+            }
+            if let Some(id) =
+                world.get::<crate::scene::runtime_components::SceneEntityId>(sample.entity)
+            {
+                out.dropped_light_ids.push(id.0);
+            }
+        }
+        out.dropped_light_ids.sort_unstable();
+        out.dropped_light_ids.dedup();
+    }
+    warn_dropped_lights(out.local_lights_total, dropped);
 
     // 4. 路径追踪的解析光：只喂点光（PT 着色器还没有聚光锥角分支）。
     out.pt_lights.clear();
@@ -437,6 +509,8 @@ pub fn render_system(
         clear_flags: _,
         shadows_enabled,
         shadow_strength,
+        // 光源预算只在编辑器统计里用（`#468`），渲染侧不需要。
+        ..
     } = scene;
     let light_count = lights.len() as f32;
 
@@ -679,6 +753,75 @@ mod tests {
         let fallback = collect_scene_changes(&mut empty, 16.0 / 9.0, &Mat4::IDENTITY);
         assert!(!fallback.has_camera);
         assert!(!fallback.camera_orthographic);
+    }
+
+    /// #468：局部光超过 `LIGHT_MAX` 时按重要性挑，而不是文档顺序。
+    ///
+    /// 场景里 5 盏近处亮灯 + 5 盏远处暗灯：留下的必须是 5 盏亮的再加 3 盏暗的，
+    /// 被丢的只有 2 盏最靠后的暗灯（同分时按文档顺序）。
+    #[test]
+    fn only_the_most_important_local_lights_reach_the_ssbo() {
+        use crate::scene::components::{LocalTransform, PointLight};
+        use crate::scene::runtime_components::SceneEntityId;
+
+        let mut world = World::new();
+        let camera = world.spawn();
+        world.insert(camera, Camera::default());
+        world.insert(camera, LocalToWorld(Mat4::IDENTITY));
+
+        for id in 1..=5u32 {
+            let light = world.spawn();
+            world.insert(
+                light,
+                PointLight {
+                    intensity: 100.0,
+                    range: 10.0,
+                    ..Default::default()
+                },
+            );
+            world.insert(
+                light,
+                LocalTransform {
+                    position: Vec3::new(0.0, 0.0, -1.0),
+                    ..Default::default()
+                },
+            );
+            world.insert(light, SceneEntityId(id));
+        }
+        for id in 6..=10u32 {
+            let light = world.spawn();
+            world.insert(
+                light,
+                PointLight {
+                    intensity: 1.0,
+                    range: 1.0,
+                    ..Default::default()
+                },
+            );
+            world.insert(
+                light,
+                LocalTransform {
+                    position: Vec3::new(0.0, 0.0, -1000.0),
+                    ..Default::default()
+                },
+            );
+            world.insert(light, SceneEntityId(id));
+        }
+
+        let changes = collect_scene_changes(&mut world, 16.0 / 9.0, &Mat4::IDENTITY);
+
+        assert_eq!(changes.local_lights_total, 10, "十盏灯都该被统计到");
+        assert_eq!(
+            changes.local_lights_kept,
+            prism_render::LIGHT_MAX as usize,
+            "SSBO 容量不变"
+        );
+        assert_eq!(changes.lights.len(), prism_render::LIGHT_MAX as usize);
+        assert_eq!(
+            changes.dropped_light_ids,
+            vec![9, 10],
+            "被丢的是最远的暗灯，不是文档里最后两盏亮灯"
+        );
     }
 
     /// 统一语义：只有 `clearFlags == Skybox` 才会绘制天空盒背景。

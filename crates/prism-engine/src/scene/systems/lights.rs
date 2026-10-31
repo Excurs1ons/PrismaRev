@@ -14,7 +14,6 @@
 
 use glam::{Quat, Vec3};
 use prism_ecs::World;
-use prism_render::LIGHT_MAX;
 
 use crate::euler_xyz_deg_to_dir;
 use crate::scene::components::*;
@@ -38,6 +37,8 @@ pub enum LightKind {
 /// `LUX_TO_RADIANCE_SCALE`）。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LightSample {
+    /// 光源实体（用来把「被 LIGHT_MAX 挤掉」的那几盏报给编辑器）。
+    pub entity: prism_ecs::Entity,
     pub kind: LightKind,
     /// 世界位置（方向光无意义，为 `ZERO`）。
     pub position: Vec3,
@@ -86,7 +87,12 @@ fn forward(rotation: Quat) -> Vec3 {
     (rotation * Vec3::Z).normalize_or_zero()
 }
 
-fn sample_from_light(light: &Light, position: Vec3, rotation: Quat) -> Option<LightSample> {
+fn sample_from_light(
+    entity: prism_ecs::Entity,
+    light: &Light,
+    position: Vec3,
+    rotation: Quat,
+) -> Option<LightSample> {
     let kind = match light.light_type {
         LightType::Directional => LightKind::Directional,
         LightType::Point => LightKind::Point,
@@ -96,6 +102,7 @@ fn sample_from_light(light: &Light, position: Vec3, rotation: Quat) -> Option<Li
     };
     let (inner, outer) = light.cone_half_angles_radians();
     Some(LightSample {
+        entity,
         kind,
         position: if kind == LightKind::Directional {
             Vec3::ZERO
@@ -114,8 +121,28 @@ fn sample_from_light(light: &Light, position: Vec3, rotation: Quat) -> Option<Li
     })
 }
 
-/// 收集全部可渲染光源（统一 `Light` 优先，旧组件兜底），最多 [`LIGHT_MAX`] 个局部光。
+/// 局部光的「重要性」：越大越该在 [`LIGHT_MAX`] 的名额里保留。
 ///
+/// `intensity × range² / max(distance², ε)`——近处、亮的、照得远的灯优先。
+/// 只用于超预算时挑灯，不参与着色。方向光不参与排序（返回 0）。
+pub fn local_light_importance(sample: &LightSample, eye: Vec3) -> f32 {
+    if sample.kind == LightKind::Directional {
+        return 0.0;
+    }
+    let distance_sq = (sample.position - eye).length_squared().max(0.01);
+    let range = sample.range.max(0.0);
+    let score = sample.intensity.max(0.0) * range * range / distance_sq;
+    if score.is_finite() {
+        score
+    } else {
+        0.0
+    }
+}
+
+/// 收集全部可渲染光源（统一 `Light` 优先，旧组件兜底）。
+///
+/// **不截断**：局部光的上限 [`LIGHT_MAX`] 由 `render_system` 在知道相机位置之后
+/// 按「强度 × 范围² / 距离²」挑出来（#468），这里返回全部启用光源。
 /// 方向光不占 [`LIGHT_MAX`]（它走 frame UBO 的单独通路）。
 pub fn collect_light_samples(world: &World) -> Vec<LightSample> {
     let mut out: Vec<LightSample> = Vec::new();
@@ -136,7 +163,7 @@ pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
             continue;
         }
         let (position, rotation) = entity_transform(world, entity);
-        if let Some(sample) = sample_from_light(light, position, rotation) {
+        if let Some(sample) = sample_from_light(entity, light, position, rotation) {
             out.push(sample);
         }
     }
@@ -147,6 +174,7 @@ pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
             continue;
         }
         out.push(LightSample {
+            entity,
             kind: LightKind::Directional,
             position: Vec3::ZERO,
             // `euler_xyz_deg_to_dir` 给的是「指向光源」的方向，而 `LightSample.direction`
@@ -168,6 +196,7 @@ pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
         }
         let (position, _) = entity_transform(world, entity);
         out.push(LightSample {
+            entity,
             kind: LightKind::Point,
             position,
             direction: Vec3::ZERO,
@@ -189,6 +218,7 @@ pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
         // 旧组件存的是**半**锥角（弧度）。
         let inner = light.inner_cone_angle.clamp(0.0, light.outer_cone_angle);
         out.push(LightSample {
+            entity,
             kind: LightKind::Spot,
             position,
             direction: forward(rotation),
@@ -203,15 +233,9 @@ pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
         });
     }
 
-    // 局部光（点光 + 聚光）只保留前 LIGHT_MAX 个；方向光不占额。
-    let mut local_seen = 0usize;
-    out.retain(|sample| {
-        if sample.kind == LightKind::Directional {
-            return true;
-        }
-        local_seen += 1;
-        local_seen <= LIGHT_MAX as usize
-    });
+    // 这里**不截断**：局部光要等 `render_system` 知道相机位置后才能按重要性
+    // 挑最重要的 LIGHT_MAX 盏（#468）。以前在这里按 ECS 顺序砍掉多余的，
+    // 结果第九盏灯是谁被丢完全取决于文档顺序，也没人告诉用户。
 }
 
 /// 方向光的阴影状态 `(enabled, strength)`。
@@ -249,12 +273,14 @@ pub fn collect_directional_light(world: &World) -> Option<DirectionalLight> {
         .map(|(_, light)| *light)
 }
 
-/// Collect point lights, 上 to [`LIGHT_MAX`] (currently 8).
+/// Collect point lights (all of them).
+///
+/// 旧组件路径的便捷查询；**不截断**——[`LIGHT_MAX`] 由 `render_system` 在知道
+/// 相机位置后统一挑（#468），这里再砍一次只会让点光和聚光互相挤掉。
 pub fn collect_point_lights(world: &World) -> Vec<PointLight> {
     world
         .query::<PointLight>()
         .filter(|(entity, _)| component_is_active(world, *entity))
-        .take(LIGHT_MAX as usize)
         .map(|(_, l)| *l)
         .collect()
 }

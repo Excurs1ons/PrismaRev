@@ -4,6 +4,7 @@
 
 use super::*;
 use prism_ecs::World;
+use prism_render::LIGHT_MAX;
 
 #[test]
 fn no_directional_light_returns_none() {
@@ -52,16 +53,16 @@ fn spot_lights_collected() {
 }
 
 #[test]
-fn point_lights_respect_max() {
+fn point_lights_are_not_truncated_by_the_legacy_collector() {
+    // #468：上限由 `render_system` 在知道相机位置后统一挑，旧组件查询不再砍。
     let mut world = World::new();
-    // 插入 LIGHT_MAX + 5 point lights.
     let extra = LIGHT_MAX + 5;
     for _ in 0..extra {
         let e = world.spawn();
         world.insert(e, PointLight::default());
     }
     let lights = collect_point_lights(&world);
-    assert_eq!(lights.len(), LIGHT_MAX as usize);
+    assert_eq!(lights.len(), extra as usize);
 }
 
 #[test]
@@ -314,7 +315,44 @@ fn local_light_budget_caps_only_point_and_spot() {
         .filter(|s| s.kind != LightKind::Directional)
         .count();
     assert_eq!(directional, 1, "方向光不占局部光预算");
-    assert_eq!(local, LIGHT_MAX as usize);
+    // #468：收集阶段不截断，预算由 `render_system` 按重要性挑。
+    assert_eq!(local, (LIGHT_MAX + 4) as usize);
+}
+
+#[test]
+fn nearer_and_brighter_lights_score_higher() {
+    let mut world = World::new();
+    let near = LightSample {
+        entity: world.spawn(),
+        kind: LightKind::Point,
+        position: Vec3::new(0.0, 0.0, -1.0),
+        direction: Vec3::ZERO,
+        color: Vec3::ONE,
+        intensity: 100.0,
+        range: 10.0,
+        cos_inner: 1.0,
+        cos_outer: -1.0,
+        ambient: 1.0,
+        shadows: LightShadows::None,
+        shadow_strength: 1.0,
+    };
+    let mut far = near;
+    far.position = Vec3::new(0.0, 0.0, -50.0);
+    assert!(local_light_importance(&near, Vec3::ZERO) > local_light_importance(&far, Vec3::ZERO));
+
+    let mut dim = near;
+    dim.intensity = 1.0;
+    assert!(local_light_importance(&near, Vec3::ZERO) > local_light_importance(&dim, Vec3::ZERO));
+
+    // 范围大的照得更远，优先保留。
+    let mut wide = near;
+    wide.range = 100.0;
+    assert!(local_light_importance(&wide, Vec3::ZERO) > local_light_importance(&near, Vec3::ZERO));
+
+    // 方向光不参与局部光预算。
+    let mut sun = near;
+    sun.kind = LightKind::Directional;
+    assert_eq!(local_light_importance(&sun, Vec3::ZERO), 0.0);
 }
 
 // ---------------------------------------------------------------------------
