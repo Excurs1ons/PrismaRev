@@ -23,7 +23,7 @@ use crate::viewport_math::{
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn world_delta_to_parent_local(doc: &SceneDoc, index: usize, delta_world: [f32; 3]) -> [f32; 3] {
     let parent = doc.entities[index]
@@ -892,6 +892,20 @@ impl Workspace {
         }
         project::rename_path(&root, from, to)?;
 
+        let (references, affected) =
+            self.rewrite_moved_references(&root, &[(from.to_string(), to.to_string())]);
+        Ok((references, affected))
+    }
+
+    /// 资产移动（重命名 / 拖到目录 / 目录改名）之后，改写所有文档里的引用。
+    ///
+    /// 打开着的文档就地改并标脏；磁盘上没打开的文档读-改-写回。返回
+    /// `(改写处数, 受影响文档)`，无法解析的引用只在日志里 warn（#465）。
+    fn rewrite_moved_references(
+        &mut self,
+        root: &Path,
+        moves: &[(String, String)],
+    ) -> (usize, Vec<String>) {
         let mut references = 0;
         let mut affected = Vec::new();
         let mut ambiguous: Vec<String> = Vec::new();
@@ -899,22 +913,23 @@ impl Workspace {
 
         for document in &mut self.docs {
             let doc_dir = document_dir(document.path.as_deref());
-            let rewrite = document.doc.rewrite_asset_references(&doc_dir, from, to);
-            if document.path.as_deref() == Some(from) {
-                document.path = Some(to.to_string());
+            for (from, to) in moves {
+                let rewrite = document.doc.rewrite_asset_references(&doc_dir, from, to);
+                ambiguous.extend(rewrite.ambiguous);
+                if rewrite.rewritten > 0 {
+                    document.dirty = true;
+                    references += rewrite.rewritten;
+                    affected.push(document.title());
+                }
+                if document.path.as_deref() == Some(from.as_str()) {
+                    document.path = Some(to.clone());
+                }
             }
             if let Some(path) = document.path.clone() {
                 open_paths.push(path);
             }
-            ambiguous.extend(rewrite.ambiguous);
-            if rewrite.rewritten > 0 {
-                document.dirty = true;
-                references += rewrite.rewritten;
-                affected.push(document.title());
-            }
         }
 
-        // 磁盘上没打开的文档：读-改-写，避免留下指向旧路径的引用。
         let closed: Vec<String> = self
             .project_files
             .iter()
@@ -923,38 +938,38 @@ impl Workspace {
             .filter(|path| !open_paths.contains(path))
             .collect();
         for path in closed {
-            let doc = match project::read_document(&root, &path) {
+            let mut doc = match project::read_document(root, &path) {
                 Ok(doc) => doc,
                 Err(error) => {
                     log::warn!("rename: cannot read {path}: {error}");
                     continue;
                 }
             };
-            let mut doc = doc;
-            let rewrite = doc.rewrite_asset_references(&document_dir(Some(&path)), from, to);
-            ambiguous.extend(rewrite.ambiguous);
-            if rewrite.rewritten == 0 {
+            let doc_dir = document_dir(Some(&path));
+            let mut rewritten = 0;
+            for (from, to) in moves {
+                let rewrite = doc.rewrite_asset_references(&doc_dir, from, to);
+                ambiguous.extend(rewrite.ambiguous);
+                rewritten += rewrite.rewritten;
+            }
+            if rewritten == 0 {
                 continue;
             }
-            match project::write_document(&root, &path, &doc) {
+            match project::write_document(root, &path, &doc) {
                 Ok(()) => {
-                    references += rewrite.rewritten;
+                    references += rewritten;
                     affected.push(path);
                 }
                 Err(error) => log::warn!("rename: cannot write {path}: {error}"),
             }
         }
 
+        affected.sort();
+        affected.dedup();
+        // 文件已经被搬走：文档列表与资产树都要重扫（`rename_asset` 以前在调用处做，
+        // 现在三个入口共用这份逻辑）。
         self.refresh_project_files();
         self.refresh_assets();
-        self.log(
-            LogSource::Editor,
-            LogLevel::Info,
-            format!(
-                "已重命名 {from} → {to}（改写 {references} 处引用，{} 个文档）",
-                affected.len()
-            ),
-        );
         if !ambiguous.is_empty() {
             ambiguous.sort();
             ambiguous.dedup();
@@ -968,7 +983,7 @@ impl Workspace {
                 ),
             );
         }
-        Ok((references, affected))
+        (references, affected)
     }
 
     /// 当前文档所在的目录（`assets/...` 形式），用于解析相对引用。
@@ -1062,6 +1077,134 @@ impl Workspace {
             format!("已新建目录 {relative}"),
         );
         Ok(relative.to_string())
+    }
+
+    /// 重命名 / 移动一个资产目录（#478）。
+    ///
+    /// 目录里的每个资产路径都变了，所以引用改写按「每个文件一对 from→to」走，
+    /// 和 `rename_asset` 共用同一套改写逻辑；目录本身用 `project::rename_path`
+    /// 一次 `fs::rename` 搬走。
+    pub fn rename_folder(&mut self, from: &str, to: &str) -> io::Result<(usize, Vec<String>)> {
+        let root = self.project_root.clone().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法重命名目录")
+        })?;
+        let from = from.trim_end_matches('/');
+        let to = to.trim_end_matches('/');
+        if let Some(problem) = project::asset_path_problem(to) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("目录路径不合法：{problem}"),
+            ));
+        }
+        if !from.starts_with("assets/") || !to.starts_with("assets/") || to == "assets" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "目录必须位于 assets/ 内",
+            ));
+        }
+        if !root.join(from).is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{from} 不是目录"),
+            ));
+        }
+        if to == from || to.starts_with(&format!("{from}/")) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "目标不能是目录自身或它的子目录",
+            ));
+        }
+
+        // 目录里每个资产的新路径都要参与引用改写。
+        let prefix = format!("{from}/");
+        let mut moves: Vec<(String, String)> = self
+            .assets
+            .iter()
+            .filter(|asset| asset.path.starts_with(&prefix))
+            .map(|asset| {
+                (
+                    asset.path.clone(),
+                    format!("{to}/{}", &asset.path[prefix.len()..]),
+                )
+            })
+            .collect();
+        // 目录里的文档也要跟着换路径（它们同样会被搬走）。
+        for file in &self.project_files {
+            if file.path.starts_with(&prefix) && !moves.iter().any(|(from, _)| from == &file.path) {
+                moves.push((
+                    file.path.clone(),
+                    format!("{to}/{}", &file.path[prefix.len()..]),
+                ));
+            }
+        }
+
+        project::rename_path(&root, from, to)?;
+
+        let (references, affected) = self.rewrite_moved_references(&root, &moves);
+
+        // 展开状态跟着目录走。
+        let expansions: Vec<String> = self.expanded_assets.iter().cloned().collect();
+        for path in expansions {
+            let next = if path == from {
+                to.to_string()
+            } else if let Some(rest) = path.strip_prefix(&prefix) {
+                format!("{to}/{rest}")
+            } else {
+                continue;
+            };
+            self.expanded_assets.remove(&path);
+            self.expanded_assets.insert(next);
+        }
+
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!(
+                "已重命名目录 {from} → {to}（改写 {references} 处引用，{} 个文档）",
+                affected.len()
+            ),
+        );
+        Ok((references, affected))
+    }
+
+    /// 删除一个**空**资产目录（#478）。
+    ///
+    /// 非空时拒绝而不是递归删除：资产删除已经在文件行上逐个确认过，
+    /// 目录级递归删除太容易误伤。
+    pub fn delete_folder(&mut self, path: &str) -> io::Result<()> {
+        let root = self.project_root.clone().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法删除目录")
+        })?;
+        let path = path.trim_end_matches('/');
+        if !path.starts_with("assets/") || path == "assets" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "只允许删除 assets/ 内的子目录",
+            ));
+        }
+        let full = root.join(path);
+        if !full.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{path} 不是目录"),
+            ));
+        }
+        let count = std::fs::read_dir(&full)?.count();
+        if count > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("目录非空（{count} 项），请先清空"),
+            ));
+        }
+        std::fs::remove_dir(&full)?;
+        self.expanded_assets.remove(path);
+        self.refresh_assets();
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已删除目录 {path}"),
+        );
+        Ok(())
     }
 
     /// 复制资产到同目录下的 `-2` / `-3` 路径。
@@ -5284,6 +5427,80 @@ mod tests {
             .and_then(|value| value.as_str());
         assert_eq!(value, Some("assets/moved/cube.fbx"));
         assert!(document.dirty, "文档被改写了就该是 dirty");
+    }
+
+    /// #478：目录改名要把目录里每个资产的引用都跟着改写。
+    #[test]
+    fn renaming_a_folder_rewrites_references_to_its_contents() {
+        let project = TempProject::new("folder-rename");
+        std::fs::create_dir_all(project.root.join("assets/tex")).unwrap();
+        std::fs::write(project.root.join("assets/tex/wood.png"), b"png").unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes/a.scene.json"),
+            r#"{"version":3,"entities":[{"id":1,"name":"Floor","components":{"prism_engine::scene::SpriteRenderer":{"sprite_path":"assets/tex/wood.png"}}}]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        let (references, affected) = workspace
+            .rename_folder("assets/tex", "assets/wood")
+            .unwrap();
+
+        assert_eq!(references, 1);
+        assert_eq!(affected.len(), 1);
+        assert!(project.root.join("assets/wood/wood.png").is_file());
+        assert!(!project.root.join("assets/tex").exists());
+        let value = workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .find(|entity| entity.name.as_deref() == Some("Floor"))
+            .and_then(|entity| entity.component("prism_engine::scene::SpriteRenderer"))
+            .and_then(|component| component.get("sprite_path"))
+            .and_then(|value| value.as_str());
+        assert_eq!(value, Some("assets/wood/wood.png"));
+        assert!(workspace.document().dirty);
+        assert!(workspace
+            .assets
+            .iter()
+            .any(|a| a.path == "assets/wood/wood.png"));
+    }
+
+    /// 目录改名不能搬进自己的子目录（`fs::rename` 会失败得很隐晦）。
+    #[test]
+    fn renaming_a_folder_rejects_its_own_subtree() {
+        let project = TempProject::new("folder-rename-subtree");
+        std::fs::create_dir_all(project.root.join("assets/tex/inner")).unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        assert!(workspace
+            .rename_folder("assets/tex", "assets/tex/inner")
+            .is_err());
+        assert!(project.root.join("assets/tex/inner").is_dir());
+    }
+
+    /// #478：只删空目录；非空时明确报错而不是递归删掉别人的资产。
+    #[test]
+    fn deleting_a_folder_requires_it_to_be_empty() {
+        let project = TempProject::new("folder-delete");
+        std::fs::create_dir_all(project.root.join("assets/empty")).unwrap();
+        std::fs::create_dir_all(project.root.join("assets/full")).unwrap();
+        std::fs::write(project.root.join("assets/full/keep.png"), b"png").unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        let error = workspace.delete_folder("assets/full").unwrap_err();
+        assert!(error.to_string().contains("非空"), "{error}");
+
+        workspace.delete_folder("assets/empty").unwrap();
+        assert!(!project.root.join("assets/empty").exists());
+        assert!(workspace.tree.find("assets/empty").is_none());
+
+        // `assets/` 根自身不能删。
+        assert!(workspace.delete_folder("assets").is_err());
     }
 
     #[test]
