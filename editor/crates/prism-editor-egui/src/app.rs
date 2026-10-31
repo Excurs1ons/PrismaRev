@@ -822,8 +822,33 @@ impl EditorApp {
             self.palette.open(&self.workspace);
             return Ok("open search".to_string());
         }
+        if let Some(rest) = node.strip_prefix("resolution:") {
+            // Game 视图的预览分辨率（#463）：`match` 或 `1920x1080`。
+            use crate::viewport::GameResolution;
+            let target = if rest == "match" {
+                GameResolution::MatchWindow
+            } else {
+                let (width, height) = rest
+                    .split_once('x')
+                    .ok_or_else(|| format!("bad resolution '{rest}' (want 1920x1080)"))?;
+                GameResolution::Fixed {
+                    width: width
+                        .parse()
+                        .map_err(|_| format!("bad resolution width '{width}'"))?,
+                    height: height
+                        .parse()
+                        .map_err(|_| format!("bad resolution height '{height}'"))?,
+                }
+            };
+            self.ensure_view(ViewKind::Game);
+            if let Some(view) = self.game_view.as_mut() {
+                view.target = target;
+                view.mark_dirty();
+            }
+            return Ok(format!("game resolution {}", target.label()));
+        }
         Err(format!(
-            "unsupported node '{node}' (command:… / panel:… / doc:… / entity:… / asset:… / search:open)"
+            "unsupported node '{node}' (command:… / panel:… / doc:… / entity:… / asset:… / search:open / resolution:<WxH>|match)"
         ))
     }
 

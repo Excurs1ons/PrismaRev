@@ -15,6 +15,7 @@
 //! | `entity:<id>` | 层级树实体 | ✅ | — |
 //! | `asset:<path>` | 资产面板条目 | ✅ | — |
 //! | `field:<entity>:<component>:<path>` | 检查器字段 | — | ✅ |
+//! | `resolution:<WxH>` / `resolution:match` | Game 视图预览分辨率（#463） | ✅ | — |
 
 use std::collections::BTreeMap;
 

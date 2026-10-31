@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use ash::vk;
-use egui::{Rect, Sense};
+use egui::{Align, Layout, Rect, Sense, Vec2};
 use egui_ash::ImageRegistry;
 use prism_editor_core::{viewport_math as vm, TransformJson, Workspace};
 use prism_engine::input::{ElementState, KeyCode, MouseButton};
@@ -92,6 +92,91 @@ fn game_cursor(rect: Rect, position: egui::Pos2, extent: (u32, u32)) -> [f32; 2]
     ]
 }
 
+/// Game 视图的预览分辨率。
+///
+/// `MatchWindow` 是旧行为：渲染目标跟着面板走，于是同一份 UI 在不同面板大小下
+/// 看到的比例 / 字号都不一样。其余选项让渲染目标与面板**解耦**——面板只决定这张图
+/// 在屏幕上占多大（等比 letterbox），构图和 UI 尺寸与目标设备一致（#463）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameResolution {
+    #[default]
+    MatchWindow,
+    Fixed {
+        width: u32,
+        height: u32,
+    },
+}
+
+impl GameResolution {
+    pub fn label(self) -> String {
+        match self {
+            GameResolution::MatchWindow => "Match Window".to_string(),
+            GameResolution::Fixed { width, height } => format!("{width}x{height}"),
+        }
+    }
+
+    /// 渲染目标尺寸。`MatchWindow` 用面板算出来的尺寸。
+    pub fn extent(self, panel_extent: (u32, u32)) -> (u32, u32) {
+        match self {
+            GameResolution::MatchWindow => panel_extent,
+            // 与 `viewport_extent` 同一个上限：超过 4096 的离屏目标很多驱动直接失败。
+            GameResolution::Fixed { width, height } => {
+                (width.clamp(1, 4096), height.clamp(1, 4096))
+            }
+        }
+    }
+}
+
+/// Game 视图工具栏里列出的预设（横屏 / 竖屏 / 常见设备）。
+pub const GAME_RESOLUTION_PRESETS: &[GameResolution] = &[
+    GameResolution::MatchWindow,
+    GameResolution::Fixed {
+        width: 1920,
+        height: 1080,
+    },
+    GameResolution::Fixed {
+        width: 1280,
+        height: 720,
+    },
+    GameResolution::Fixed {
+        width: 2560,
+        height: 1440,
+    },
+    GameResolution::Fixed {
+        width: 1080,
+        height: 1920,
+    },
+    GameResolution::Fixed {
+        width: 2400,
+        height: 1080,
+    },
+    GameResolution::Fixed {
+        width: 750,
+        height: 1334,
+    },
+];
+
+/// 把 `extent` 的图等比放进 `outer`，居中留黑边（Unity Game 视图的 letterbox）。
+///
+/// 面板比例与目标比例不一致时，**不拉伸**：拉伸会让 16:9 的构图在 4:3 面板上
+/// 变形，等于又回到「编辑器里看到的不等于设备上看到的」（#463）。
+pub fn letterbox(outer: Rect, extent: (u32, u32)) -> Rect {
+    if extent.0 == 0 || extent.1 == 0 || outer.width() <= 0.0 || outer.height() <= 0.0 {
+        return outer;
+    }
+    let target = extent.0 as f32 / extent.1 as f32;
+    let panel = outer.width() / outer.height();
+    if panel > target {
+        // 面板更宽：以高度为准，左右留边。
+        let width = outer.height() * target;
+        Rect::from_center_size(outer.center(), Vec2::new(width, outer.height()))
+    } else {
+        // 面板更高：以宽度为准，上下留边。
+        let height = outer.width() / target;
+        Rect::from_center_size(outer.center(), Vec2::new(outer.width(), height))
+    }
+}
+
 /// 引擎的 W / E / R 工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GizmoTool {
@@ -157,6 +242,8 @@ pub struct ViewportState {
     forwarded_left_down: bool,
     /// 渲染图报告的输出路径（只有 Scene view 设；`None` = 不写）。
     pub report_path: Option<std::path::PathBuf>,
+    /// Game 视图的预览分辨率（Scene 视图忽略它）。
+    pub target: GameResolution,
 }
 
 pub struct ViewportResponse {
@@ -193,6 +280,7 @@ impl ViewportState {
             forwarded_keys: HashSet::new(),
             forwarded_left_down: false,
             report_path: None,
+            target: GameResolution::default(),
         })
     }
 
@@ -389,7 +477,19 @@ impl ViewportState {
     ) -> ViewportResponse {
         let rect = ui.available_rect_before_wrap();
         let ppp = ui.ctx().pixels_per_point();
-        self.extent = viewport_extent(rect.width(), rect.height(), ppp, scale);
+        let panel_extent = viewport_extent(rect.width(), rect.height(), ppp, scale);
+        // Game 视图可以钉一个目标分辨率：面板大小只影响显示尺寸，不影响出图。
+        self.extent = if self.kind() == ViewKind::Game {
+            self.target.extent(panel_extent)
+        } else {
+            panel_extent
+        };
+        // 面板比例与目标比例不一致时居中留黑边，绝不拉伸（#463）。
+        let image_rect = if self.kind() == ViewKind::Game {
+            letterbox(rect, self.extent)
+        } else {
+            rect
+        };
         // 面板尺寸变化（splitter / 窗口 resize）必须重建离屏目标，否则图像会被拉伸。
         let current = self
             .host
@@ -409,7 +509,7 @@ impl ViewportState {
         // 2) 采样纹理（同一设备、同一命令缓冲区 → 零拷贝）。
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         // Game view 的 Play 把键鼠转发给项目模块（下一帧 tick 读取）。
-        self.forward_game_input(ui, rect, &response);
+        self.forward_game_input(ui, image_rect, &response);
         let painter = ui.painter_at(rect);
 
         // Project → 场景视口：预制体落到地面（y = 0）生成实例，场景文件则打开文档。
@@ -478,7 +578,7 @@ impl ViewportState {
         if let Some(texture) = &self.texture {
             painter.image(
                 texture.id,
-                rect,
+                image_rect,
                 Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
@@ -495,6 +595,46 @@ impl ViewportState {
                 egui::FontId::proportional(13.0),
                 egui::Color32::from_gray(150),
             );
+        }
+
+        // 2.5) Game 视图左上角：预览分辨率。面板再大也不改构图（#463）。
+        if self.kind() == ViewKind::Game {
+            let bar = Rect::from_min_size(
+                image_rect.min + egui::vec2(6.0, 6.0),
+                Vec2::new(190.0, 22.0),
+            );
+            let mut bar_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(bar)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            let mut chosen = self.target;
+            egui::ComboBox::from_id_salt(("game-resolution", rect.min.x as i32))
+                .selected_text(self.target.label())
+                .width(120.0)
+                .show_ui(&mut bar_ui, |ui| {
+                    for preset in GAME_RESOLUTION_PRESETS {
+                        if ui
+                            .selectable_label(*preset == self.target, preset.label())
+                            .on_hover_text(match preset {
+                                GameResolution::MatchWindow => {
+                                    "Render at the panel size (old behaviour)"
+                                }
+                                GameResolution::Fixed { width, height } => {
+                                    "Render off-screen at this resolution and letterbox it"
+                                }
+                            })
+                            .clicked()
+                        {
+                            chosen = *preset;
+                        }
+                    }
+                });
+            if chosen != self.target {
+                self.target = chosen;
+                // 新尺寸 = 新的离屏目标，下一帧必须重建。
+                self.dirty = true;
+            }
         }
 
         // 3) gizmo / 选中标记。
@@ -1302,6 +1442,47 @@ mod tests {
         assert_eq!(viewport_extent(9000.0, 9000.0, 1.0, 2.0), (4096, 4096));
         // 倍率本身也被夹在 0.25..=2.0。
         assert_eq!(viewport_extent(100.0, 100.0, 1.0, 0.0), (25, 25));
+    }
+
+    #[test]
+    fn a_fixed_resolution_ignores_the_panel_size() {
+        // #463：钉住 1920x1080 之后，面板拖大拖小都出同样的图。
+        let target = GameResolution::Fixed {
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(target.extent((800, 600)), (1920, 1080));
+        assert_eq!(target.extent((3840, 2160)), (1920, 1080));
+        // Match Window 仍然跟着面板走（旧行为）。
+        assert_eq!(GameResolution::MatchWindow.extent((800, 600)), (800, 600));
+        // 超过离屏上限时夹到 4096，和 `viewport_extent` 一致。
+        assert_eq!(
+            GameResolution::Fixed {
+                width: 8000,
+                height: 9000
+            }
+            .extent((1, 1)),
+            (4096, 4096)
+        );
+    }
+
+    #[test]
+    fn letterbox_keeps_the_aspect_ratio_and_centres_the_image() {
+        let outer = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(1000.0, 1000.0));
+        // 16:9 的图放进正方形面板：以宽度为准，上下留边。
+        let fitted = letterbox(outer, (1920, 1080));
+        assert!((fitted.width() - 1000.0).abs() < 1e-3);
+        assert!((fitted.height() - 562.5).abs() < 1e-3);
+        assert!((fitted.center() - outer.center()).length() < 1e-3);
+
+        // 面板很宽：以高度为准，左右留边。
+        let wide = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(2000.0, 500.0));
+        let fitted = letterbox(wide, (1920, 1080));
+        assert!((fitted.height() - 500.0).abs() < 1e-3);
+        assert!((fitted.width() - 888.888).abs() < 0.01);
+
+        // 退化尺寸不 panic，原样返回。
+        assert_eq!(letterbox(outer, (0, 0)), outer);
     }
 
     #[test]
