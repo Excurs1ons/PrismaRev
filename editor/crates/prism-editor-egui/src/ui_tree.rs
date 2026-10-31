@@ -278,6 +278,7 @@ pub fn panel_title(tab: &str) -> &'static str {
         "build" => "Build Settings",
         "problems" => "Problems",
         "prefabOverrides" => "Prefab Overrides",
+        "material" => "Material",
         "tools" => "Offline Tools",
         "settings" => "Project Settings",
         "preferences" => "Preferences",
