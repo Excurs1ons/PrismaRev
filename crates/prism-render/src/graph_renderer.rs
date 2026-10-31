@@ -479,8 +479,13 @@ impl GraphRenderer {
 
         // PostPass parameters: 2 in-flight frames = 2 描述符 sets.
         let frame_count = 2u32;
-        let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
-            .context("PostPass::new")?;
+        let post_pass = crate::post::PostPass::new(
+            &context,
+            color_format,
+            frame_count,
+            vk::ImageLayout::PRESENT_SRC_KHR,
+        )
+        .context("PostPass::new")?;
 
         // PathTracePass — real-time path tracing compute pass.
         // Registered when hardware acceleration structures are supported;
@@ -616,7 +621,8 @@ impl GraphRenderer {
     /// 把帧结束后的离屏图像转到 `SHADER_READ_ONLY_OPTIMAL` 并等待 GPU
     /// 完成，供 UI 框架直接采样（零拷贝视口）。
     ///
-    /// `present` 之后图像停留在 `PRESENT_SRC_KHR`；下一次帧的 PostPass 用
+    /// 帧结束后离屏图像停在 `COLOR_ATTACHMENT_OPTIMAL`（headless 上下文没有
+    /// `VK_KHR_swapchain`，不能用 `PRESENT_SRC_KHR`）；下一次帧的 PostPass 用
     /// `initial_layout = UNDEFINED`（load op clear），因此从任何布局回来都合法。
     pub fn offscreen_present_for_sampling(&mut self) -> anyhow::Result<()> {
         let context = self.runtime.context.clone();
@@ -624,7 +630,7 @@ impl GraphRenderer {
             .offscreen
             .as_mut()
             .context("offscreen_present_for_sampling: no OffscreenTarget")?;
-        target.transition_to_shader_read(&context, ash::vk::ImageLayout::PRESENT_SRC_KHR)
+        target.transition_to_shader_read(&context, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
     }
 
     // ── headless 众数 ──────────────────────────────────────────────
@@ -790,8 +796,16 @@ impl GraphRenderer {
             .context("ForwardPass::set_resources (headless)")?;
 
         let frame_count = 2u32;
-        let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
-            .context("PostPass::new (headless)")?;
+        // Headless contexts do not enable `VK_KHR_swapchain`, so the offscreen
+        // image must never end a render pass in `PRESENT_SRC_KHR`; it stays a
+        // color attachment until something explicitly transitions it.
+        let post_pass = crate::post::PostPass::new(
+            &context,
+            color_format,
+            frame_count,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        )
+        .context("PostPass::new (headless)")?;
 
         // `gtao` feature 关闭时 set 4 退化为 1×1 白色（无遮蔽）。
         #[cfg(feature = "gtao")]
@@ -921,7 +935,10 @@ impl GraphRenderer {
             .offscreen
             .as_mut()
             .context("copy_offscreen_to_readback called but no OffscreenTarget (not headless?)")?;
-        target.copy_to_readback(&self.runtime.context, vk::ImageLayout::PRESENT_SRC_KHR)
+        target.copy_to_readback(
+            &self.runtime.context,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        )
     }
 
     /// 异步提交离屏图像读回；已有读回未完成时跳过本次提交。
@@ -929,7 +946,10 @@ impl GraphRenderer {
         self.offscreen
             .as_mut()
             .context("copy_offscreen_to_readback_async called but no OffscreenTarget")?
-            .copy_to_readback_async(&self.runtime.context, vk::ImageLayout::PRESENT_SRC_KHR)
+            .copy_to_readback_async(
+                &self.runtime.context,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            )
     }
 
     /// Immutable 借用 of the 渲染 图 (passes + declared resources +

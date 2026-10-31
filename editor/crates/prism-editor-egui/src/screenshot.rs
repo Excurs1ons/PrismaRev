@@ -6,7 +6,7 @@
 //!   把窗口当前合成结果画进一个 32bpp DIB，再转 RGBA 写 PNG。Vulkan 交换链
 //!   由 egui-ash 持有，宿主拿不到 `VkImage`，所以这是唯一能连 UI 一起抓下来的
 //!   办法；它在 DWM 合成之后取样，窗口即使部分在屏幕外也能抓全。
-//! - **视口**（`scene` / `game`）：引擎自己的离屏图像（`PRESENT_SRC_KHR` 布局）
+//! - **视口**（`scene` / `game`）：引擎自己的离屏图像（`COLOR_ATTACHMENT_OPTIMAL` 布局）
 //!   读回后写 PNG，不依赖窗口 / 合成器，无显示器也能出图（CI / 远程）。
 //!
 //! 触发方是 MCP（`crates/prism-editor-mcp` 的 `editor_capture`）或菜单

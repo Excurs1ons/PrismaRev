@@ -38,7 +38,8 @@ pub struct OffscreenTarget {
 impl OffscreenTarget {
     const FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
-    /// 图像句柄（布局在帧结束后为 `PRESENT_SRC_KHR`，调用
+    /// 图像句柄（布局在帧结束后为 `COLOR_ATTACHMENT_OPTIMAL`：headless
+    /// 上下文没有 `VK_KHR_swapchain`，`PRESENT_SRC_KHR` 在那里不是合法布局；调用
     /// [`transition_to_shader_read`](Self::transition_to_shader_read) 后为
     /// `SHADER_READ_ONLY_OPTIMAL`）。
     pub fn image(&self) -> vk::Image {
@@ -498,7 +499,7 @@ impl OffscreenTarget {
             cmd,
             self.image,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            vk::ImageLayout::PRESENT_SRC_KHR,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             vk::AccessFlags::TRANSFER_READ,
             vk::AccessFlags::empty(),
             vk::PipelineStageFlags::TRANSFER,
