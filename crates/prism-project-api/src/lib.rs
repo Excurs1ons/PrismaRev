@@ -112,9 +112,12 @@ impl EntityHandle {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct InputSnapshot {
-    /// 光标位置（屏幕像素，左上原点）。
+    /// 光标位置（**绘图区像素**，左上原点）。
+    ///
+    /// 与 [`Self::screen`] 是同一个坐标系：宿主已经把逻辑坐标折算到渲染目标上，
+    /// 保证 `0 <= cursor <= screen`。插件不要自己再乘 DPI 倍率。
     pub cursor: [f32; 2],
-    /// 当前绘图区域尺寸（像素）。
+    /// 当前绘图区域尺寸（像素，与 [`Self::cursor`] 同一坐标系）。
     pub screen: [f32; 2],
     pub left_clicked: bool,
     pub left_held: bool,

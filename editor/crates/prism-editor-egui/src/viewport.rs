@@ -53,6 +53,21 @@ pub fn viewport_extent(width: f32, height: f32, ppp: f32, scale: f32) -> (u32, u
     )
 }
 
+/// 面板内位置（egui points，左上原点）→ 离屏渲染目标的像素坐标。
+///
+/// 只能按 `extent / rect` 缩放，不能直接乘 `pixels_per_point × scale`：
+/// [`viewport_extent`] 会把每个维度夹到 4096，而 2560 points × DPR 2 就已经
+/// 5120 了。直接乘会让 `InputSnapshot::cursor` 跑出 `screen` 之外，
+/// 按光标做瞄准 / UI 命中的 gameplay 代码会整体偏移（#405）。
+fn game_cursor(rect: Rect, position: egui::Pos2, extent: (u32, u32)) -> [f32; 2] {
+    let width = rect.width().max(1.0);
+    let height = rect.height().max(1.0);
+    [
+        ((position.x - rect.min.x) / width) * extent.0 as f32,
+        ((position.y - rect.min.y) / height) * extent.1 as f32,
+    ]
+}
+
 /// 引擎的 W / E / R 工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GizmoTool {
@@ -160,20 +175,13 @@ impl ViewportState {
     ///
     /// Game view 的项目模块通过 `InputSnapshot` 读输入；Scene view 的
     /// 轨道相机不走这里。只在 Play 中转发，停止 Play 时清空遗留状态。
-    fn forward_game_input(
-        &mut self,
-        ui: &egui::Ui,
-        rect: Rect,
-        response: &egui::Response,
-        scale: f32,
-    ) {
+    fn forward_game_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
         if self.kind() != ViewKind::Game || !self.host.is_simulating() {
             self.forwarded_keys.clear();
             self.forwarded_left_down = false;
             return;
         }
 
-        let ppp = ui.ctx().pixels_per_point();
         let (mut keys_down, modifiers, hover_pos, primary_down) = ui.input(|input| {
             let keys = input
                 .keys_down
@@ -200,11 +208,10 @@ impl ViewportState {
 
         if let Some(position) = hover_pos {
             if rect.contains(position) {
-                let local = [
-                    ((position.x - rect.min.x) * ppp * scale) as f64,
-                    ((position.y - rect.min.y) * ppp * scale) as f64,
-                ];
-                self.host.input_mut().set_mouse_position(local);
+                let local = game_cursor(rect, position, self.extent);
+                self.host
+                    .input_mut()
+                    .set_mouse_position([local[0] as f64, local[1] as f64]);
             }
         }
 
@@ -352,7 +359,7 @@ impl ViewportState {
         // 2) 采样纹理（同一设备、同一命令缓冲区 → 零拷贝）。
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         // Game view 的 Play 把键鼠转发给项目模块（下一帧 tick 读取）。
-        self.forward_game_input(ui, rect, &response, scale);
+        self.forward_game_input(ui, rect, &response);
         let painter = ui.painter_at(rect);
 
         // Project → 场景视口：预制体落到地面（y = 0）生成实例，场景文件则打开文档。
@@ -1144,6 +1151,7 @@ fn engine_key(key: egui::Key) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::{Pos2, Vec2};
 
     #[test]
     fn game_keys_use_the_engine_abi_mapping() {
@@ -1166,5 +1174,38 @@ mod tests {
         assert_eq!(viewport_extent(9000.0, 9000.0, 1.0, 2.0), (4096, 4096));
         // 倍率本身也被夹在 0.25..=2.0。
         assert_eq!(viewport_extent(100.0, 100.0, 1.0, 0.0), (25, 25));
+    }
+
+    #[test]
+    fn game_cursor_stays_inside_the_render_target() {
+        let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(800.0, 600.0));
+        let extent = viewport_extent(800.0, 600.0, 2.0, 1.0);
+        assert_eq!(extent, (1600, 1200));
+
+        assert_eq!(game_cursor(rect, rect.min, extent), [0.0, 0.0]);
+
+        let corner = game_cursor(rect, rect.max, extent);
+        assert_eq!(corner, [extent.0 as f32, extent.1 as f32]);
+
+        let middle = game_cursor(rect, rect.center(), extent);
+        assert_eq!(middle, [extent.0 as f32 / 2.0, extent.1 as f32 / 2.0]);
+    }
+
+    #[test]
+    fn game_cursor_follows_the_clamped_extent() {
+        // 2560 points × DPR 2 = 5120 物理像素，但离屏目标夹在 4096：
+        // 光标必须跟 `screen` 用同一把尺子，否则最右侧会落在画面外（#405）。
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(2560.0, 1440.0));
+        let extent = viewport_extent(rect.width(), rect.height(), 2.0, 1.0);
+        assert_eq!(extent, (4096, 2880));
+
+        let right_edge = game_cursor(rect, Pos2::new(rect.max.x, 0.0), extent);
+        assert_eq!(right_edge[0], extent.0 as f32);
+        assert!(
+            right_edge[0] <= extent.0 as f32,
+            "光标不该超过 InputSnapshot::screen（{} > {}）",
+            right_edge[0],
+            extent.0
+        );
     }
 }
