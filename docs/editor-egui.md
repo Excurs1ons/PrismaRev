@@ -188,7 +188,9 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
 - **检查器**：单选 + 多选（公共组件批量改字段，一次撤销）；预制体区块（Revert /
   Sync All / Save as Prefab…）；组件卡头的复制 / 移除；Add Component 分类菜单；
 - **Project（资产）**：后退 / 前进 / 面包屑、目录浏览、类型过滤、搜索、重命名 /
-  复制 / 删除 / 复制路径 / 实例化预制体；**资产可拖拽**：拖到目录 = 移动并改写引用，
+  复制 / 删除 / 复制路径 / 实例化预制体；**目录行**和文件一样可以选中（单击选中、
+  双击进入），右键有 Open / Rename / New Subfolder / Copy Path / Show in Explorer /
+  Delete（只能删空目录），`F2` 就地改名；**资产可拖拽**：拖到目录 = 移动并改写引用，
   拖到层级实体 = 实例化预制体，拖到检查器的路径字段 = 直接写入路径（`AssetDrag` 载荷）。
 - **Problems**：项目模块与玩家构建的 error / warning 列表（`file:line:col`），
   点一行打开源码；工具栏的模块状态与第一段同源，`Ctrl+R` / `Compile` 重新编译。

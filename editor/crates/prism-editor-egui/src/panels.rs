@@ -1901,6 +1901,8 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut commit_rename: Option<(String, String)> = None;
     // 资产拖到目录行 = 移入该目录（#471）。
     let mut move_to_folder: Option<(String, String)> = None;
+    // 目录右键 → New Subfolder（#478）。
+    let mut create_subfolder: Option<String> = None;
 
     egui::ScrollArea::vertical()
         .id_salt("asset-scroll")
@@ -1919,12 +1921,45 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
             let colors = workspace.colors();
             for path in &folders {
+                let selected = state.asset_selection.as_deref() == Some(path.as_str());
+                let renaming = matches!(&state.asset_rename, Some((target, _)) if target == path);
+                if renaming {
+                    // 目录也走同一个就地重命名输入框（#478）。
+                    ui.horizontal(|ui| {
+                        if let Some((_, buffer)) = state.asset_rename.as_mut() {
+                            let response = ui.add(
+                                egui::TextEdit::singleline(buffer)
+                                    .desired_width(ui.available_width().max(80.0)),
+                            );
+                            if state.asset_rename_focus {
+                                response.request_focus();
+                                state.asset_rename_focus = false;
+                            }
+                            let (enter, escape) = ui.input(|input| {
+                                (
+                                    input.key_pressed(egui::Key::Enter),
+                                    input.key_pressed(egui::Key::Escape),
+                                )
+                            });
+                            let clicked_outside = response.lost_focus()
+                                && ui.input(|input| input.pointer.any_click());
+                            if escape {
+                                state.asset_rename = None;
+                                state.asset_rename_focus = false;
+                            } else if enter || clicked_outside {
+                                commit_rename = state.asset_rename.take();
+                                state.asset_rename_focus = false;
+                            }
+                        }
+                    });
+                    continue;
+                }
                 let label = format!(
                     "{} {}",
                     icons::FOLDER,
                     path.rsplit('/').next().unwrap_or(path)
                 );
-                let row = list_row(ui, &colors, false, state.compact, &label);
+                let row = list_row(ui, &colors, selected, state.compact, &label);
                 // 拖资产经过目录行：高亮；松手 = 移入该目录（#471）。
                 if row.dnd_hover_payload::<widgets::AssetDrag>().is_some() {
                     ui.painter().rect_filled(
@@ -1935,9 +1970,43 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 }
                 if let Some(payload) = row.dnd_release_payload::<widgets::AssetDrag>() {
                     move_to_folder = Some((payload.path.clone(), path.clone()));
-                } else if row.clicked() {
+                } else if row.double_clicked() {
+                    // 单击 = 选中，双击 = 进入（#478）。
                     navigate_assets(state, path);
+                } else if row.clicked() {
+                    state.asset_selection = Some(path.clone());
                 }
+                row.context_menu(|ui| {
+                    if ui.button("Open").clicked() {
+                        navigate_assets(state, path);
+                        ui.close();
+                    }
+                    if ui.button("Rename…").clicked() {
+                        rename = Some(path.clone());
+                        ui.close();
+                    }
+                    if ui.button("New Subfolder…").clicked() {
+                        create_subfolder = Some(path.clone());
+                        ui.close();
+                    }
+                    if ui.button("Copy Path").clicked() {
+                        ui.ctx().copy_text(path.clone());
+                        state.status = format!("copied {path}");
+                        ui.close();
+                    }
+                    if ui.button("Show in Explorer").clicked() {
+                        state.status = match reveal_asset(workspace, path) {
+                            Ok(()) => format!("revealed {path}"),
+                            Err(error) => error,
+                        };
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Delete").clicked() {
+                        delete = Some(path.clone());
+                        ui.close();
+                    }
+                });
             }
             for (path, kind, _size) in &files {
                 let selected = state.asset_selection.as_deref() == Some(path.as_str());
@@ -2077,17 +2146,37 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     }
     if let Some((from, file_name)) = commit_rename {
         let target = rename_target(&from, &file_name);
+        let is_folder = workspace
+            .project_root
+            .as_ref()
+            .map(|root| root.join(&from).is_dir())
+            .unwrap_or(false);
         match target {
-            Some(to) if to != from => match workspace.rename_asset(&from, &to) {
-                Ok((count, _)) => {
-                    state.asset_selection = Some(to.clone());
-                    state.status = format!("renamed → {to} ({count} references updated)");
+            Some(to) if to != from => {
+                let result = if is_folder {
+                    workspace.rename_folder(&from, &to).map(|(count, _)| count)
+                } else {
+                    workspace.rename_asset(&from, &to).map(|(count, _)| count)
+                };
+                match result {
+                    Ok(count) => {
+                        state.asset_selection = Some(to.clone());
+                        state.status = format!("renamed → {to} ({count} references updated)");
+                    }
+                    Err(error) => state.status = format!("rename failed: {error}"),
                 }
-                Err(error) => state.status = format!("rename failed: {error}"),
-            },
+            }
             Some(_) => {}
             None => state.status = "invalid file name".to_string(),
         }
+    }
+    if let Some(folder) = create_subfolder {
+        state.prompt = Some(Prompt::new(
+            PromptKind::NewFolder,
+            "New Folder",
+            "assets/ 下的相对目录",
+            format!("{folder}/"),
+        ));
     }
     if let Some(path) = delete {
         if is_document_path(&path) {
@@ -2111,7 +2200,17 @@ pub fn request_delete_asset(workspace: &mut Workspace, state: &mut UiState, path
 
 /// 真正执行删除（确认框 / 关闭确认后调用）。
 pub fn delete_asset_now(workspace: &mut Workspace, state: &mut UiState, path: &str) {
-    match workspace.delete_asset(path) {
+    let is_folder = workspace
+        .project_root
+        .as_ref()
+        .map(|root| root.join(path).is_dir())
+        .unwrap_or(false);
+    let result = if is_folder {
+        workspace.delete_folder(path)
+    } else {
+        workspace.delete_asset(path)
+    };
+    match result {
         Ok(()) => {
             if state.asset_selection.as_deref() == Some(path) {
                 state.asset_selection = None;
