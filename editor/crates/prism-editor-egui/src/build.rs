@@ -44,6 +44,23 @@ pub enum BuildKind {
     Clean,
     /// `cargo clean` 仓库根 workspace（引擎 + 全部 crate 的编译缓存）。
     CleanEngine,
+    /// `prism-build-pipeline bake-gi`：离线 GI 探针体烘焙（Offline Tools，#477）。
+    BakeGi {
+        output: String,
+        rays: u32,
+        bounces: u32,
+    },
+    /// `prism-build-pipeline heightmap`：程序化地形 + 侵蚀（Offline Tools，#477）。
+    Heightmap {
+        output: String,
+        width: u32,
+        height: u32,
+        seed: u64,
+        iterations: u32,
+        sea_level: f32,
+    },
+    /// `prism-build-pipeline build-scenes --output … --compression …`：自定义打包（#477）。
+    ScenePackCustom { output: String, compression: u32 },
 }
 
 pub(crate) fn game_manifest_path(root: &Path) -> PathBuf {
@@ -76,6 +93,18 @@ impl BuildKind {
             BuildKind::PlayerRun => "build-scenes + build and run".to_string(),
             BuildKind::Clean => "cargo clean (player)".to_string(),
             BuildKind::CleanEngine => "cargo clean (engine)".to_string(),
+            BuildKind::BakeGi {
+                output,
+                rays,
+                bounces,
+            } => format!("bake-gi {rays} rays / {bounces} bounces → {output}"),
+            BuildKind::Heightmap {
+                output,
+                width,
+                height,
+                ..
+            } => format!("heightmap {width}x{height} → {output}"),
+            BuildKind::ScenePackCustom { output, .. } => format!("build-scenes → {output}"),
         }
     }
 
@@ -124,6 +153,63 @@ impl BuildKind {
                 "--manifest-path".to_string(),
                 root.join("Cargo.toml").display().to_string(),
             ]],
+            BuildKind::BakeGi {
+                output,
+                rays,
+                bounces,
+            } => {
+                let rays = rays.to_string();
+                let bounces = bounces.to_string();
+                vec![pipeline(&[
+                    "bake-gi",
+                    output,
+                    "--rays",
+                    &rays,
+                    "--bounces",
+                    &bounces,
+                ])?]
+            }
+            BuildKind::Heightmap {
+                output,
+                width,
+                height,
+                seed,
+                iterations,
+                sea_level,
+            } => {
+                let (width, height) = (width.to_string(), height.to_string());
+                let seed = format!("{seed}");
+                let iterations = iterations.to_string();
+                let sea_level = format!("{sea_level}");
+                vec![pipeline(&[
+                    "heightmap",
+                    "--output",
+                    output,
+                    "--width",
+                    &width,
+                    "--height",
+                    &height,
+                    "--seed",
+                    &seed,
+                    "--iterations",
+                    &iterations,
+                    "--sea-level",
+                    &sea_level,
+                ])?]
+            }
+            BuildKind::ScenePackCustom {
+                output,
+                compression,
+            } => {
+                let compression = compression.to_string();
+                vec![pipeline(&[
+                    "build-scenes",
+                    "--output",
+                    output,
+                    "--compression",
+                    &compression,
+                ])?]
+            }
         })
     }
 }
@@ -354,6 +440,71 @@ mod tests {
 
     fn mentions(args: &[String], needle: &str) -> bool {
         args.iter().any(|arg| arg.contains(needle))
+    }
+
+    /// #477：Offline Tools 的面板只是把参数拼成 `prism-build-pipeline` 的命令行。
+    #[test]
+    fn offline_tool_commands_target_the_pipeline() {
+        let root = repo_root();
+
+        let bake = BuildKind::BakeGi {
+            output: "assets/gi/out.bin".to_string(),
+            rays: 128,
+            bounces: 4,
+        }
+        .commands(&root)
+        .unwrap();
+        assert_eq!(bake.len(), 1);
+        assert!(mentions(&bake[0], "bake-gi"));
+        assert!(mentions(&bake[0], "assets/gi/out.bin"));
+        assert!(bake[0]
+            .windows(2)
+            .any(|pair| pair[0] == "--rays" && pair[1] == "128"));
+        assert!(bake[0]
+            .windows(2)
+            .any(|pair| pair[0] == "--bounces" && pair[1] == "4"));
+
+        let heightmap = BuildKind::Heightmap {
+            output: "assets/heightmaps/t.raw".to_string(),
+            width: 256,
+            height: 128,
+            seed: 7,
+            iterations: 9,
+            sea_level: 0.4,
+        }
+        .commands(&root)
+        .unwrap();
+        assert_eq!(heightmap.len(), 1);
+        let args = &heightmap[0];
+        assert!(mentions(args, "heightmap"));
+        for (flag, value) in [
+            ("--output", "assets/heightmaps/t.raw"),
+            ("--width", "256"),
+            ("--height", "128"),
+            ("--seed", "7"),
+            ("--iterations", "9"),
+            ("--sea-level", "0.4"),
+        ] {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair[0] == flag && pair[1] == value),
+                "{flag} {value} missing from {args:?}"
+            );
+        }
+
+        let pack = BuildKind::ScenePackCustom {
+            output: "assets/custom.pak".to_string(),
+            compression: 7,
+        }
+        .commands(&root)
+        .unwrap();
+        assert!(mentions(&pack[0], "build-scenes"));
+        assert!(pack[0]
+            .windows(2)
+            .any(|pair| pair[0] == "--output" && pair[1] == "assets/custom.pak"));
+        assert!(pack[0]
+            .windows(2)
+            .any(|pair| pair[0] == "--compression" && pair[1] == "7"));
     }
 
     #[test]

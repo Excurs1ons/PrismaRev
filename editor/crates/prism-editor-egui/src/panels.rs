@@ -202,6 +202,41 @@ fn rename_target(from: &str, file_name: &str) -> Option<String> {
     }
 }
 
+/// Offline Tools 面板的表单（运行参数，不进文档、不持久化）。
+#[derive(Debug, Clone)]
+pub struct OfflineToolsState {
+    pub gi_output: String,
+    pub gi_rays: u32,
+    pub gi_bounces: u32,
+    pub heightmap_output: String,
+    pub heightmap_width: u32,
+    pub heightmap_height: u32,
+    pub heightmap_seed: u64,
+    pub heightmap_iterations: u32,
+    pub heightmap_sea_level: f32,
+    pub pack_output: String,
+    pub pack_compression: u32,
+}
+
+impl Default for OfflineToolsState {
+    fn default() -> Self {
+        // 默认值与 `prism-build-pipeline --help` 一致：照着默认值点下去就是文档里的产物。
+        Self {
+            gi_output: "assets/gi/probe_volume.bin".to_string(),
+            gi_rays: 64,
+            gi_bounces: 3,
+            heightmap_output: "assets/heightmaps/terrain.raw".to_string(),
+            heightmap_width: 512,
+            heightmap_height: 512,
+            heightmap_seed: 0x5EED,
+            heightmap_iterations: 100,
+            heightmap_sea_level: 0.7,
+            pack_output: "assets/scenes.pak".to_string(),
+            pack_compression: 3,
+        }
+    }
+}
+
 /// egui 侧的临时 UI 状态（不进文档、不进撤销栈）。
 #[derive(Default)]
 pub struct UiState {
@@ -276,6 +311,8 @@ pub struct UiState {
     pub pending_build: Option<crate::build::BuildKind>,
     /// 当前是否有构建子进程在跑（由 `EditorApp` 每帧同步，用来禁用按钮）。
     pub build_running: bool,
+    /// Offline Tools 的表单（GI bake / heightmap / 自定义打包参数）。
+    pub offline: OfflineToolsState,
     /// 待确认的破坏性操作（引擎的 `EditorUtility.DisplayDialog`）。
     pub confirm: Option<Confirm>,
     /// 最后点过的面板（引擎的 `focusedWindow`）：快捷键按它分派。
@@ -3263,17 +3300,208 @@ pub fn about(ui: &mut Ui) {
     );
 }
 
-pub fn tools(ui: &mut Ui, state: &mut UiState) {
+/// Offline Tools：把 `prism-build-pipeline` 的离线能力搬进面板（#477）。
+///
+/// 编辑器不链接 cooker / bake（AGENTS.md 的硬规则），所以这里和 Build 面板一样
+/// 只**拼命令行**、交给 `BuildKind` / `BuildJob` 起子进程；输出流式进 Console，
+/// 失败时带退出码。参数默认值抄自 `prism-build-pipeline --help`。
+pub fn tools(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     ui.heading("Offline tools");
     ui.label(
         RichText::new(
-            "Heightmap / GI baking run through `prism-build-pipeline` on the host. \
-             Use `cargo run -p prism-build-pipeline -- --help`.",
+            "Runs `cargo run -p prism-build-pipeline -- …` on the host. \
+             Output streams into the Console; the editor never links the cooker.",
         )
         .weak()
         .size(11.0),
     );
-    let _ = state;
+    if state.build_running {
+        ui.label(
+            RichText::new("a task is already running…")
+                .weak()
+                .size(11.0),
+        );
+    }
+    ui.separator();
+
+    egui::CollapsingHeader::new("GI Bake")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("Offline probe-volume bake (GPU ray query, multi-bounce).")
+                    .weak()
+                    .size(10.5),
+            );
+            ui.horizontal(|ui| {
+                ui.label("rays");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.gi_rays)
+                        .speed(4.0)
+                        .range(1..=4096),
+                )
+                .on_hover_text("Rays per probe");
+                ui.label("bounces");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.gi_bounces)
+                        .speed(0.2)
+                        .range(1..=16),
+                )
+                .on_hover_text("Max bounces");
+            });
+            ui.horizontal(|ui| {
+                ui.label("output");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.offline.gi_output)
+                        .desired_width(ui.available_width().max(120.0)),
+                );
+            });
+            let (output, rays, bounces) = (
+                state.offline.gi_output.trim().to_string(),
+                state.offline.gi_rays,
+                state.offline.gi_bounces,
+            );
+            ui.add_enabled_ui(!state.build_running, |ui| {
+                if ui.button("Bake GI").clicked() {
+                    state.pending_build = Some(crate::build::BuildKind::BakeGi {
+                        output,
+                        rays,
+                        bounces,
+                    });
+                }
+            });
+        });
+
+    egui::CollapsingHeader::new("Heightmap")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("Procedural fbm terrain + hydraulic / thermal erosion (raw f32).")
+                    .weak()
+                    .size(10.5),
+            );
+            ui.horizontal(|ui| {
+                ui.label("size");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.heightmap_width)
+                        .speed(8.0)
+                        .range(16..=8192),
+                );
+                ui.label("×");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.heightmap_height)
+                        .speed(8.0)
+                        .range(16..=8192),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("seed");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.heightmap_seed)
+                        .speed(1.0)
+                        .range(0..=u64::MAX),
+                );
+                ui.label("erosion");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.heightmap_iterations)
+                        .speed(4.0)
+                        .range(0..=10_000),
+                )
+                .on_hover_text("Erosion iterations");
+            });
+            ui.horizontal(|ui| {
+                ui.label("sea level");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.heightmap_sea_level)
+                        .speed(0.01)
+                        .range(0.0..=1.0)
+                        .max_decimals(2),
+                )
+                .on_hover_text("0 = all land, 1 = all ocean (0.7 ≈ Earth)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("output");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.offline.heightmap_output)
+                        .desired_width(ui.available_width().max(120.0)),
+                );
+            });
+            let (output, width, height, seed, iterations, sea_level) = (
+                state.offline.heightmap_output.trim().to_string(),
+                state.offline.heightmap_width,
+                state.offline.heightmap_height,
+                state.offline.heightmap_seed,
+                state.offline.heightmap_iterations,
+                state.offline.heightmap_sea_level,
+            );
+            ui.add_enabled_ui(!state.build_running, |ui| {
+                if ui.button("Generate Heightmap").clicked() {
+                    state.pending_build = Some(crate::build::BuildKind::Heightmap {
+                        output,
+                        width,
+                        height,
+                        seed,
+                        iterations,
+                        sea_level,
+                    });
+                }
+            });
+        });
+
+    egui::CollapsingHeader::new("Cook / Build Scenes")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("Cook every scene in `assets/scenes.json` into the runtime `.pak`.")
+                    .weak()
+                    .size(10.5),
+            );
+            ui.horizontal(|ui| {
+                ui.label("output");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.offline.pack_output)
+                        .desired_width(ui.available_width().max(120.0)),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("compression");
+                ui.add(
+                    egui::DragValue::new(&mut state.offline.pack_compression)
+                        .speed(0.2)
+                        .range(0..=22),
+                )
+                .on_hover_text("zstd level (0 = store)");
+            });
+            let (output, compression) = (
+                state.offline.pack_output.trim().to_string(),
+                state.offline.pack_compression,
+            );
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!state.build_running, |ui| {
+                    if ui.button("Build Scenes").clicked() {
+                        state.pending_build = Some(crate::build::BuildKind::ScenePackCustom {
+                            output,
+                            compression,
+                        });
+                    }
+                    // 「Cook 当前场景」用文档路径；面板拿不到 App 的 root，所以自己
+                    // 用项目根拼绝对路径（与 Build 面板的 Cook 一致）。
+                    let cook_path = workspace
+                        .project_root
+                        .as_ref()
+                        .zip(workspace.document().path.as_ref())
+                        .map(|(root, path)| root.join(path));
+                    if ui
+                        .add_enabled(cook_path.is_some(), egui::Button::new("Cook active scene"))
+                        .on_hover_text("Single scene → RSCN (assets/cooked)")
+                        .clicked()
+                    {
+                        if let Some(path) = cook_path {
+                            state.pending_build = Some(crate::build::BuildKind::Cook(path));
+                        }
+                    }
+                });
+            });
+        });
 }
 
 /// 关闭所有 `True` 的布尔窗口（`About` / `Shortcuts` 用）。
@@ -3420,7 +3648,7 @@ mod window_smoke_tests {
         run_frame(|ui, workspace, state| build(ui, workspace, state));
         run_frame(|ui, _workspace, _state| shortcuts(ui));
         run_frame(|ui, _workspace, _state| about(ui));
-        run_frame(|ui, _workspace, state| tools(ui, state));
+        run_frame(|ui, workspace, state| tools(ui, workspace, state));
     }
 
     #[test]
