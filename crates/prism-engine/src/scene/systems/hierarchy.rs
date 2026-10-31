@@ -113,6 +113,70 @@ fn visit_children(
     }
 }
 
+/// 把 [`Active`] 沿父子关系传播成 [`ActiveInHierarchy`]。
+///
+/// Unity 的 `activeSelf`（层级里那个眼睛）与 `activeInHierarchy`（实际是否参与
+/// 渲染 / 逻辑）是两件事：任一祖先 inactive，整棵子树都算 inactive。之前引擎
+/// 只按单实体的 `Active` 过滤，关掉父级后子物体照常出现（#433）。
+///
+/// 与 [`hierarchy_system`] 一样在 `Engine::update` 末尾跑一次 —— 用户在 tick 里
+/// 关掉父级，同一帧的 extract 就要看到结果。这里单独走一趟而不是塞进
+/// `hierarchy_system`：矩阵传播只为「有 `LocalTransform` / `Child`」的实体建树，
+/// 而 `Active` 可能挂在不带变换的纯逻辑节点上。
+pub fn active_hierarchy_system(world: &mut World) {
+    let mut entities: Vec<Entity> = world.query::<Active>().map(|(entity, _)| entity).collect();
+    entities.extend(world.query::<Parent>().map(|(entity, _)| entity));
+    entities.sort_unstable_by_key(|entity| entity.id());
+    entities.dedup();
+
+    // 沿父链累乘，命中已算过的祖先就直接复用（深树也是 O(n)）。
+    let mut resolved: std::collections::HashMap<Entity, bool> = std::collections::HashMap::new();
+    for entity in entities {
+        let mut chain: Vec<Entity> = Vec::new();
+        let mut effective = true;
+        let mut cursor = Some(entity);
+        while let Some(current) = cursor {
+            if let Some(done) = resolved.get(&current) {
+                effective &= *done;
+                break;
+            }
+            // 脏数据里可能成环（A→B→A）：按已累计的结果收尾，别死循环。
+            if chain.contains(&current) {
+                break;
+            }
+            chain.push(current);
+            effective &= world
+                .get::<Active>(current)
+                .map(|active| active.0)
+                .unwrap_or(true);
+            cursor = world
+                .get::<Parent>(current)
+                .map(|parent| parent.0)
+                .filter(|parent| world.is_alive(*parent));
+        }
+        for item in chain {
+            resolved.insert(item, effective);
+        }
+    }
+
+    for (entity, value) in resolved {
+        world.insert(entity, ActiveInHierarchy(value));
+    }
+}
+
+/// 渲染 / 光照 / UI 过滤用的有效激活状态：优先派生值，其次自身 [`Active`]。
+///
+/// 派生组件缺失时（实体刚 spawn 还没跑过系统）退回自身 `Active`，与旧行为一致。
+pub fn is_active_in_hierarchy(world: &World, entity: Entity) -> bool {
+    if let Some(derived) = world.get::<ActiveInHierarchy>(entity) {
+        return derived.0;
+    }
+    world
+        .get::<Active>(entity)
+        .map(|active| active.0)
+        .unwrap_or(true)
+}
+
 #[cfg(test)]
 #[path = "hierarchy_tests.rs"]
 mod tests;

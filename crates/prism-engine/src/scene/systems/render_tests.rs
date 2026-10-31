@@ -569,3 +569,43 @@ fn sprites_and_lines_sort_together() {
         "line (layer 5) draws on top"
     );
 }
+
+/// #433：关掉父级，子物体也必须从 draw list 里消失（Unity 的
+/// `activeInHierarchy`）。派生值由 `active_hierarchy_system` 写入。
+#[test]
+fn child_of_an_inactive_parent_is_skipped() {
+    let mut world = World::new();
+    let parent = world.spawn();
+    let child = world.spawn();
+    world.insert(parent, Active(false));
+    world.insert(child, Active(true));
+    crate::scene::helpers::HierarchyHelper::reparent(&mut world, child, Some(parent));
+    world.insert(
+        child,
+        LocalToWorld(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+    );
+    world.insert(
+        child,
+        MeshRef {
+            asset_id: SceneAssetId::generate(),
+            render_handle: MeshHandle::default(),
+            generation: 1,
+        },
+    );
+    world.insert(
+        child,
+        MaterialRef {
+            asset_id: SceneAssetId::generate(),
+            material_slot: 0,
+            generation: 1,
+        },
+    );
+
+    crate::scene::systems::hierarchy::active_hierarchy_system(&mut world);
+    assert!(scene_render_system(&world).is_empty());
+
+    // 父级重新打开 → 子物体回来。
+    world.insert(parent, Active(true));
+    crate::scene::systems::hierarchy::active_hierarchy_system(&mut world);
+    assert_eq!(scene_render_system(&world).len(), 1);
+}

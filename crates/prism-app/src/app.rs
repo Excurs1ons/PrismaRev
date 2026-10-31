@@ -1052,6 +1052,9 @@ impl App {
                 // 编辑态：不消费 fixed accumulator，避免切到 Play 时补跑一大段。
                 self.fixed_accumulator = Duration::ZERO;
                 prism_engine::scene::systems::hierarchy::hierarchy_system(engine.world_mut());
+                prism_engine::scene::systems::hierarchy::active_hierarchy_system(
+                    engine.world_mut(),
+                );
             }
 
             // --- 音频更新（`audio` feature） ---

@@ -240,6 +240,7 @@ impl EngineHost {
         // 加载器只保证根实体的 `LocalToWorld`；立刻传播一次，让相机 / 高亮
         // 在第一帧就落在正确位置。
         prism_engine::scene::systems::hierarchy::hierarchy_system(self.engine.world_mut());
+        prism_engine::scene::systems::hierarchy::active_hierarchy_system(self.engine.world_mut());
 
         self.ensure_helper_entities();
         self.accumulator = Duration::ZERO;
@@ -434,6 +435,9 @@ impl EngineHost {
             // 编辑态（或暂停）：不跑游戏 system，只传播层级。
             self.accumulator = Duration::ZERO;
             prism_engine::scene::systems::hierarchy::hierarchy_system(self.engine.world_mut());
+            prism_engine::scene::systems::hierarchy::active_hierarchy_system(
+                self.engine.world_mut(),
+            );
         }
 
         self.pump_assets();

@@ -378,6 +378,8 @@ impl Engine {
         // 放在调度之后而不是放在某个 system 里，是因为用户 system 可以在
         // `runtime_initialize` 之后再注册（App::add_system），无法靠注册顺序保证。
         crate::scene::systems::hierarchy::hierarchy_system(&mut self.world);
+        // `Active` 沿父子传播（`activeInHierarchy`），渲染 / 光照读派生值。
+        crate::scene::systems::hierarchy::active_hierarchy_system(&mut self.world);
 
         // Tick the main‑thread timer 分发 expired callbacks).
         self.timer.tick();

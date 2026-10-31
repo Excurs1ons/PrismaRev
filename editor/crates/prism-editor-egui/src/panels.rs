@@ -142,6 +142,15 @@ fn flat_icon(ui: &mut Ui, glyph: &str) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(glyph).size(11.0)).frame(false))
 }
 
+/// 同 [`flat_icon`]，但可以画成灰色（层级里的「祖先被关掉」提示）。
+fn flat_icon_dimmed(ui: &mut Ui, glyph: &str, dimmed: bool) -> egui::Response {
+    let mut text = RichText::new(glyph).size(11.0);
+    if dimmed {
+        text = text.weak();
+    }
+    ui.add(egui::Button::new(text).frame(false))
+}
+
 /// 资产面板的排序列（Project 窗口的列头）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AssetSort {
@@ -503,11 +512,24 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 } else {
                     row_ui.add_space(16.0);
                 }
+                // 祖先被关掉时整棵子树都不渲染 / 不参与逻辑（引擎的
+                // `ActiveInHierarchy`，Unity 的 `activeInHierarchy`）。眼睛只写
+                // 自身的 `Active`，所以子物体要画成灰的，否则用户点了父级
+                // 会以为子物体没反应（#433）。
+                let ancestor_active = doc
+                    .path_of(index)
+                    .iter()
+                    .rev()
+                    .skip(1)
+                    .all(|ancestor| doc.entities.get(*ancestor).is_some_and(|e| e.active()));
                 let eye = if active { icons::EYE } else { icons::EYE_SLASH };
-                if flat_icon(&mut row_ui, eye)
-                    .on_hover_text("Toggle Active")
-                    .clicked()
-                {
+                let response = flat_icon_dimmed(&mut row_ui, eye, active && !ancestor_active);
+                let response = if active && !ancestor_active {
+                    response.on_hover_text("Hidden by an inactive parent")
+                } else {
+                    response.on_hover_text("Toggle Active")
+                };
+                if response.clicked() {
                     action = Some(TreeAction::ToggleActive(index));
                 }
                 if renaming {

@@ -298,3 +298,68 @@ fn multiple_roots() {
     let wt2 = world.get::<LocalToWorld>(r2).unwrap().0;
     assert!((wt2.w_axis[1] - 20.0).abs() < 1e-6);
 }
+
+#[test]
+fn deactivating_a_parent_deactivates_the_whole_subtree() {
+    let mut world = World::new();
+    let parent = world.spawn();
+    let child = world.spawn();
+    let grandchild = world.spawn();
+    for entity in [parent, child, grandchild] {
+        world.insert(entity, Active(true));
+    }
+    HierarchyHelper::reparent(&mut world, child, Some(parent));
+    HierarchyHelper::reparent(&mut world, grandchild, Some(child));
+
+    world.insert(parent, Active(false));
+    active_hierarchy_system(&mut world);
+
+    assert!(!world.get::<ActiveInHierarchy>(parent).unwrap().0);
+    assert!(!world.get::<ActiveInHierarchy>(child).unwrap().0);
+    assert!(!world.get::<ActiveInHierarchy>(grandchild).unwrap().0);
+    assert!(!is_active_in_hierarchy(&world, grandchild));
+    // 自身 `Active` 不改：检查器显示的是 `activeSelf`。
+    assert!(world.get::<Active>(child).unwrap().0);
+
+    // 父级重新打开，子树跟着回来。
+    world.insert(parent, Active(true));
+    active_hierarchy_system(&mut world);
+    assert!(is_active_in_hierarchy(&world, grandchild));
+}
+
+#[test]
+fn a_hidden_child_does_not_hide_its_siblings_or_parent() {
+    let mut world = World::new();
+    let parent = world.spawn();
+    let hidden = world.spawn();
+    let shown = world.spawn();
+    for entity in [parent, hidden, shown] {
+        world.insert(entity, Active(true));
+    }
+    HierarchyHelper::reparent(&mut world, hidden, Some(parent));
+    HierarchyHelper::reparent(&mut world, shown, Some(parent));
+    world.insert(hidden, Active(false));
+
+    active_hierarchy_system(&mut world);
+
+    assert!(is_active_in_hierarchy(&world, parent));
+    assert!(is_active_in_hierarchy(&world, shown));
+    assert!(!is_active_in_hierarchy(&world, hidden));
+}
+
+#[test]
+fn active_hierarchy_survives_a_parent_cycle() {
+    let mut world = World::new();
+    let a = world.spawn();
+    let b = world.spawn();
+    world.insert(a, Active(true));
+    world.insert(b, Active(true));
+    // 绕过 `HierarchyHelper` 直接写 `Parent`，模拟损坏的存档。
+    world.insert(a, Parent(b));
+    world.insert(b, Parent(a));
+
+    active_hierarchy_system(&mut world);
+
+    assert!(is_active_in_hierarchy(&world, a));
+    assert!(is_active_in_hierarchy(&world, b));
+}
