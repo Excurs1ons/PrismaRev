@@ -739,6 +739,37 @@ pub fn projected_box_edges(
     Some(out)
 }
 
+/// 拖放落点：射线与「作者平面」的交点（#646）。
+///
+/// 3D 视图把资产扔到地面 `y = 0`；2D 视图（#641）是正视 XY，地面在那里是
+/// 侧着的一条线，所以改打 `z = 0`（UI / sprite 所在平面）。射线与平面平行、
+/// 交点在相机背后（`t <= 0`）或非有限时返回 `None`。
+pub fn drop_point(camera: &OrbitCamera, ray: ([f32; 3], [f32; 3])) -> Option<[f32; 3]> {
+    let (origin, direction) = ray;
+    let axis = if camera.orthographic { 2 } else { 1 };
+    let mut point = [0.0f32; 3];
+    point[axis] = 0.0;
+    if direction[axis].abs() <= 1e-4 {
+        return None;
+    }
+    let t = -origin[axis] / direction[axis];
+    if !t.is_finite() || t <= 0.0 {
+        return None;
+    }
+    for slot in 0..3 {
+        point[slot] = if slot == axis {
+            0.0
+        } else {
+            origin[slot] + direction[slot] * t
+        };
+    }
+    if point.iter().all(|value| value.is_finite()) {
+        Some(point)
+    } else {
+        None
+    }
+}
+
 /// 2D 矩形（sprite / rect）的 4 条边投影到屏幕空间（#643）。
 ///
 /// `size` 是世界单位下的宽高，`pivot` 是 `0..1` 的轴心（左下角为原点，
@@ -995,6 +1026,42 @@ mod tests {
             600.0
         )
         .is_none());
+    }
+
+    /// #646：拖放落点 —— 3D 打地面 y = 0，2D 打 z = 0。
+    #[test]
+    fn drop_point_uses_the_authoring_plane_per_view() {
+        // 2D：正视 XY，30px/世界单位，屏幕 (430, 285) = 世界 (+1, +0.5)。
+        let mut camera = camera_2d();
+        let frame = camera_frame(&camera);
+        let ray = ray_from_screen(430.0, 285.0, &frame, 800.0, 600.0);
+        let point = drop_point(&camera, ray).unwrap();
+        assert!(point[2].abs() < 1e-4, "2D 落点必须在 z = 0 平面上");
+        assert!((point[0] - 1.0).abs() < 1e-3);
+        assert!((point[1] - 0.5).abs() < 1e-3);
+
+        // 3D：俯视时中心射线落到原点（target）处的地面。
+        camera.set_2d(false);
+        camera.pitch = 0.6;
+        let frame = camera_frame(&camera);
+        let ray = ray_from_screen(400.0, 300.0, &frame, 800.0, 600.0);
+        let point = drop_point(&camera, ray).unwrap();
+        assert!(point[1].abs() < 1e-4, "3D 落点必须在地面上");
+        assert!(point[0].abs() < 1e-3 && point[2].abs() < 1e-3);
+    }
+
+    #[test]
+    fn drop_point_rejects_rays_parallel_to_the_plane() {
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        // 默认相机水平看向 −Z，与 y = 0 平行 → 没有落点。
+        let ray = ray_from_screen(400.0, 300.0, &frame, 800.0, 600.0);
+        assert!(drop_point(&camera, ray).is_none());
+        // 平行射线 / 朝平面外飞的射线都拒绝；垂直向下的射线正常投影到地面。
+        assert!(drop_point(&camera, ([0.0, 5.0, 0.0], [1.0, 0.0, 0.0])).is_none());
+        assert!(drop_point(&camera, ([0.0, 5.0, 0.0], [0.0, 1.0, 0.0])).is_none());
+        let point = drop_point(&camera, ([1.0, 5.0, 2.0], [0.0, -1.0, 0.0])).unwrap();
+        assert_eq!(point, [1.0, 0.0, 2.0]);
     }
 
     #[test]

@@ -528,16 +528,106 @@ impl ViewportState {
         let painter = ui.painter_at(rect);
 
         // Project → 场景视口：预制体落到地面（y = 0）生成实例，场景文件则打开文档。
-        if response
-            .dnd_hover_payload::<crate::widgets::AssetDrag>()
-            .is_some()
-        {
+        //
+        // 拖动中就把落点画出来（#646）：只描一圈视口边框看不出「会落在哪」，
+        // 也看不出这个资产到底能不能放。
+        if let Some(payload) = response.dnd_hover_payload::<crate::widgets::AssetDrag>() {
+            let accepts =
+                payload.path.ends_with(".prefab.json") || payload.path.ends_with(".scene.json");
+            let (edge, tint, hint) = if accepts {
+                (
+                    egui::Color32::from_rgb(90, 170, 120),
+                    egui::Color32::from_rgba_unmultiplied(90, 170, 120, 36),
+                    drop_hint(&payload.path),
+                )
+            } else {
+                (
+                    egui::Color32::from_rgb(214, 96, 96),
+                    egui::Color32::from_rgba_unmultiplied(214, 96, 96, 28),
+                    "cannot be dropped here".to_string(),
+                )
+            };
             painter.rect_stroke(
                 rect.shrink(2.0),
                 egui::CornerRadius::ZERO,
-                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 170, 120)),
+                egui::Stroke::new(2.0_f32, edge),
                 egui::StrokeKind::Inside,
             );
+            painter.rect_filled(rect.shrink(2.0), egui::CornerRadius::ZERO, tint);
+            if let Some(pos) = response
+                .hover_pos()
+                .or_else(|| response.interact_pointer_pos())
+            {
+                let local = (pos.x - rect.min.x, pos.y - rect.min.y);
+                let frame = vm::camera_frame(&workspace.camera);
+                let ray =
+                    vm::ray_from_screen(local.0, local.1, &frame, rect.width(), rect.height());
+                if accepts {
+                    if let Some(point) = vm::drop_point(&workspace.camera, ray) {
+                        // 落点：投影到屏幕的十字 + 单位立方体轮廓。
+                        if let Some((x, y, _)) =
+                            vm::project(point, &frame, rect.width(), rect.height())
+                        {
+                            let center = rect.min + egui::vec2(x, y);
+                            let stroke = egui::Stroke::new(1.5_f32, edge);
+                            painter.line_segment(
+                                [
+                                    center + egui::vec2(-7.0, 0.0),
+                                    center + egui::vec2(7.0, 0.0),
+                                ],
+                                stroke,
+                            );
+                            painter.line_segment(
+                                [
+                                    center + egui::vec2(0.0, -7.0),
+                                    center + egui::vec2(0.0, 7.0),
+                                ],
+                                stroke,
+                            );
+                        }
+                        let ghost = TransformJson {
+                            position: point,
+                            rotation: [0.0, 0.0, 0.0, 1.0],
+                            scale: [1.0, 1.0, 1.0],
+                        };
+                        if let Some(edges) =
+                            vm::projected_box_edges(&ghost, &frame, rect.width(), rect.height())
+                        {
+                            for (a, b) in edges {
+                                painter.line_segment(
+                                    [
+                                        rect.min + egui::vec2(a.0, a.1),
+                                        rect.min + egui::vec2(b.0, b.1),
+                                    ],
+                                    egui::Stroke::new(1.0_f32, edge),
+                                );
+                            }
+                        }
+                    }
+                }
+                // 光标旁的标签：资产名 + 这次拖放会做什么。
+                let name = payload.path.rsplit('/').next().unwrap_or(&payload.path);
+                let text = format!("{name}  →  {hint}");
+                let anchor = pos + egui::vec2(16.0, 18.0);
+                let galley = painter.layout_no_wrap(
+                    text,
+                    egui::FontId::monospace(11.0),
+                    egui::Color32::WHITE,
+                );
+                let chip = egui::Rect::from_min_size(anchor, galley.size() + egui::vec2(8.0, 4.0));
+                painter.rect_filled(
+                    chip,
+                    egui::CornerRadius::ZERO,
+                    egui::Color32::from_rgba_unmultiplied(18, 20, 24, 220),
+                );
+                painter.rect_stroke(
+                    chip,
+                    egui::CornerRadius::ZERO,
+                    egui::Stroke::new(1.0_f32, edge),
+                    egui::StrokeKind::Inside,
+                );
+                painter.galley(anchor + egui::vec2(4.0, 2.0), galley, egui::Color32::WHITE);
+            }
         }
         if let Some(payload) = response.dnd_release_payload::<crate::widgets::AssetDrag>() {
             let path = payload.path.clone();
@@ -549,33 +639,25 @@ impl ViewportState {
                     Ok(_) => {
                         if let Some(local) = drop_local {
                             let frame = vm::camera_frame(&workspace.camera);
-                            let (origin, dir) = vm::ray_from_screen(
+                            let ray = vm::ray_from_screen(
                                 local.0,
                                 local.1,
                                 &frame,
                                 rect.width(),
                                 rect.height(),
                             );
-                            if dir[1].abs() > 1e-4 {
-                                let t = -origin[1] / dir[1];
-                                if t.is_finite() && t > 0.0 {
-                                    let point =
-                                        [origin[0] + dir[0] * t, 0.0, origin[2] + dir[2] * t];
-                                    if let Some(index) = workspace.primary_selection() {
-                                        let entity = workspace
-                                            .document()
-                                            .doc
-                                            .id_of_index(index)
-                                            .unwrap_or(0);
-                                        let current =
-                                            vm::world_position(&workspace.document().doc, index);
-                                        let delta = [
-                                            point[0] - current[0],
-                                            point[1] - current[1],
-                                            point[2] - current[2],
-                                        ];
-                                        workspace.translate_entity_world(entity, delta);
-                                    }
+                            if let Some(point) = vm::drop_point(&workspace.camera, ray) {
+                                if let Some(index) = workspace.primary_selection() {
+                                    let entity =
+                                        workspace.document().doc.id_of_index(index).unwrap_or(0);
+                                    let current =
+                                        vm::world_position(&workspace.document().doc, index);
+                                    let delta = [
+                                        point[0] - current[0],
+                                        point[1] - current[1],
+                                        point[2] - current[2],
+                                    ];
+                                    workspace.translate_entity_world(entity, delta);
                                 }
                             }
                         }
@@ -1509,6 +1591,17 @@ impl ViewKind {
 }
 
 /// 文档实体的世界代理（单位立方体）：与 GPUI / Tauri 编辑器的点选规则一致。
+/// 拖放标签里的动作说明（#646）。
+fn drop_hint(path: &str) -> String {
+    if path.ends_with(".prefab.json") {
+        "instantiate at the marker".to_string()
+    } else if path.ends_with(".scene.json") {
+        "open scene".to_string()
+    } else {
+        "droppable".to_string()
+    }
+}
+
 fn proxies(workspace: &Workspace) -> Vec<(usize, TransformJson)> {
     let doc = &workspace.document().doc;
     (0..doc.entities.len())
@@ -1565,6 +1658,26 @@ fn engine_key(key: egui::Key) -> Option<KeyCode> {
         EguiKey::Num9 => EngineKey::Digit9,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod drop_hint_tests {
+    /// #646：拖放标签要说清这次拖放会做什么。
+    #[test]
+    fn the_drop_label_names_the_action() {
+        assert_eq!(
+            super::drop_hint("assets/prefabs/crate.prefab.json"),
+            "instantiate at the marker"
+        );
+        assert_eq!(
+            super::drop_hint("assets/scenes/level.scene.json"),
+            "open scene"
+        );
+        assert_eq!(
+            super::drop_hint("assets/materials/red.mat.json"),
+            "droppable"
+        );
+    }
 }
 
 #[cfg(test)]
