@@ -4,7 +4,9 @@
 //! works on all platforms including Android/Termux without requiring inotify
 //! or any OS-specific file-watch API.
 //!
-//! This 模块 is only compiled with the `hot-reload` 特性 启用
+//! 运行时总是编译：轮询器只依赖 `std`，不需要任何 OS 专用文件监视 API。
+//! （以前它藏在 `hot-reload` feature 后面，打开该 feature 的只有构建期 crate，
+//! 导致运行期拿不到 watcher —— 见 #495。）
 
 use std::collections::HashMap;
 use std::path::PathBuf;
