@@ -1929,6 +1929,8 @@ dependencies = [
  "log",
  "prism-gfx",
  "raw-window-handle",
+ "serde",
+ "serde_json",
  "slotmap",
 ]
 

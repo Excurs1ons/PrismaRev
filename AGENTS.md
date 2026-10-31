@@ -202,11 +202,13 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   name any concrete UI type.
 - Runtime diagnostics live in `prism-app/src/debug_hud.rs` (F3): it appends text to the
   existing `UiOverlayInput`, so no extra UI framework or render pass is involved.
-- Render-graph visualization lives in the Tauri editor (SVG DAG). The game's render thread
-  writes a JSON snapshot (`prism-app/src/render_graph_report.rs`) when
-  `PRISMREV_RENDER_GRAPH_REPORT=<path>` is set; `editor_play_scene` sets it to
-  `target/prism-render-graph.json`, and `editor_render_graph_report` reads it. Keep the report
-  a pure-data DTO: never expose `vk::*` handles or pass trait objects to the web layer.
+- Render-graph visualization: the report DTO lives in
+  `crates/prism-render/src/render_graph_report.rs` (pure data, no `vk::*` handles). The game's
+  render thread writes it when `PRISMREV_RENDER_GRAPH_REPORT=<path>` is set; the egui editor
+  writes the same file from the Scene view (first frame + every 60th) to
+  `<project>/target/prism-render-graph.json`, and the Render Graph panel reads it back. Keep
+  the report a pure-data DTO and put `RenderSettings` mapping in `prism-engine`
+  (`RenderSettings::to_report_settings`), not in the DTO.
 
 ## Build / check / test
 - 提交前自检：`python scripts/pr_ready.py`（`--quick` 快速回路；`--all` 全 workspace）。

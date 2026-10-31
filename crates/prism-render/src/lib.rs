@@ -70,6 +70,7 @@ pub mod probe_loader;
 #[cfg(feature = "pathtrace")]
 pub mod pt_pass;
 pub mod render_graph;
+pub mod render_graph_report;
 pub mod render_pass;
 pub mod render_runtime;
 pub mod render_texture;

@@ -71,6 +71,24 @@ pub struct RenderSettings {
 }
 
 /// 默认 PBR 众数 法线 full-PBR 渲染 Reinhard 色调映射 光栅化
+impl RenderSettings {
+    /// 导出成渲染图报告用的纯数据（`prism_render::render_graph_report`）。
+    ///
+    /// 报告 DTO 在 `prism-render` 里（不依赖引擎），映射留在这里，编辑器与
+    /// 玩家进程共用同一份，避免两处各写一遍字段表。
+    pub fn to_report_settings(&self) -> prism_render::render_graph_report::ReportSettings {
+        prism_render::render_graph_report::ReportSettings::new(
+            self.render_mode,
+            self.debug_flags,
+            self.tonemap_mode,
+            self.debug_rt,
+            self.pt_max_bounces,
+            self.pt_ray_max_distance,
+            self.pt_max_iterations,
+        )
+    }
+}
+
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {

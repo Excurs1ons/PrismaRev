@@ -165,6 +165,8 @@ pub struct EditorApp {
     /// 控制协议 / 自动化请求退出：跳过未保存确认。
     force_quit: bool,
     render_report: Option<String>,
+    /// `render_report` 对应文件的 mtime（面板可见时按需重读）。
+    render_report_mtime: Option<std::time::SystemTime>,
     /// 命名布局（Window → Layouts）：name → DockLayout JSON。
     named_layouts: std::collections::BTreeMap<String, serde_json::Value>,
     layouts_path: PathBuf,
@@ -308,6 +310,7 @@ impl EditorApp {
             paused: false,
             force_quit: false,
             render_report: None,
+            render_report_mtime: None,
             palette: crate::palette::Palette::new(),
             named_layouts,
             layouts_path,
@@ -406,6 +409,13 @@ impl EditorApp {
                     apply_project_render_defaults(&mut view.host, self.project_root.as_deref());
                 }
                 view.host.set_show_skybox(self.workspace.show_skybox);
+                // 分析（渲染图）面板读这个文件；Scene view 出帧时自己写（#451）。
+                if kind == ViewKind::Scene {
+                    view.report_path = self
+                        .project_root
+                        .as_ref()
+                        .map(|root| root.join("target/prism-render-graph.json"));
+                }
                 // Game view 的 Play 执行用户项目代码（Scene view 只跑编辑器预览）。
                 if kind == ViewKind::Game {
                     if let Some(root) = self.project_root.as_deref() {
@@ -2879,6 +2889,8 @@ impl EditorApp {
             "log" => panels::log(ui, &mut self.workspace, &mut self.state),
             "history" => panels::history(ui, &mut self.workspace, &mut self.state),
             "renderGraph" => {
+                // 报告是 Scene view 出帧时写盘的：启动那一份可能还不存在。
+                refresh_render_report(self);
                 let mut settings = self.render_settings.clone();
                 if panels::render_graph(
                     ui,
@@ -4015,6 +4027,24 @@ fn fnv1a(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+/// 面板可见时按 mtime 重读渲染图报告（文件由 Scene view 出帧时写）。
+fn refresh_render_report(app: &mut EditorApp) {
+    let Some(root) = app.project_root.clone() else {
+        return;
+    };
+    let path = root.join("target/prism-render-graph.json");
+    let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+        return;
+    };
+    if app.render_report_mtime == Some(modified) {
+        return;
+    }
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        app.render_report = Some(text);
+        app.render_report_mtime = Some(modified);
+    }
 }
 
 fn read_report(root: Option<&Path>) -> Option<String> {

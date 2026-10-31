@@ -289,20 +289,27 @@ fn cooks_real_intro_scene_with_ui_components() {
     let json = include_bytes!("../../../../assets/scenes/intro.scene.json");
     let (cooker, result) = cook_scene_json(json).unwrap();
     let decoded = rscn::decode_scene(&result.cooked_data, cooker.registry()).unwrap();
-    assert_eq!(decoded.entities.len(), 4);
+    // 4 个 UI 实体 + intro 场景自己的相机（黑场淡入结束后不能露出清屏色，#409）。
+    assert_eq!(decoded.entities.len(), 5);
     // 每个 UI 实体都带 `Node` + `Style`（`ComputedLayout` 是运行时输出，不进场景）。
+    // 相机实体不参与 UI 计数，所以这里按「有没有 Node」筛。
     let (mut nodes, mut styles) = (0, 0);
     for entity in &decoded.entities {
-        assert!(entity.components.len() >= 2);
         let names: Vec<String> = entity
             .components
             .iter()
             .map(|component| component.type_name.clone())
             .collect();
-        assert!(
-            names.iter().any(|name| name == "prism_engine::ui::Node"),
-            "{names:?}"
-        );
+        if !names.iter().any(|name| name == "prism_engine::ui::Node") {
+            assert!(
+                names
+                    .iter()
+                    .any(|name| name == "prism_engine::scene::Camera"),
+                "非 UI 实体只允许是相机: {names:?}"
+            );
+            continue;
+        }
+        assert!(entity.components.len() >= 2);
         assert!(
             names.iter().any(|name| name == "prism_engine::ui::Style"),
             "{names:?}"

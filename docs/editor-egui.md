@@ -197,6 +197,9 @@ Game View 的 Play 执行**用户项目自己的 gameplay 代码**，不是只�
   文件，再同步同源实例）/ Save as Prefab…（无链接时）。
 - **视口拖放**：预制体拖进 Scene / Game 视口 → 实例化并放到光标下的地面点
   （射线 ∩ `y = 0`）；`.scene.json` 拖进视口 = 打开该场景文档。
+- **渲染图（Render Graph）**：Scene view 出首帧（以及每 60 帧）把当前图导出成
+  `<工程>/target/prism-render-graph.json`，面板直接读它——不需要任何环境变量；
+  游戏进程要同样的报告时设 `PRISMREV_RENDER_GRAPH_REPORT=<path>`。
 - **分辨率倍率**：渲染图面板里的 `Viewport res`（0.5×–1.5×）只缩放离屏目标，
   不改变 UI 的 points 布局，给高 DPI 屏 / 弱 GPU 一个折中。
 - **多选拖拽**：拖多选中的任一行且落在行的中间区 = `reparent_selection` 整组改父级。

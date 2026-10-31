@@ -333,7 +333,11 @@ pub fn render_thread_main(
 
         // 渲染图报告（Web 编辑器可视化）：首帧 + 低频刷新。
         if graph_report.is_enabled() {
-            graph_report.maybe_write(&renderer.graph().snapshot(), &packet.settings, frame_count);
+            graph_report.maybe_write(
+                &renderer.graph().snapshot(),
+                packet.settings.to_report_settings(),
+                frame_count,
+            );
         }
 
         shared.set_render_stats(RenderStats {

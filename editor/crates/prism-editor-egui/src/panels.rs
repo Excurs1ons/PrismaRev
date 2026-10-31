@@ -2576,8 +2576,10 @@ pub fn render_graph(
         }
         None => {
             ui.label(
-                RichText::new("No report yet — run a build with PRISMREV_RENDER_GRAPH_REPORT set.")
-                    .weak(),
+                RichText::new(
+                    "No report yet — the Scene view writes one to                      target/prism-render-graph.json after its first frame.",
+                )
+                .weak(),
             );
         }
     }
