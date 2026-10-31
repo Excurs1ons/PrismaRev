@@ -10,6 +10,7 @@
 mod app;
 mod build;
 mod control;
+mod diagnostics;
 mod engine_host;
 mod gpu;
 mod logging;

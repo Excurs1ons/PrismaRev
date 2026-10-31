@@ -21,6 +21,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use prism_editor_core::LogLevel;
 use prism_engine::input::{InputManager, MouseButton};
+
+use crate::diagnostics::{diagnostics_from_cargo, Diagnostic};
 use prism_runtime_host::{
     AssetIo, InputSnapshot, ProjectModule, ProjectSession, UiQuad as HostUiQuad, WorldCommands,
 };
@@ -76,30 +78,6 @@ impl ModuleState {
     }
 }
 
-/// 一条编译器诊断。只保留 error / warning，位置是 `file:line:col`。
-#[derive(Clone, Debug)]
-pub struct Diagnostic {
-    pub level: LogLevel,
-    pub message: String,
-    pub file: Option<PathBuf>,
-    pub line: Option<usize>,
-    pub column: Option<usize>,
-}
-
-impl Diagnostic {
-    pub fn location(&self) -> Option<String> {
-        let file = self.file.as_deref()?;
-        let mut text = file.display().to_string();
-        if let Some(line) = self.line {
-            text.push_str(&format!(":{line}"));
-            if let Some(column) = self.column {
-                text.push_str(&format!(":{column}"));
-            }
-        }
-        Some(text)
-    }
-}
-
 /// 可轮询的状态（状态栏 / Problems / MCP `editor_status` 用）。
 #[derive(Clone, Debug)]
 pub struct ProjectModuleStatus {
@@ -127,8 +105,6 @@ enum BuildOutcome {
     },
 }
 
-/// 一次最多保留多少条诊断，避免一个坏文件把面板刷爆。
-const MAX_DIAGNOSTICS: usize = 100;
 /// 只在没有编译任务时扫源码时间戳；和 350ms 的 debounce 错开，别每帧 stat。
 const DIRTY_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -705,81 +681,6 @@ fn build_module(manifest: &Path, target_dir: &Path) -> BuildOutcome {
     }
 }
 
-/// 解析 `cargo --message-format=json-render-diagnostics` 的 stdout。
-///
-/// 只收 error / warning：note / help / build-script 事件要么是附注，要么不是给用户看的。
-/// 路径统一成项目根下的绝对路径，Problems 面板点开时不用再拼一次。
-fn diagnostics_from_cargo(stdout: &str, root: &Path) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for line in stdout.lines() {
-        if diagnostics.len() >= MAX_DIAGNOSTICS {
-            break;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
-            continue;
-        };
-        if value.get("reason").and_then(|reason| reason.as_str()) != Some("compiler-message") {
-            continue;
-        }
-        let Some(message) = value.get("message") else {
-            continue;
-        };
-        let level = match message.get("level").and_then(|level| level.as_str()) {
-            Some("error") => LogLevel::Error,
-            Some("warning") => LogLevel::Warn,
-            _ => continue,
-        };
-        let mut text = message
-            .get("message")
-            .and_then(|text| text.as_str())
-            .unwrap_or_default()
-            .to_string();
-        if let Some(code) = message
-            .get("code")
-            .and_then(|code| code.get("code"))
-            .and_then(|code| code.as_str())
-        {
-            text = format!("{code}: {text}");
-        }
-        let span = message
-            .get("spans")
-            .and_then(|spans| spans.as_array())
-            .and_then(|spans| {
-                spans
-                    .iter()
-                    .find(|span| {
-                        span.get("is_primary").and_then(|primary| primary.as_bool()) == Some(true)
-                    })
-                    .or_else(|| spans.first())
-            });
-        let file = span
-            .and_then(|span| span.get("file_name"))
-            .and_then(|name| name.as_str())
-            .map(|name| {
-                let path = Path::new(name);
-                if path.is_absolute() {
-                    path.to_path_buf()
-                } else {
-                    root.join(path)
-                }
-            });
-        diagnostics.push(Diagnostic {
-            level,
-            message: text,
-            file,
-            line: span
-                .and_then(|span| span.get("line_start"))
-                .and_then(|line| line.as_u64())
-                .map(|line| line as usize),
-            column: span
-                .and_then(|span| span.get("column_start"))
-                .and_then(|column| column.as_u64())
-                .map(|column| column as usize),
-        });
-    }
-    diagnostics
-}
-
 /// 构建产物先复制成唯一名字：下一次 cargo 会覆盖原文件，而 Windows 上
 /// 已加载的 dll 不能被覆盖。旧副本在换 session 之后删除。
 fn stage_module(built: &Path) -> Result<PathBuf, String> {
@@ -1059,52 +960,6 @@ mod tests {
         assert!(!driver.available());
         assert!(!driver.status().loaded);
         assert_eq!(driver.status().state, ModuleState::Unavailable);
-    }
-
-    /// cargo 的 JSON 诊断 → Problems 面板要的 file:line:col。
-    #[test]
-    fn cargo_diagnostics_carry_a_source_location() {
-        let stdout = concat!(
-            r#"{"reason":"compiler-message","message":{"level":"error","message":"mismatched types","code":{"code":"E0308"},"spans":[{"file_name":"src/game/world.rs","line_start":42,"column_start":9,"is_primary":true}]}}"#,
-            "\n",
-            r#"{"reason":"compiler-message","message":{"level":"note","message":"expected `f32`","spans":[]}}"#,
-            "\n",
-            r#"{"reason":"build-finished","success":false}"#,
-            "\n",
-            "not json at all",
-        );
-        let diagnostics = diagnostics_from_cargo(stdout, Path::new("/project"));
-        assert_eq!(
-            diagnostics.len(),
-            1,
-            "notes and cargo events are not problems"
-        );
-        let diagnostic = &diagnostics[0];
-        assert_eq!(diagnostic.level, LogLevel::Error);
-        assert_eq!(diagnostic.message, "E0308: mismatched types");
-        assert_eq!(diagnostic.line, Some(42));
-        assert_eq!(diagnostic.column, Some(9));
-        assert!(
-            diagnostic
-                .file
-                .as_deref()
-                .is_some_and(|file| file.ends_with(Path::new("src/game/world.rs"))),
-            "relative span paths are resolved against the project root"
-        );
-    }
-
-    /// 编译成功时 warning 也要留下来：面板不能只有失败才有内容。
-    #[test]
-    fn warnings_survive_a_successful_build() {
-        let stdout = r#"{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `state`","code":null,"spans":[{"file_name":"/abs/src/lib.rs","line_start":7,"column_start":13,"is_primary":true}]}}"#;
-        let diagnostics = diagnostics_from_cargo(stdout, Path::new("/project"));
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].level, LogLevel::Warn);
-        assert_eq!(
-            diagnostics[0].file.as_deref(),
-            Some(Path::new("/abs/src/lib.rs"))
-        );
-        assert_eq!(diagnostics[0].message, "unused variable: `state`");
     }
 
     /// 状态机：有改动未编 = Pending，出错 = Failed，成功 = Ready。

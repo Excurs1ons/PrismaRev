@@ -169,6 +169,8 @@ pub struct EditorApp {
     layouts_path: PathBuf,
     /// 正在跑的构建 / cook 子进程。
     build: Option<crate::build::BuildJob>,
+    /// 最近一次玩家构建的编译器诊断（Problems 面板与模块诊断并列显示）。
+    build_diagnostics: Vec<crate::diagnostics::Diagnostic>,
     /// 两个视口共享的渲染设置（Console 里的「渲染图」面板可改）。
     render_settings: prism_engine::render_settings::RenderSettings,
     /// 已应用的 (preset, overrides) 签名，避免每帧重建 style。
@@ -294,6 +296,7 @@ impl EditorApp {
             named_layouts,
             layouts_path,
             build: None,
+            build_diagnostics: Vec::new(),
             // 引擎默认 `show_grid = false`（游戏里不该画网格），编辑器要从上次保存的
             // Scene 设置出发（旧存档没有这段时退回工作区默认值）。
             render_settings,
@@ -1439,6 +1442,7 @@ impl EditorApp {
             prism_editor_core::LogLevel::Info,
             format!("build started: {label}"),
         );
+        self.build_diagnostics.clear();
         self.build = Some(crate::build::BuildJob::spawn(kind, &root));
     }
 
@@ -2630,12 +2634,12 @@ impl EditorApp {
             }
             "problems" => {
                 // 只在面板可见时拷一份诊断；状态栏只拿条数。
-                let diagnostics = self
+                let module = self
                     .game_view
                     .as_ref()
                     .map(|view| view.host.project_diagnostics().to_vec())
                     .unwrap_or_default();
-                panels::problems(ui, &diagnostics, &mut self.state);
+                panels::problems(ui, &module, &self.build_diagnostics, &mut self.state);
             }
             "tools" => panels::tools(ui, &mut self.state),
             "shortcuts" => panels::shortcuts(ui),
@@ -3377,6 +3381,7 @@ impl EditorApp {
             return;
         };
         let (lines, running) = job.poll();
+        let new_diagnostics = job.take_diagnostics();
         for line in lines {
             self.workspace.log(
                 prism_editor_core::LogSource::System,
@@ -3404,6 +3409,7 @@ impl EditorApp {
             }
             self.build = None;
         }
+        self.build_diagnostics.extend(new_diagnostics);
     }
 
     /// 把 `log` 记录搬进 Console 面板（每帧一次）。
