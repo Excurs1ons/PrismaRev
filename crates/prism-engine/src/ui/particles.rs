@@ -290,6 +290,7 @@ impl ParticleSystem2D {
                 color: [self.color[0], self.color[1], self.color[2], a],
                 border_radius: p.width * 0.5, // 胶囊状端点
                 layer: 1,
+                ..UiQuad::default()
             });
         }
         quads

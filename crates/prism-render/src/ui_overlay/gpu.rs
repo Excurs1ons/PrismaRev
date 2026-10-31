@@ -689,7 +689,7 @@ impl UiOverlay {
         target_view: vk::ImageView,
         input: &UiOverlayInput,
     ) -> Result<()> {
-        if input.quads.is_empty() && input.texts.is_empty() {
+        if input.is_empty() {
             return Ok(());
         }
         self.ensure_pipeline(&context.device, extent)?;
@@ -703,23 +703,43 @@ impl UiOverlay {
         let w = extent.width as f32;
         let h = extent.height as f32;
 
-        // 1. plain quads（NDC 输入，uv = (0,0) → 图集白色 reserve 像素）。
-        for quad in &input.quads {
+        // 按引擎算好的层级顺序交错画矩形和文本（旧路径没有顺序时退化成
+        // 「先全部矩形、再全部文本」）。
+        let push_quad = |vertices: &mut Vec<UiVertex>, quad: &crate::ui_overlay::UiQuad| {
             let [x0, y0, x1, y1] = quad.rect;
             let [r, g, b, a] = quad.color;
             emit_quad(
-                &mut vertices,
+                vertices,
                 [x0, y0],
                 [x1, y1],
                 [0.0, 0.0],
                 [0.0, 0.0],
                 [r, g, b, a],
             );
-        }
+        };
 
-        // 2. texts（像素坐标 → NDC，逐字形带 uv）。
-        for t in &input.texts {
-            self.emit_text(&mut vertices, t, w, h);
+        if input.order.is_empty() {
+            for quad in &input.quads {
+                push_quad(&mut vertices, quad);
+            }
+            for t in &input.texts {
+                self.emit_text(&mut vertices, t, w, h);
+            }
+        } else {
+            for draw in &input.order {
+                match *draw {
+                    crate::ui_overlay::UiOverlayDraw::Quad(index) => {
+                        if let Some(quad) = input.quads.get(index as usize) {
+                            push_quad(&mut vertices, quad);
+                        }
+                    }
+                    crate::ui_overlay::UiOverlayDraw::Text(index) => {
+                        if let Some(t) = input.texts.get(index as usize) {
+                            self.emit_text(&mut vertices, t, w, h);
+                        }
+                    }
+                }
+            }
         }
 
         // 上传与 draw 都使用实际顶点数：估算值可能高于 `vertices.len()`，

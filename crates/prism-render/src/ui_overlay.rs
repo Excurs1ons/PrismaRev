@@ -33,11 +33,49 @@ pub enum UiTextAlign {
     Right,
 }
 
+/// 绘制顺序里的一项：引用 [`UiOverlayInput::quads`] / [`UiOverlayInput::texts`]。
+///
+/// 引擎按 UI 层级算好顺序后依次填入，渲染侧照着画——矩形和文本因此可以交错
+/// （一个全屏遮罩能盖住它前面的文字，见 #462）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiOverlayDraw {
+    Quad(u32),
+    Text(u32),
+}
+
 /// Per‑frame 输入 from the engine.
 #[derive(Clone, Default)]
 pub struct UiOverlayInput {
     pub quads: Vec<UiQuad>,
     pub texts: Vec<UiTextInput>,
+    /// 交错绘制顺序。为空时退化为「先全部矩形、再全部文本」（旧行为）。
+    pub order: Vec<UiOverlayDraw>,
+}
+
+impl UiOverlayInput {
+    pub fn clear(&mut self) {
+        self.quads.clear();
+        self.texts.clear();
+        self.order.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.quads.is_empty() && self.texts.is_empty()
+    }
+
+    /// 追加一个矩形，并登记它在绘制顺序里的位置。
+    pub fn push_quad(&mut self, quad: UiQuad) {
+        self.order
+            .push(UiOverlayDraw::Quad(self.quads.len() as u32));
+        self.quads.push(quad);
+    }
+
+    /// 追加一条文本，并登记它在绘制顺序里的位置。
+    pub fn push_text(&mut self, text: UiTextInput) {
+        self.order
+            .push(UiOverlayDraw::Text(self.texts.len() as u32));
+        self.texts.push(text);
+    }
 }
 
 #[cfg(feature = "ui")]

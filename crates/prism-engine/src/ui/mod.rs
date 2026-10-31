@@ -39,12 +39,12 @@ mod render;
 
 pub use components::*;
 pub use input::{ui_input_system, UiInputState};
-pub use layout::{ui_layout_system, ScreenSize};
+pub use layout::{assign_draw_order, ui_layout_system, ScreenSize};
 pub use panel_base::PanelBase;
 pub use particles::{Particle2D, ParticleSystem2D, SpawnKind};
 pub use render::{
     convert_ui_draw_list_to_overlay, convert_ui_draw_list_to_overlay_into, ui_render_system,
-    ExternalUiQuads, UiDrawList, UiQuad, UiTextCmd,
+    ExternalUiQuads, UiDrawItem, UiDrawList, UiQuad, UiTextCmd, EXTERNAL_UI_ORDER,
 };
 
 /// 实体及其祖先链是否全部处于激活状态。

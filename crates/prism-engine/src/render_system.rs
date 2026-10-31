@@ -757,6 +757,7 @@ mod tests {
                 packet.scene.pt_lights.capacity(),
                 packet.ui_overlay.quads.capacity(),
                 packet.ui_overlay.texts.capacity(),
+                packet.ui_overlay.order.capacity(),
             ]
         };
 
