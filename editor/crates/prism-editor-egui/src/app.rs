@@ -1243,18 +1243,20 @@ impl EditorApp {
     }
 
     /// 资产面板的 F2。
+    /// F2 / 右键 Rename：在资产行上就地改名（不再弹模态框）。
     fn rename_selected_asset_prompt(&mut self) {
         let Some(path) = self.state.asset_selection.clone() else {
             self.state.status = "no asset selected".to_string();
             return;
         };
+        if path.ends_with(".scene.json") || path.ends_with(".prefab.json") {
+            self.state.status =
+                "scenes and prefabs rename through Save As / the document panel".to_string();
+            return;
+        }
         let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-        self.open_prompt(
-            panels::PromptKind::RenameAsset,
-            "Rename Asset",
-            "新文件名（含扩展名）",
-            name,
-        );
+        self.state.asset_rename = Some((path, name));
+        self.state.asset_rename_focus = true;
     }
 
     fn create_empty_parent(&mut self) {
@@ -2740,7 +2742,12 @@ impl EditorApp {
             "gameView" => self.show_viewport(ui, ViewKind::Game, rect),
             "hierarchy" => panels::hierarchy(ui, &mut self.workspace, &mut self.state),
             "inspector" => panels::inspector(ui, &mut self.workspace, &mut self.state),
-            "assets" => panels::assets(ui, &mut self.workspace, &mut self.state),
+            "assets" => {
+                panels::assets(ui, &mut self.workspace, &mut self.state);
+                if let Some((path, project_wide)) = self.state.pending_find_references.take() {
+                    self.find_references(&path, project_wide);
+                }
+            }
             "docs" => panels::docs(ui, &mut self.workspace, &mut self.state),
             "log" => panels::log(ui, &mut self.workspace, &mut self.state),
             "history" => panels::history(ui, &mut self.workspace, &mut self.state),
@@ -2955,16 +2962,6 @@ impl EditorApp {
                         },
                         Err(error) => Err(error),
                     }
-                }
-                panels::PromptKind::RenameAsset => {
-                    let from = self.state.asset_selection.clone().unwrap_or_default();
-                    let to = match from.rsplit_once('/') {
-                        Some((folder, _)) => format!("{folder}/{value}"),
-                        None => value.clone(),
-                    };
-                    self.workspace
-                        .rename_asset(&from, &to)
-                        .map(|(count, _)| format!("renamed ({count} references updated)"))
                 }
             };
             match result {

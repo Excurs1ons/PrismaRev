@@ -139,6 +139,57 @@ fn flat_icon(ui: &mut Ui, glyph: &str) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(glyph).size(11.0)).frame(false))
 }
 
+/// 资产面板的排序列（Project 窗口的列头）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AssetSort {
+    #[default]
+    Name,
+    Kind,
+    Size,
+}
+
+/// 资产列表排序：目录由调用方先画，这里只排文件。
+///
+/// 排序键相同时回落到「文件名 → 完整路径」，保证同一份目录每次刷新顺序一样
+/// （`scan_assets` 的顺序取决于文件系统，不能依赖）。
+pub fn sort_assets(files: &mut [(String, AssetKind, u64)], sort: AssetSort, descending: bool) {
+    files.sort_by(|a, b| {
+        let name = |entry: &(String, AssetKind, u64)| {
+            entry
+                .0
+                .rsplit('/')
+                .next()
+                .unwrap_or(&entry.0)
+                .to_lowercase()
+        };
+        let primary = match sort {
+            AssetSort::Name => std::cmp::Ordering::Equal,
+            AssetSort::Kind => (a.1 as u8).cmp(&(b.1 as u8)),
+            AssetSort::Size => a.2.cmp(&b.2),
+        };
+        let order = primary
+            .then_with(|| name(a).cmp(&name(b)))
+            .then_with(|| a.0.cmp(&b.0));
+        if descending {
+            order.reverse()
+        } else {
+            order
+        }
+    });
+}
+
+/// 就地重命名的目标路径：同一个目录 + 新的文件名。
+fn rename_target(from: &str, file_name: &str) -> Option<String> {
+    let file_name = file_name.trim();
+    if file_name.is_empty() || file_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
+        return None;
+    }
+    match from.rsplit_once('/') {
+        Some((folder, _)) => Some(format!("{folder}/{file_name}")),
+        None => Some(file_name.to_string()),
+    }
+}
+
 /// egui 侧的临时 UI 状态（不进文档、不进撤销栈）。
 #[derive(Default)]
 pub struct UiState {
@@ -169,6 +220,15 @@ pub struct UiState {
     pub asset_folder: String,
     pub asset_history: Vec<String>,
     pub asset_history_pos: usize,
+    /// 资产面板的排序：先按哪一列、是否降序（目录永远排在文件前面）。
+    pub asset_sort: AssetSort,
+    pub asset_sort_desc: bool,
+    /// 就地重命名：(资产路径, 正在编辑的文件名)。`None` = 没有在改名。
+    pub asset_rename: Option<(String, String)>,
+    /// 就地重命名刚打开的那一帧抢焦点（同层级树的 `rename_focus`）。
+    pub asset_rename_focus: bool,
+    /// 资产右键菜单请求 App 执行的操作（面板拿不到 App 的方法）。
+    pub pending_find_references: Option<(String, bool)>,
     /// 正在拖的 docking 标签页：(tab, 源 leaf id)。
     pub tab_drag: Option<(String, String)>,
     /// 拖拽落点：(目标 leaf id, 区域, 比例)。
@@ -245,7 +305,6 @@ pub enum PromptKind {
     NewFolder,
     SavePrefab,
     PrefabVariant,
-    RenameAsset,
     /// 命名布局（Window → Layouts → Save Layout…）。
     LayoutName,
     /// 布局文件路径（Load / Save Layout to File…）。
@@ -1499,13 +1558,11 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 .hint_text("Search assets")
                 .desired_width(130.0),
         );
-        for kind in [
-            AssetKind::Scene,
-            AssetKind::Prefab,
-            AssetKind::Model,
-            AssetKind::Texture,
-            AssetKind::Material,
-        ] {
+    });
+    // 类型开关由 `AssetKind::all()` 生成：枚举里加一种，这里自动多一个开关，
+    // 不用再记得改这里的清单。
+    ui.horizontal_wrapped(|ui| {
+        for kind in AssetKind::all() {
             let enabled = workspace.asset_query.kinds.contains(&kind);
             if ui
                 .selectable_label(enabled, asset_kind_icon(kind))
@@ -1516,23 +1573,51 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         }
     });
+    // 列头：点一次排序，再点同一列反向（目录永远排在文件前面）。
+    ui.horizontal(|ui| {
+        for (sort, label) in [
+            (AssetSort::Name, "Name"),
+            (AssetSort::Kind, "Kind"),
+            (AssetSort::Size, "Size"),
+        ] {
+            let active = state.asset_sort == sort;
+            let arrow = if !active {
+                ""
+            } else if state.asset_sort_desc {
+                " ▼"
+            } else {
+                " ▲"
+            };
+            if ui
+                .selectable_label(active, format!("{label}{arrow}"))
+                .clicked()
+            {
+                if active {
+                    state.asset_sort_desc = !state.asset_sort_desc;
+                } else {
+                    state.asset_sort = sort;
+                    state.asset_sort_desc = false;
+                }
+            }
+        }
+    });
     ui.separator();
 
     let query = state.asset_search.to_lowercase();
     let folder = state.asset_folder.clone();
-    let all: Vec<(String, AssetKind)> = workspace
+    let all: Vec<(String, AssetKind, u64)> = workspace
         .filtered_assets()
         .into_iter()
-        .map(|asset| (asset.path.clone(), asset.kind))
+        .map(|asset| (asset.path.clone(), asset.kind, asset.size_bytes))
         .collect();
 
     // 直接子目录 + 直接子资产（有搜索词时退化成全局扁平搜索）。
     let mut folders: Vec<String> = Vec::new();
-    let mut files: Vec<(String, AssetKind)> = Vec::new();
-    for (path, kind) in all {
+    let mut files: Vec<(String, AssetKind, u64)> = Vec::new();
+    for (path, kind, size) in all {
         if !query.is_empty() {
             if path.to_lowercase().contains(&query) {
-                files.push((path, kind));
+                files.push((path, kind, size));
             }
             continue;
         }
@@ -1546,15 +1631,17 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     folders.push(child_path);
                 }
             }
-            None => files.push((path, kind)),
+            None => files.push((path, kind, size)),
         }
     }
     folders.sort();
+    sort_assets(&mut files, state.asset_sort, state.asset_sort_desc);
 
     let mut open: Option<String> = None;
     let mut delete: Option<String> = None;
     let mut rename: Option<String> = None;
     let mut instantiate: Option<String> = None;
+    let mut commit_rename: Option<(String, String)> = None;
 
     egui::ScrollArea::vertical()
         .id_salt("asset-scroll")
@@ -1582,8 +1669,40 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     navigate_assets(state, path);
                 }
             }
-            for (path, kind) in &files {
+            for (path, kind, _size) in &files {
                 let selected = state.asset_selection.as_deref() == Some(path.as_str());
+                let renaming = matches!(&state.asset_rename, Some((target, _)) if target == path);
+                if renaming {
+                    ui.horizontal(|ui| {
+                        if let Some((_, buffer)) = state.asset_rename.as_mut() {
+                            let response = ui.add(
+                                egui::TextEdit::singleline(buffer)
+                                    .desired_width(ui.available_width().max(80.0)),
+                            );
+                            if state.asset_rename_focus {
+                                response.request_focus();
+                                state.asset_rename_focus = false;
+                            }
+                            let (enter, escape) = ui.input(|input| {
+                                (
+                                    input.key_pressed(egui::Key::Enter),
+                                    input.key_pressed(egui::Key::Escape),
+                                )
+                            });
+                            // 点别处 = 提交（与层级树 / 引擎一致），Esc = 放弃。
+                            let clicked_outside = response.lost_focus()
+                                && ui.input(|input| input.pointer.any_click());
+                            if escape {
+                                state.asset_rename = None;
+                                state.asset_rename_focus = false;
+                            } else if enter || clicked_outside {
+                                commit_rename = state.asset_rename.take();
+                                state.asset_rename_focus = false;
+                            }
+                        }
+                    });
+                    continue;
+                }
                 let label = format!(
                     "{} {}",
                     asset_kind_icon(*kind),
@@ -1628,6 +1747,16 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                         state.status = format!("copied {path}");
                         ui.close();
                     }
+                    ui.separator();
+                    if ui.button("Find References In Scene").clicked() {
+                        state.pending_find_references = Some((path.clone(), false));
+                        ui.close();
+                    }
+                    if ui.button("Find References In Project").clicked() {
+                        state.pending_find_references = Some((path.clone(), true));
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button("Show in Explorer").clicked() {
                         state.status = match reveal_asset(workspace, path) {
                             Ok(()) => format!("revealed {path}"),
@@ -1662,12 +1791,22 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     if let Some(path) = rename {
         state.asset_selection = Some(path.clone());
         let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-        state.prompt = Some(Prompt::new(
-            PromptKind::RenameAsset,
-            "Rename Asset",
-            "新文件名（含扩展名）",
-            name,
-        ));
+        state.asset_rename = Some((path, name));
+        state.asset_rename_focus = true;
+    }
+    if let Some((from, file_name)) = commit_rename {
+        let target = rename_target(&from, &file_name);
+        match target {
+            Some(to) if to != from => match workspace.rename_asset(&from, &to) {
+                Ok((count, _)) => {
+                    state.asset_selection = Some(to.clone());
+                    state.status = format!("renamed → {to} ({count} references updated)");
+                }
+                Err(error) => state.status = format!("rename failed: {error}"),
+            },
+            Some(_) => {}
+            None => state.status = "invalid file name".to_string(),
+        }
     }
     if let Some(path) = delete {
         if is_document_path(&path) {
@@ -2910,5 +3049,62 @@ mod window_smoke_tests {
                 .map(|value| -value);
         let mixed = mixed_transform_axes(&workspace, &[0, 1]);
         assert!(mixed[1].iter().all(|flag| !flag), "{mixed:?}");
+    }
+}
+
+#[cfg(test)]
+mod asset_browser_tests {
+    use super::*;
+
+    fn files() -> Vec<(String, AssetKind, u64)> {
+        vec![
+            ("assets/b.png".to_string(), AssetKind::Texture, 300),
+            ("assets/a.json".to_string(), AssetKind::Data, 100),
+            ("assets/c.png".to_string(), AssetKind::Texture, 200),
+        ]
+    }
+
+    #[test]
+    fn sorting_by_name_ignores_the_scan_order() {
+        let mut list = files();
+        sort_assets(&mut list, AssetSort::Name, false);
+        let names: Vec<&str> = list.iter().map(|entry| entry.0.as_str()).collect();
+        assert_eq!(
+            names,
+            ["assets/a.json", "assets/b.png", "assets/c.png"],
+            "按文件名升序，与 scan_assets 的顺序无关"
+        );
+        sort_assets(&mut list, AssetSort::Name, true);
+        let names: Vec<&str> = list.iter().map(|entry| entry.0.as_str()).collect();
+        assert_eq!(names, ["assets/c.png", "assets/b.png", "assets/a.json"]);
+    }
+
+    #[test]
+    fn sorting_by_size_and_kind_breaks_ties_by_name() {
+        let mut list = files();
+        sort_assets(&mut list, AssetSort::Size, false);
+        let order: Vec<u64> = list.iter().map(|entry| entry.2).collect();
+        assert_eq!(order, [100, 200, 300]);
+
+        // 两个纹理（同 kind）之间按名字排，不会因为排序不稳定而互换。
+        sort_assets(&mut list, AssetSort::Kind, false);
+        let names: Vec<&str> = list.iter().map(|entry| entry.0.as_str()).collect();
+        assert_eq!(
+            names,
+            ["assets/b.png", "assets/c.png", "assets/a.json"],
+            "Texture(1) 在 Data(7) 之前，同 kind 内按文件名"
+        );
+    }
+
+    #[test]
+    fn rename_target_rejects_paths_and_keeps_the_folder() {
+        assert_eq!(
+            rename_target("assets/sprites/boat.png", " canoe.png "),
+            Some("assets/sprites/canoe.png".to_string())
+        );
+        // 只改文件名：不允许顺手换目录，也不允许空名字。
+        assert_eq!(rename_target("assets/boat.png", "sub/boat.png"), None);
+        assert_eq!(rename_target("assets/boat.png", "   "), None);
+        assert_eq!(rename_target("assets/boat.png", "a:b.png"), None);
     }
 }
