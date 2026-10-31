@@ -79,6 +79,13 @@ pub struct EngineHost {
     accumulator: Duration,
     last_tick: Instant,
     scene_loaded: bool,
+    /// 已经卷积进渲染器的环境贴图路径（`None` = 没有 IBL）。
+    ///
+    /// 改个名字也要重跑 IBL 卷积是整场重载里最贵的部分（#435），所以只有
+    /// 场景声明的环境贴图换了才重新 `set_environment`。
+    env_path: Option<String>,
+    /// `assets/scenes.pak` 的修改时间：只有 pak 本身重建了才重新读它。
+    pak_mtime: Option<std::time::SystemTime>,
 }
 
 #[allow(dead_code)]
@@ -122,6 +129,8 @@ impl EngineHost {
             accumulator: Duration::ZERO,
             last_tick: Instant::now(),
             scene_loaded: false,
+            env_path: None,
+            pak_mtime: resource_package_mtime(),
         })
     }
 
@@ -217,20 +226,31 @@ impl EngineHost {
         // 旧世界的实体句柄全部失效，helper 实体要重新创建。
         self.editor_camera = None;
         self.engine = Engine::empty();
-        self.asset_resolver = GpuAssetResolver::new();
-        self.asset_resolver.load_resource_package();
+        // 资产解析器（含已解的 `.pak` 与已上传的句柄）跨重载复用：以前每次
+        // 编辑都 `GpuAssetResolver::new()` + 重读 pak（#435）。只有 pak 文件
+        // 本身重建了才需要重读清单。
+        let mtime = resource_package_mtime();
+        if mtime != self.pak_mtime {
+            self.asset_resolver.load_resource_package();
+            self.pak_mtime = mtime;
+        }
         let entities = self.engine.load_scene_json_file(path)?;
         self.engine.runtime_initialize();
         self.engine
             .world_mut()
             .insert_resource(prism_engine::ui::ScreenSize::new(self.width, self.height));
 
-        // 场景声明式光照：有环境贴图才卷积，否则沿用廉价空 IBL。
-        let env_bytes = self
-            .engine
-            .current_scene_env_bytes_with_provider(&mut self.asset_resolver.resource_manager);
-        if let Err(error) = self.renderer.set_environment(env_bytes) {
-            log::warn!("set scene environment failed: {error:#}");
+        // 场景声明式光照：只有声明的环境贴图真的换了才重新卷积 IBL。
+        let env_path =
+            prism_engine::scene::SceneReadView::new(&self.engine.world()).environment_asset_path();
+        if env_path != self.env_path {
+            let env_bytes = self
+                .engine
+                .current_scene_env_bytes_with_provider(&mut self.asset_resolver.resource_manager);
+            if let Err(error) = self.renderer.set_environment(env_bytes) {
+                log::warn!("set scene environment failed: {error:#}");
+            }
+            self.env_path = env_path;
         }
 
         let count = entities.len();
@@ -614,4 +634,12 @@ mod tests {
         );
         assert!((eye_offset - expected).length() < 1e-5);
     }
+}
+
+/// `assets/scenes.pak` 的修改时间；没有 pak 或读不到元数据时为 `None`。
+fn resource_package_mtime() -> Option<std::time::SystemTime> {
+    let path = prism_engine::asset_paths::asset_path("scenes.pak")?;
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
 }

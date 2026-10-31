@@ -470,25 +470,14 @@ impl EditorApp {
         self.pending_doc = None;
         self.pending_since = None;
         self.write_preview_scene();
-        for kind in [ViewKind::Scene, ViewKind::Game] {
-            match kind {
-                ViewKind::Scene => {
-                    if let Some(view) = self.scene_view.as_mut() {
-                        if let Err(error) = view.host.load_scene(&self.preview_scene) {
-                            view.error = Some(format!("{error}"));
-                        }
-                        view.mark_dirty();
-                    }
-                }
-                ViewKind::Game => {
-                    if let Some(view) = self.game_view.as_mut() {
-                        if let Err(error) = view.host.load_scene(&self.preview_scene) {
-                            view.error = Some(format!("{error}"));
-                        }
-                        view.mark_dirty();
-                    }
-                }
+        // 只重载正在编辑的那一侧：Scene view 要跟手，Game view 在 Play 时
+        // 本来就会从磁盘快照重新加载（见 `apply_command(Command::Play)`），
+        // 编辑期间每 120ms 让它也重建一遍世界纯属浪费（#435）。
+        if let Some(view) = self.scene_view.as_mut() {
+            if let Err(error) = view.host.load_scene(&self.preview_scene) {
+                view.error = Some(format!("{error}"));
             }
+            view.mark_dirty();
         }
     }
 
