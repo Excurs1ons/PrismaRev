@@ -24,6 +24,7 @@ pub mod ini;
 pub mod keys;
 pub mod logbuf;
 pub mod manifest;
+pub mod palette;
 pub mod project;
 pub mod render_graph;
 pub mod schema;
