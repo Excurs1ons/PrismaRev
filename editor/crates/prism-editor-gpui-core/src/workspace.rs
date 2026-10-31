@@ -259,6 +259,59 @@ impl OrbitCamera {
     }
 }
 
+/// 变换吸附步长（Unity `SnapSettings` 的等价物）。
+///
+/// 默认值与 Unity 一致（网格 0.25、旋转 15°、缩放 1）。编辑器视口在拖动
+/// gizmo 时把 [`Self::enabled`] 与按住 Ctrl 组合起来用（Ctrl 临时反转）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SnapSettings {
+    /// 工具栏里的常驻开关；按住 Ctrl 拖动会临时反转它。
+    pub enabled: bool,
+    /// 平移步长（世界单位）。
+    pub translate: f32,
+    /// 旋转步长（度）。
+    pub rotate_degrees: f32,
+    /// 缩放步长。
+    pub scale: f32,
+}
+
+impl Default for SnapSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            translate: 0.25,
+            rotate_degrees: 15.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl SnapSettings {
+    fn snapped(value: f32, step: f32) -> f32 {
+        if step <= 0.0 {
+            value
+        } else {
+            (value / step).round() * step
+        }
+    }
+
+    /// 吸附一个平移量（世界单位）。
+    pub fn snapped_translate(&self, value: f32) -> f32 {
+        Self::snapped(value, self.translate)
+    }
+
+    /// 吸附一个角度（弧度），按 [`Self::rotate_degrees`] 取整。
+    pub fn snapped_radians(&self, radians: f32) -> f32 {
+        let degrees = radians.to_degrees();
+        Self::snapped(degrees, self.rotate_degrees).to_radians()
+    }
+
+    /// 吸附一个缩放分量；吸附后不会小于 0.01。
+    pub fn snapped_scale(&self, value: f32) -> f32 {
+        Self::snapped(value, self.scale).max(0.01)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub docs: Vec<Document>,
@@ -284,6 +337,8 @@ pub struct Workspace {
     pub camera: OrbitCamera,
     /// W/E/R gizmo 使用世界轴还是实体自身轴。
     pub gizmo_space: GizmoSpace,
+    /// gizmo 拖动的吸附步长（工具栏 `Snap (Ctrl)` 开关）。
+    pub snap: SnapSettings,
     /// Scene View 是否画世界网格。
     pub show_grid: bool,
     /// Scene View 是否用场景的天空盒当背景（关闭时退回纯色）。
@@ -346,6 +401,7 @@ impl Workspace {
             log: LogBuffer::default(),
             camera: OrbitCamera::default(),
             gizmo_space: GizmoSpace::World,
+            snap: SnapSettings::default(),
             show_grid: true,
             show_skybox: true,
             playing: false,
@@ -5106,5 +5162,33 @@ mod tests {
         assert!(workspace.is_enabled(Command::PasteEntity));
         workspace.run(Command::CutEntity);
         assert!(workspace.entity_clipboard.as_ref().unwrap().cut);
+    }
+
+    #[test]
+    fn snap_settings_round_to_the_configured_steps() {
+        let snap = SnapSettings::default();
+        assert!(!snap.enabled, "吸附默认关，靠工具栏或 Ctrl 临时开");
+        assert_eq!(snap.snapped_translate(0.31), 0.25);
+        assert_eq!(snap.snapped_translate(0.38), 0.5);
+        assert_eq!(snap.snapped_translate(-0.38), -0.5);
+        let thirty = 30.0f32.to_radians();
+        assert!((snap.snapped_radians(thirty) - thirty).abs() < 1e-6);
+        assert!((snap.snapped_radians(thirty + 5.0f32.to_radians()) - thirty).abs() < 1e-6);
+        assert_eq!(snap.snapped_scale(1.4), 1.0);
+        assert_eq!(snap.snapped_scale(1.6), 2.0);
+    }
+
+    #[test]
+    fn snap_settings_never_round_to_zero_scale() {
+        let snap = SnapSettings {
+            scale: 0.0,
+            ..SnapSettings::default()
+        };
+        assert_eq!(snap.snapped_scale(0.3), 0.3, "步长为 0 时原样返回");
+        let coarse = SnapSettings {
+            scale: 10.0,
+            ..SnapSettings::default()
+        };
+        assert_eq!(coarse.snapped_scale(0.2), 0.01, "吸附到 0 时夹到 0.01");
     }
 }

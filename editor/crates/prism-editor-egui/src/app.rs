@@ -2267,6 +2267,19 @@ impl EditorApp {
                 self.workspace.toggle_gizmo_space();
                 self.mark_scene_dirty();
             }
+            let snap = self.workspace.snap;
+            if ui
+                .selectable_label(snap.enabled, "Snap (Ctrl)")
+                .on_hover_text(format!(
+                    "Snap gizmo drags: {translate} units / {rotate}° / x{scale} — hold Ctrl to invert",
+                    translate = snap.translate,
+                    rotate = snap.rotate_degrees,
+                    scale = snap.scale,
+                ))
+                .clicked()
+            {
+                self.workspace.snap.enabled = !snap.enabled;
+            }
             let grid_on = self.render_settings.show_grid;
             if ui.selectable_label(grid_on, "Grid (G)").clicked() {
                 let mut settings = self.render_settings.clone();
