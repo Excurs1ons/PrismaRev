@@ -739,6 +739,46 @@ pub fn projected_box_edges(
     Some(out)
 }
 
+/// 2D 矩形（sprite / rect）的 4 条边投影到屏幕空间（#643）。
+///
+/// `size` 是世界单位下的宽高，`pivot` 是 `0..1` 的轴心（左下角为原点，
+/// 与 `SpriteRenderer::pivot` 同约定）。矩形在实体的局部 XY 平面上，
+/// 跟着 `transform` 的旋转 / 缩放走。返回的是首尾相接的 4 条边，
+/// 坐标同样是**视口像素**（左上原点）。
+pub fn projected_rect_edges(
+    transform: &TransformJson,
+    size: [f32; 2],
+    pivot: [f32; 2],
+    frame: &CameraFrame,
+    width: f32,
+    height: f32,
+) -> Option<[((f32, f32), (f32, f32)); 4]> {
+    if !(size[0].is_finite() && size[1].is_finite()) || size[0] <= 0.0 || size[1] <= 0.0 {
+        return None;
+    }
+    let (x0, x1) = (-pivot[0] * size[0], (1.0 - pivot[0]) * size[0]);
+    let (y0, y1) = (-pivot[1] * size[1], (1.0 - pivot[1]) * size[1]);
+    let local = [
+        [x0 * transform.scale[0], y0 * transform.scale[1], 0.0],
+        [x1 * transform.scale[0], y0 * transform.scale[1], 0.0],
+        [x1 * transform.scale[0], y1 * transform.scale[1], 0.0],
+        [x0 * transform.scale[0], y1 * transform.scale[1], 0.0],
+    ];
+    let mut screen = [(0.0f32, 0.0f32); 4];
+    for (slot, corner) in local.iter().enumerate() {
+        let rotated = quat_rotate(transform.rotation, *corner);
+        let world = add(transform.position, rotated);
+        let (x, y, _) = project(world, frame, width, height)?;
+        screen[slot] = (x, y);
+    }
+    Some([
+        (screen[0], screen[1]),
+        (screen[1], screen[2]),
+        (screen[2], screen[3]),
+        (screen[3], screen[0]),
+    ])
+}
+
 /// 把屏幕上的拖拽框换算成视口像素坐标 `(min_x, min_y, max_x, max_y)`。
 ///
 /// [`box_select`] 和 `pick_entity` 都以**视口左上角**为原点，而 egui 给的是屏幕坐标：
@@ -900,6 +940,61 @@ mod tests {
         // （正交没有近大远小，不会因为「更靠近相机」而命中）。
         assert!(ray_box(o_center, d_center, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5]).is_some());
         assert!(ray_box(o_side, d_side, [0.0, 0.0, 0.0], [0.5, 0.5, 0.5]).is_none());
+    }
+
+    fn rect_transform(position: [f32; 3], scale: [f32; 3]) -> TransformJson {
+        TransformJson {
+            position,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale,
+        }
+    }
+
+    /// #643：sprite 矩形按 `size` + `pivot` 落在屏幕上的正确像素。
+    #[test]
+    fn sprite_rect_uses_size_and_pivot() {
+        let camera = camera_2d();
+        let frame = camera_frame(&camera);
+        // 半高 10 → 600px 高的视口里每世界单位 30px。
+        let centered = rect_transform([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        let edges =
+            projected_rect_edges(&centered, [2.0, 1.0], [0.5, 0.5], &frame, 800.0, 600.0).unwrap();
+        let xs: Vec<f32> = edges.iter().map(|(a, _)| a.0).collect();
+        let ys: Vec<f32> = edges.iter().map(|(a, _)| a.1).collect();
+        assert!((xs.iter().cloned().fold(f32::MIN, f32::max) - 430.0).abs() < 1e-3);
+        assert!((xs.iter().cloned().fold(f32::MAX, f32::min) - 370.0).abs() < 1e-3);
+        assert!((ys.iter().cloned().fold(f32::MIN, f32::max) - 315.0).abs() < 1e-3);
+        assert!((ys.iter().cloned().fold(f32::MAX, f32::min) - 285.0).abs() < 1e-3);
+
+        // 底边轴心 `[0.5, 0.0]`：矩形整体在实体上方半个高度。
+        let bottom =
+            projected_rect_edges(&centered, [2.0, 1.0], [0.5, 0.0], &frame, 800.0, 600.0).unwrap();
+        let min_y = bottom.iter().map(|(a, _)| a.1).fold(f32::MAX, f32::min);
+        let max_y = bottom.iter().map(|(a, _)| a.1).fold(f32::MIN, f32::max);
+        // 屏幕 y 向下：抬高半个世界单位 = 屏幕 y 变小 15px。
+        assert!((max_y - 300.0).abs() < 1e-3);
+        assert!((min_y - 270.0).abs() < 1e-3);
+    }
+
+    /// 退化尺寸（没填 `frame_size`）不画，避免出现零面积矩形。
+    #[test]
+    fn sprite_rect_rejects_degenerate_sizes() {
+        let camera = camera_2d();
+        let frame = camera_frame(&camera);
+        let transform = rect_transform([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        assert!(
+            projected_rect_edges(&transform, [0.0, 1.0], [0.5, 0.5], &frame, 800.0, 600.0)
+                .is_none()
+        );
+        assert!(projected_rect_edges(
+            &transform,
+            [1.0, f32::NAN],
+            [0.5, 0.5],
+            &frame,
+            800.0,
+            600.0
+        )
+        .is_none());
     }
 
     #[test]
