@@ -6182,6 +6182,22 @@ mod tests {
         assert_eq!(workspace.color(ThemeToken::Bg).to_hex(), "#f2f4f7");
     }
 
+    /// #472：层级里双击实体 = `Frame`，相机轨道中心要落到它身上。
+    #[test]
+    fn framing_the_selected_entity_centres_the_camera_on_it() {
+        let mut workspace = Workspace::sample();
+        // sample 里 Cube 的本地位置是 (0, 0.5, 0)。
+        workspace.select(1, false);
+        workspace.camera.target = [99.0, 99.0, 99.0];
+
+        workspace.frame_selection();
+
+        assert!((workspace.camera.target[0]).abs() < 1e-4);
+        assert!((workspace.camera.target[1] - 0.5).abs() < 1e-4);
+        assert!((workspace.camera.target[2]).abs() < 1e-4);
+        assert!(workspace.camera.distance > 0.0);
+    }
+
     #[test]
     fn frame_all_moves_camera_target() {
         let mut workspace = Workspace::load_fixture(&fixture());
