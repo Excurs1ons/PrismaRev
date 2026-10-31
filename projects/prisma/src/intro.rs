@@ -17,7 +17,13 @@ use prism_scene::ui::{Style, Text};
 /// 标题初始位置（margin.top，CENTER 锚点下负值 = 中心上方）。
 const TITLE_BASE_MARGIN: f32 = -16.0;
 /// 副标题相对标题的纵向间距（px）。
-const SUBTITLE_OFFSET: f32 = 64.0;
+///
+/// 标题矩形高 108、`pivot.y = 0.5`，副标题高 42，两者中心至少要拉开
+/// `(108 + 42) / 2 = 75` 才不重叠；但标题字形（84px）的墨迹会超出自己的框，
+/// 实测 96 时副标题仍压在标题下沿，128 才留出干净的间距。
+/// `intro.scene.json` 里 `intro_subtitle` 的 `margin.top` 必须等于
+/// `TITLE_BASE_MARGIN + SUBTITLE_OFFSET`（每帧由 `tick_system` 覆写）。
+const SUBTITLE_OFFSET: f32 = 128.0;
 
 /// 各实体的 `Name` 组件值（与 intro.scene.json 一致）。
 const ENTITY_OVERLAY: &str = "intro_overlay";

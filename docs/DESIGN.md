@@ -1097,7 +1097,7 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | | `ui-fontdue`（默认） | `ui-directwrite` |
 |---|---|---|
 | 平台 | 全平台 | 仅 Windows（其它目标开它 = `compile_error!`） |
-| 字形来源 | `fontdue` 读系统字体文件（msyh/Noto/DejaVu…） | 系统 `IDWriteFactory` → `IDWriteBitmapRenderTarget`（GDI interop） |
+| 字形来源 | `fontdue` 读系统字体文件（msyh/Noto/DejaVu…）；`PRISMREV_UI_FONT` 可指定项目自带字体 | 系统 `IDWriteFactory` → `IDWriteBitmapRenderTarget`（GDI interop） |
 | 字体族 | 按路径候选表 | `Microsoft YaHei` → `Microsoft YaHei UI` → `SimHei` → `Arial` → 兜底 `Segoe UI` |
 | 度量 | `horizontal_line_metrics` | `DWRITE_FONT_METRICS` |
 | 表单 | `fontdue::Font::rasterize` 直接给覆盖度 | 位图刷白 + 黑色灰度 AA 画字形，覆盖度 = `255 − R` |
