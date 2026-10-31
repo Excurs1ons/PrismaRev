@@ -971,6 +971,38 @@ impl Workspace {
         Ok((references, affected))
     }
 
+    /// 当前文档所在的目录（`assets/...` 形式），用于解析相对引用。
+    pub fn document_dir(&self) -> String {
+        document_dir(self.document().path.as_deref())
+    }
+
+    /// 当前文档里**解析不到**的资产引用：`(字段, 值)`。
+    ///
+    /// 「解析不到」= 文件被删 / 改名 / 拼错。引擎侧只会往日志里写一句，
+    /// 画面表现是物体消失或贴图变白，所以编辑器要主动标出来（#467）。
+    pub fn missing_references(&self, index: usize) -> Vec<(String, String)> {
+        let doc = &self.document().doc;
+        if doc.entities.get(index).is_none() {
+            return Vec::new();
+        }
+        let dir = self.document_dir();
+        let paths = self.asset_paths();
+        doc.reference_values()
+            .into_iter()
+            .filter(|(entity, _, _)| *entity == index)
+            .filter_map(|(_, field, value)| {
+                crate::assets::resolve_reference(&paths, &dir, &value)
+                    .is_none()
+                    .then_some((field, value))
+            })
+            .collect()
+    }
+
+    /// 资产表里的全部路径（`resolve_reference` 的查找集合）。
+    pub fn asset_paths(&self) -> Vec<String> {
+        self.assets.iter().map(|asset| asset.path.clone()).collect()
+    }
+
     pub fn refresh_project_files(&mut self) {
         if let Some(root) = &self.project_root {
             self.project_files = project::scan_documents(root);
@@ -5603,6 +5635,45 @@ mod tests {
         assert!(workspace
             .rename_asset("assets/textures/b.png", "outside.png")
             .is_err());
+    }
+
+    #[test]
+    fn missing_references_only_flags_broken_asset_fields() {
+        let mut workspace = Workspace::sample();
+        // 资产表里只有这一个。
+        workspace.assets = vec![
+            AssetInfo {
+                path: "assets/meshes/ok.rmes".to_string(),
+                size_bytes: 1,
+                kind: AssetKind::Model,
+                importer: String::new(),
+            },
+            AssetInfo {
+                path: "assets/textures/wood.png".to_string(),
+                size_bytes: 1,
+                kind: AssetKind::Texture,
+                importer: String::new(),
+            },
+        ];
+        workspace.document_mut().doc.entities[0].components.insert(
+            "prism_engine::scene::MeshRenderer".to_string(),
+            json!({
+                "mesh_path": "assets/meshes/ok.rmes",
+                "materials": ["assets/textures/wood.png", "assets/textures/gone.png"],
+            }),
+        );
+        // 实体名长得像路径，但不是资产字段，不能被当成断引用。
+        workspace.document_mut().doc.entities[0].name = Some("assets/nope.png".to_string());
+
+        let missing = workspace.missing_references(0);
+        let values: Vec<&str> = missing.iter().map(|(_, value)| value.as_str()).collect();
+        assert_eq!(values, vec!["assets/textures/gone.png"]);
+        assert!(
+            missing[0].0.contains("materials"),
+            "字段路径要能认出是哪一格: {:?}",
+            missing[0]
+        );
+        assert!(workspace.missing_references(1).is_empty());
     }
 
     #[test]

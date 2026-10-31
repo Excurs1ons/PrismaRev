@@ -89,6 +89,79 @@ pub fn is_asset_path_field(component: &str, field: &str) -> bool {
         || (component.ends_with("PrefabInstance") && leaf == "prefab")
 }
 
+/// 把文档里的一条引用解析成资产表里的路径。
+///
+/// 项目里的引用有三种合法写法（见 #465），都要能验证：
+/// - `sprites/water.png` —— 相对 `assets/` 根（**最常见**的写法，没有 `assets/` 前缀）；
+/// - `assets/textures/wood.png` —— 带前缀的项目路径；
+/// - `../textures/wood.png` —— 相对**文档所在目录**；
+/// - `wood.png` —— 纯文件名，按「唯一同名文件」匹配。
+///
+/// 返回 `None` 表示引用断掉了：文件被删、改名、或拼错。调用方据此给出可见提示
+/// （检查器的 `Missing` 标记 / 层级树的警告图标，见 #467）。
+pub fn resolve_reference<'a>(
+    assets: &'a [String],
+    doc_dir: &str,
+    reference: &str,
+) -> Option<&'a str> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return None;
+    }
+    // 绝对路径 / 带盘符：不属于项目资产，别猜。
+    if reference.starts_with('/') || reference.contains(':') {
+        return None;
+    }
+    let exact = |path: &str| {
+        assets
+            .iter()
+            .find(|asset| asset.as_str() == path)
+            .map(String::as_str)
+    };
+
+    if reference.starts_with("assets/") {
+        return exact(reference);
+    }
+    if reference.starts_with("./") || reference.starts_with("../") {
+        let joined = if doc_dir.is_empty() {
+            reference.to_string()
+        } else {
+            format!("{doc_dir}/{reference}")
+        };
+        return normalize_segments(&joined).and_then(|path| exact(&path));
+    }
+    // 相对 `assets/` 根：`sprites/water.png` / `textures/wood.png`。
+    if let Some(hit) = exact(&format!("assets/{reference}")) {
+        return Some(hit);
+    }
+    // 纯文件名：同名资产必须唯一，否则不猜。
+    let mut hits = assets
+        .iter()
+        .filter(|asset| file_name(asset) == reference)
+        .map(String::as_str);
+    let first = hits.next()?;
+    hits.next().is_none().then_some(first)
+}
+
+/// 消掉 `.` / `..` 段；`..` 越界（跑出 `assets/` 之外）时返回 `None`。
+fn normalize_segments(path: &str) -> Option<String> {
+    let mut out: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                out.pop()?;
+            }
+            other => out.push(other),
+        }
+    }
+    (!out.is_empty()).then(|| out.join("/"))
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetInfo {
@@ -747,5 +820,55 @@ mod tests {
         assert_eq!(text, "hello");
         assert!(truncated);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn paths() -> Vec<String> {
+        vec![
+            "assets/textures/wood.png".to_string(),
+            "assets/scenes/level.scene.json".to_string(),
+            "assets/prefabs/box.prefab.json".to_string(),
+            "assets/a/shared.png".to_string(),
+            "assets/b/shared.png".to_string(),
+        ]
+    }
+
+    #[test]
+    fn references_resolve_in_all_three_writing_styles() {
+        let assets = paths();
+        // 相对项目根
+        assert_eq!(
+            resolve_reference(&assets, "assets/scenes", "assets/textures/wood.png"),
+            Some("assets/textures/wood.png")
+        );
+        // 相对文档目录（#465 允许的写法）
+        assert_eq!(
+            resolve_reference(&assets, "assets/scenes/deep", "../../textures/wood.png"),
+            Some("assets/textures/wood.png")
+        );
+        // 相对 assets/ 根（项目里最常见的写法）
+        assert_eq!(
+            resolve_reference(&assets, "assets/scenes", "textures/wood.png"),
+            Some("assets/textures/wood.png")
+        );
+        // 纯文件名（唯一时）
+        assert_eq!(
+            resolve_reference(&assets, "assets/scenes", "wood.png"),
+            Some("assets/textures/wood.png")
+        );
+    }
+
+    #[test]
+    fn a_broken_reference_resolves_to_nothing() {
+        let assets = paths();
+        assert_eq!(
+            resolve_reference(&assets, "assets/scenes", "assets/textures/stone.png"),
+            None
+        );
+        // 同名文件不唯一时不能瞎猜。
+        assert_eq!(resolve_reference(&assets, "assets", "shared.png"), None);
+        // 空值 = 没设，不算断引用。
+        assert_eq!(resolve_reference(&assets, "assets", "   "), None);
+        // 相对路径跑出 assets/ 之外。
+        assert_eq!(resolve_reference(&assets, "assets", "../outside.png"), None);
     }
 }

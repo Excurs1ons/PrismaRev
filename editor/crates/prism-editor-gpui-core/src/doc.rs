@@ -666,6 +666,23 @@ impl SceneDoc {
     }
 
     /// 供资产管理器/引用检索用：扫描所有字符串字段里引用了 `path` 的位置。
+    /// 所有「资产路径字段」的取值：`(实体下标, "组件.字段", 值)`。
+    ///
+    /// 与 [`Self::field_references`] 相反：那个是「给定路径找引用」，这个是
+    /// 「把文档里所有引用列出来」，用来验证它们是否还指向存在的文件（#467）。
+    /// 字段白名单与重命名改写共用 [`is_reference_path`]，不会一边改一边漏。
+    pub fn reference_values(&self) -> Vec<(usize, String, String)> {
+        let mut out = Vec::new();
+        for (index, entity) in self.entities.iter().enumerate() {
+            for (component, value) in &entity.components {
+                collect_reference_values(value, "", component, &mut |field, text| {
+                    out.push((index, format!("{component}.{field}"), text.to_string()));
+                });
+            }
+        }
+        out
+    }
+
     pub fn field_references(&self, path: &str) -> Vec<(usize, String, String)> {
         let mut out = Vec::new();
         for (index, entity) in self.entities.iter().enumerate() {
@@ -854,6 +871,38 @@ fn relative_from(doc_dir: &str, target: &str) -> Option<String> {
 
 fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+/// 收集一条组件值里所有「资产路径字段」的字符串。
+fn collect_reference_values(
+    value: &Value,
+    path: &str,
+    component: &str,
+    out: &mut impl FnMut(&str, &str),
+) {
+    match value {
+        Value::String(text) => {
+            if is_reference_path(component, path) && !text.is_empty() {
+                out(path, text);
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_reference_values(item, &format!("{path}[{index}]"), component, out);
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map {
+                let next = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                collect_reference_values(item, &next, component, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_references(value: &Value, needle: &str, out: &mut impl FnMut(String, &str)) {

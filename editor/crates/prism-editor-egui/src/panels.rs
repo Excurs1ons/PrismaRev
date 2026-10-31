@@ -448,6 +448,22 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     }
     let expanded = workspace.expanded.clone();
     let rows = workspace.document().doc.visible_rows(&expanded);
+    // 引用断掉的实体（文件被删 / 改名 / 拼错）：行尾标一个警告图标。
+    // 每帧只算一次——`resolve_reference` 要扫资产表，放在行循环里是 O(实体 × 资产)（#467）。
+    let broken: std::collections::HashSet<usize> = {
+        let dir = workspace.document_dir();
+        let paths = workspace.asset_paths();
+        workspace
+            .document()
+            .doc
+            .reference_values()
+            .into_iter()
+            .filter(|(_, _, value)| {
+                prism_editor_core::assets::resolve_reference(&paths, &dir, value).is_none()
+            })
+            .map(|(entity, _, _)| entity)
+            .collect()
+    };
     let mut action: Option<TreeAction> = None;
     // 资产拖到实体上 = 实例化预制体（引擎的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
@@ -577,13 +593,35 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     );
                     // 同样用 painter 画，避免 Label 抢走整行点击。
                     let text_pos = row_ui.cursor().min;
+                    let font = egui::FontId::proportional(12.0);
                     row_ui.painter().text(
                         egui::pos2(text_pos.x, row_ui.max_rect().center().y),
                         egui::Align2::LEFT_CENTER,
                         &name,
-                        egui::FontId::proportional(12.0),
+                        font.clone(),
                         text_color,
                     );
+                    if broken.contains(&index) {
+                        // 名字是 painter 画的、不占布局空间，标记要自己算 x。
+                        // 用「圆圈 + !」而不是 `⚠`：默认字体里没有 U+26A0 时它会画成
+                        // 豆腐块，靠文字字形不如直接画几何稳。
+                        let width = row_ui
+                            .painter()
+                            .layout_no_wrap(name.clone(), font, text_color)
+                            .size()
+                            .x;
+                        let center =
+                            egui::pos2(text_pos.x + width + 9.0, row_ui.max_rect().center().y);
+                        let badge = egui::Color32::from_rgb(226, 96, 96);
+                        row_ui.painter().circle_filled(center, 5.0, badge);
+                        row_ui.painter().text(
+                            center,
+                            egui::Align2::CENTER_CENTER,
+                            "!",
+                            egui::FontId::proportional(9.0),
+                            egui::Color32::WHITE,
+                        );
+                    }
                 }
                 // 行级交互：单击选中、双击重命名（子控件会先吃掉自己的点击）。
                 if !renaming {
@@ -1035,6 +1073,27 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         }
     });
 
+    // ---- 断掉的资产引用（#467） ----
+    // 放在最上面、且不依赖组件 schema：有些组件在编辑器里没有 schema
+    // （渲染成 "(no schema)"），断引用也不能因此不提示。
+    let broken = workspace.missing_references(index);
+    if !broken.is_empty() {
+        for (field, value) in broken {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new("Missing")
+                        .size(10.5)
+                        .strong()
+                        .color(Color32::from_rgb(232, 96, 96)),
+                );
+                ui.label(RichText::new(field).monospace().size(10.0))
+                    .on_hover_text("Asset path field");
+                ui.label(RichText::new(value).monospace().size(10.0).weak());
+            });
+        }
+        ui.separator();
+    }
+
     // ---- 预制体（引擎的 Prefab 区块） ----
     match &prefab {
         Some(link) => {
@@ -1123,11 +1182,8 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
     let filter = state.inspector_search.to_lowercase();
-    let asset_paths: Vec<String> = workspace
-        .assets
-        .iter()
-        .map(|asset| asset.path.clone())
-        .collect();
+    let asset_paths = workspace.asset_paths();
+    let doc_dir = workspace.document_dir();
     let registry = workspace.schema.clone();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in components {
@@ -1156,6 +1212,7 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
             &mut actions,
             &mut set,
             &asset_paths,
+            &doc_dir,
         );
         if name == "prism_engine::scene::LineRenderer" {
             line_renderer_editor(ui, workspace, entity_id, &schema.name, &value);
@@ -1478,11 +1535,8 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
             Some((component.name.clone(), value))
         })
         .collect();
-    let asset_paths: Vec<String> = workspace
-        .assets
-        .iter()
-        .map(|asset| asset.path.clone())
-        .collect();
+    let asset_paths = workspace.asset_paths();
+    let doc_dir = workspace.document_dir();
     let registry = workspace.schema.clone();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in values {
@@ -1500,6 +1554,7 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
             &mut actions,
             &mut set,
             &asset_paths,
+            &doc_dir,
         );
     }
     for action in actions {

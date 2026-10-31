@@ -82,6 +82,28 @@ pub struct GpuAssetResolver {
     sprite_paths: HashMap<Entity, String>,
 }
 
+/// 引用断裂只报一次（每个路径），并且是 `error` 而不是 `warn`。
+///
+/// 路径不在资源包里意味着文档里的引用已经断了（文件被删 / 改名 / 拼错）。
+/// 后果是物体整个不出现或贴图变白，不该被日志级别悄悄降级；但同一个断引用每个
+/// 实体都要解析一次，每帧都刷一行会把 Console 淹掉，所以按路径去重（#467）。
+fn report_missing_reference(path: &str, kind: &str) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+
+    static REPORTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let reported = REPORTED.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut reported) = reported.lock() else {
+        return;
+    };
+    if !reported.insert(path.to_string()) {
+        return;
+    }
+    log::error!(
+        "broken asset reference: {kind} '{path}' is not in the resource package          (deleted, renamed, or misspelt?)"
+    );
+}
+
 impl GpuAssetResolver {
     pub fn new() -> Self {
         Self {
@@ -360,7 +382,7 @@ impl GpuAssetResolver {
         }
 
         let id = self.resource_manager.id_by_path(path).or_else(|| {
-            log::warn!("load_mesh_inputs: path '{path}' not in manifest");
+            report_missing_reference(path, "mesh");
             None
         })?;
 
@@ -383,7 +405,7 @@ impl GpuAssetResolver {
     /// （顺序：albedo, normal, metallic_roughness, emissive, occlusion）。
     fn load_material_data(&mut self, path: &str) -> Option<MaterialResolveData> {
         let id = self.resource_manager.id_by_path(path).or_else(|| {
-            log::warn!("load_material_data: path '{path}' not in manifest");
+            report_missing_reference(path, "material");
             None
         })?;
 
@@ -429,7 +451,7 @@ impl GpuAssetResolver {
     /// CPU 段：按路径加载单张纹理（精灵贴图）→ `TextureUploadInput`。
     fn load_texture_by_path(&mut self, path: &str) -> Option<TextureUploadInput> {
         let id = self.resource_manager.id_by_path(path).or_else(|| {
-            log::warn!("load_texture_by_path: path '{path}' not in manifest");
+            report_missing_reference(path, "texture");
             None
         })?;
         self.load_texture_data(Some(id), true)
