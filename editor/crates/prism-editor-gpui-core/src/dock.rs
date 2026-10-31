@@ -193,6 +193,28 @@ pub fn split(dir: DockDirection, a: DockNode, b: DockNode, ratio: f32) -> DockNo
     }
 }
 
+/// 一行/一列分屏里前半部分的像素长度（#498）。
+///
+/// `f32::clamp(min, max)` 在 `min > max` 时会无条件 panic，而嵌套 split 很容易造出
+/// 这种状态：外层分隔条拖到极限、或窗口缩到约 900px 宽时，中间那一列只剩 ~95px，
+/// 它内部的 Row 又想给两侧各留 60px（`clamp(60.0, 95 - 5 - 60 = 30.0)`）→ 编辑器直接退出。
+///
+/// 这里按 Unity `SplitView` 的做法先算上下限：放不下两个最小尺寸时退化成一分为二，
+/// 任何 `usable` / `ratio` 组合都不会 panic（`usable` 为负、`ratio` 为 NaN 也一样）。
+pub fn split_side_length(usable: f32, ratio: f32, min: f32) -> f32 {
+    if !usable.is_finite() || usable <= 0.0 {
+        return 0.0;
+    }
+    let min = if min.is_finite() { min.max(0.0) } else { 0.0 };
+    let ratio = if ratio.is_finite() { ratio } else { 0.5 };
+    if usable <= 2.0 * min {
+        // 两侧都放不下最小值：别硬塞，平分（至少不 panic、也不把分隔条画到框外）。
+        usable * 0.5
+    } else {
+        (usable * ratio).clamp(min, usable - min)
+    }
+}
+
 pub fn clamp_ratio(ratio: f32) -> f32 {
     if !ratio.is_finite() {
         return 0.5;
@@ -1163,6 +1185,41 @@ mod tests {
         assert_eq!(after.id().is_empty(), false);
         // 剩下一棵子树仍保留 a。
         assert!(collect_tabs(&after).iter().any(|t| t == "a"));
+    }
+
+    #[test]
+    fn split_side_length_keeps_the_ratio_inside_both_minimums() {
+        // 正常宽度：就是一个带下限的按比例切分。
+        assert!((split_side_length(1000.0, 0.3, 60.0) - 300.0).abs() < 1e-4);
+        // 比例跑到极限：停在最小尺寸，不会被压成 0。
+        assert!((split_side_length(1000.0, 0.0, 60.0) - 60.0).abs() < 1e-4);
+        assert!((split_side_length(1000.0, 1.0, 60.0) - 940.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_squeezed_nested_split_falls_back_to_half_instead_of_panicking() {
+        // #498：`2by3` 把中间那列拖到 ~95px 宽时，内部 Row 想要 `clamp(60.0, 30.0)`。
+        assert!((split_side_length(95.0, 0.88, 60.0) - 47.5).abs() < 1e-4);
+        assert!((split_side_length(107.0, 0.5, 50.0) - 53.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn no_usable_width_or_ratio_can_panic_the_layout() {
+        for usable in [0.0, 2.0, 42.0, 60.0, 95.0, 107.0, 500.0] {
+            for ratio in [0.0, 0.12, 0.5, 0.88, 1.0, f32::NAN, f32::INFINITY] {
+                for min in [0.0, 50.0, 60.0] {
+                    let a = split_side_length(usable, ratio, min);
+                    assert!(a.is_finite(), "usable={usable} ratio={ratio} min={min}");
+                    assert!(
+                        a >= 0.0 && a <= usable,
+                        "usable={usable} ratio={ratio} min={min}"
+                    );
+                }
+            }
+        }
+        // 负的 / 非有限的可用空间（父 split 已经被压扁）也不能产出怪值。
+        assert_eq!(split_side_length(-20.0, 0.5, 60.0), 0.0);
+        assert_eq!(split_side_length(f32::NAN, 0.5, 60.0), 0.0);
     }
 
     #[test]

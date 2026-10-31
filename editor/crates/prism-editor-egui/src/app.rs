@@ -11,6 +11,7 @@ use anyhow::Context as _;
 use egui::{Align, Color32, CursorIcon, Layout, Rect, RichText, Sense, Stroke, Vec2};
 use egui_ash::{App, CreationContext, ExitSignal, HandleRedraw};
 
+use prism_editor_core::dock::split_side_length;
 use prism_editor_core::{Command, DockDirection, DockNode, Locale, Preferences, Workspace};
 
 use crate::engine_host::ViewKind;
@@ -2653,7 +2654,9 @@ impl EditorApp {
                 match dir {
                     DockDirection::Row => {
                         let usable = (rect.width() - splitter).max(2.0);
-                        let a_w = (usable * ratio).clamp(60.0, usable - 60.0);
+                        // 嵌套 split 里 `usable` 可能小于两个最小尺寸（#498）：
+                        // 直接 `clamp(60.0, usable - 60.0)` 会在 min > max 时 panic。
+                        let a_w = split_side_length(usable, *ratio, 60.0);
                         let a_rect = Rect::from_min_size(rect.min, Vec2::new(a_w, rect.height()));
                         let split_rect = Rect::from_min_size(
                             egui::pos2(rect.min.x + a_w, rect.min.y),
@@ -2676,7 +2679,7 @@ impl EditorApp {
                     }
                     DockDirection::Column => {
                         let usable = (rect.height() - splitter).max(2.0);
-                        let a_h = (usable * ratio).clamp(50.0, usable - 50.0);
+                        let a_h = split_side_length(usable, *ratio, 50.0);
                         let a_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), a_h));
                         let split_rect = Rect::from_min_size(
                             egui::pos2(rect.min.x, rect.min.y + a_h),
