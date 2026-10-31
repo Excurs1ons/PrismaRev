@@ -25,6 +25,63 @@ use egui_phosphor::regular as icons;
 /// 面板 tab 的高度（与 Web `.dock-tabs` 的 28px 对齐，这里按 egui 行高收到 26）。
 const TAB_BAR_HEIGHT: f32 = 26.0;
 
+/// tab 条右侧给溢出下拉留的宽度（#455）。
+const TAB_OVERFLOW_WIDTH: f32 = 22.0;
+
+/// tab 的文字宽度 + 内边距 —— 用来判断 tab 条是否会溢出。
+fn dock_tab_width(ui: &egui::Ui, title: &str) -> f32 {
+    let text = ui.fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(
+                title.to_owned(),
+                egui::FontId::proportional(12.0),
+                Color32::PLACEHOLDER,
+            )
+            .size()
+            .x
+    });
+    text + 20.0
+}
+
+/// 在给定宽度里应该画 `widths[from..to]` 哪一段？
+///
+/// 能画完就全画；画不完时保证 **当前 tab 一定在可见段里**（Unity 的做法：
+/// 被裁掉的 active tab 是最让人迷惑的），不够就把前面的 tab 挤出去。
+fn visible_tab_range(widths: &[f32], available: f32, active: usize) -> (usize, usize) {
+    if widths.is_empty() {
+        return (0, 0);
+    }
+    let active = active.min(widths.len() - 1);
+    let mut end = 0;
+    let mut used = 0.0;
+    while end < widths.len() && used + widths[end] <= available {
+        used += widths[end];
+        end += 1;
+    }
+    // 一个都放不下时至少画一个，否则这个 leaf 会没有可点的标签。
+    if end == 0 {
+        end = 1;
+    }
+    if active < end {
+        return (0, end);
+    }
+    // active 在可见段之后：从它往前收，直到放下为止。
+    let mut start = active;
+    let mut used = widths[active];
+    while start > 0 && used + widths[start - 1] <= available {
+        used += widths[start - 1];
+        start -= 1;
+    }
+    (start, active + 1)
+}
+
+/// tab 条需要滚动 / 溢出按钮吗？
+///
+/// 留 1px 余量：正好装满时不该为了取整误差显示按钮。
+fn tab_bar_needs_overflow(needed: f32, available: f32) -> bool {
+    needed > available - 1.0
+}
+
 /// 自绘 tab（对齐 Web `.dock-tab`）：`bg-sunken` 底、右侧 1px 分隔线、
 /// 选中 = `panel-alt` 底 + 2px 强调下划线。egui 的 `selectable_label` 用整块蓝底，
 /// 会让整个界面看起来发蓝，所以不使用它。
@@ -2684,12 +2741,33 @@ impl EditorApp {
             0.0,
             border,
         );
+        // tab 条宽度有限：装不下时只画能放下的那一段，右侧留一个溢出下拉
+        // 列出全部 tab（#455）。没有这一步，超出的 tab 会被直接裁掉，既点不到
+        // 也拖不出来。
+        let widths: Vec<f32> = tabs
+            .iter()
+            .map(|tab| dock_tab_width(&child, &tab_title(tab)))
+            .collect();
+        let needed: f32 = widths.iter().sum();
+        let overflow = tab_bar_needs_overflow(needed, bar.width());
+        let tabs_rect = if overflow {
+            Rect::from_min_max(
+                bar.min,
+                egui::pos2(bar.right() - TAB_OVERFLOW_WIDTH, bar.bottom()),
+            )
+        } else {
+            bar
+        };
+        let active_index = tabs.iter().position(|tab| tab == active).unwrap_or(0);
+        let (visible_from, visible_to) =
+            visible_tab_range(&widths, tabs_rect.width(), active_index);
         let mut bar_ui = child.new_child(
             egui::UiBuilder::new()
-                .max_rect(bar)
+                .max_rect(tabs_rect)
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        bar_ui.set_clip_rect(bar);
+        bar_ui.set_clip_rect(tabs_rect);
+        let mut overflow_activate: Option<String> = None;
         // `Add Tab` 菜单要列出所有面板（去掉本 leaf 已有的）。
         let addable: Vec<(String, String)> = self
             .workspace
@@ -2702,9 +2780,10 @@ impl EditorApp {
             })
             .collect();
         let maximized = self.workspace.maximized_tab.clone();
-        for tab in tabs {
+        let bar_ui = &mut bar_ui;
+        for tab in &tabs[visible_from..visible_to] {
             let selected = tab == active;
-            let response = dock_tab(&mut bar_ui, &tab_title(tab), selected, &colors);
+            let response = dock_tab(bar_ui, &tab_title(tab), selected, &colors);
             if response.clicked() {
                 activate = Some(tab.clone());
                 self.state.focused_panel = Some(tab.clone());
@@ -2749,6 +2828,30 @@ impl EditorApp {
                     });
                 }
             });
+        }
+        if overflow {
+            // Unity 的 tab scroller 等价物：一个下拉，列出本 leaf 的全部 tab。
+            let button_rect = Rect::from_min_max(
+                egui::pos2(bar.right() - TAB_OVERFLOW_WIDTH + 2.0, bar.top() + 2.0),
+                egui::pos2(bar.right() - 2.0, bar.bottom() - 3.0),
+            );
+            let mut button_ui = child.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(button_rect)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            button_ui.set_clip_rect(button_rect);
+            button_ui.menu_button(icons::CARET_DOWN, |ui| {
+                for tab in tabs {
+                    if ui.selectable_label(tab == active, tab_title(tab)).clicked() {
+                        overflow_activate = Some(tab.clone());
+                        ui.close();
+                    }
+                }
+            });
+        }
+        if let Some(tab) = overflow_activate {
+            activate = Some(tab);
         }
 
         let body = child.available_rect_before_wrap();
@@ -4149,6 +4252,36 @@ mod tests {
 
     fn rect() -> Rect {
         Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(400.0, 300.0))
+    }
+
+    /// #455：tab 条装不下时要有溢出入口，而不是把 tab 裁掉。
+    #[test]
+    fn a_crowded_tab_bar_falls_back_to_overflow() {
+        // 装得下（含正好装满）时不要多余的按钮。
+        assert!(!tab_bar_needs_overflow(120.0, 400.0));
+        assert!(!tab_bar_needs_overflow(399.0, 400.0));
+        // 差一点点就已经点不到最后一个 tab 了。
+        assert!(tab_bar_needs_overflow(400.5, 400.0));
+        assert!(tab_bar_needs_overflow(900.0, 300.0));
+    }
+
+    /// #455：放不下的 tab 要能被换进来，active 的那个永远不能被裁掉。
+    #[test]
+    fn the_active_tab_stays_visible_in_a_crowded_bar() {
+        let widths = [100.0_f32; 8];
+        // 全放得下（800 的条）。
+        assert_eq!(visible_tab_range(&widths, 900.0, 5), (0, 8));
+        // 只放得下 3 个时，active 在前 3 个里就是普通窗口。
+        assert_eq!(visible_tab_range(&widths, 320.0, 1), (0, 3));
+        // active 在第 6 个：窗口整体后移，让它露出来。
+        let (from, to) = visible_tab_range(&widths, 320.0, 5);
+        assert_eq!(to, 6, "active tab must be inside the window");
+        assert!(from <= 5);
+        assert_eq!(visible_tab_range(&widths, 250.0, 7), (6, 8));
+        // 极端窄条：至少画一个，不会出现没有标签的 leaf。
+        assert_eq!(visible_tab_range(&widths, 10.0, 4), (4, 5));
+        // 空 leaf（理论上不该出现）不 panic。
+        assert_eq!(visible_tab_range(&[], 100.0, 0), (0, 0));
     }
 
     /// #454：编辑器的调试开关不能漏进 Game view。
