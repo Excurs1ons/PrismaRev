@@ -273,9 +273,10 @@ fn temp_pak_path() -> std::path::PathBuf {
 }
 
 #[test]
-fn open_takes_ownership_of_file_bytes() {
-    // Regression for #181: `open` used to read the file and then `to_vec()` the
-    // whole buffer again, so peak memory was 2x the `.pak` size.
+fn open_keeps_the_file_on_disk() {
+    // #509: `open` used to `std::fs::read` the whole archive, so a 1 GB `.pak`
+    // was 1 GB of resident memory from startup. It now keeps the handle and
+    // reads payloads on demand.
     let id = sample_asset_id(7);
     let data = vec![0xABu8; 2048];
     let mut builder = PackageBuilder::new();
@@ -285,11 +286,77 @@ fn open_takes_ownership_of_file_bytes() {
     let path = temp_pak_path();
     std::fs::write(&path, &pak).unwrap();
     let reader = PackageReader::open(&path).unwrap();
-    let _ = std::fs::remove_file(&path);
 
     assert_eq!(reader.asset_count(), 1);
-    assert_eq!(reader.data.len(), pak.len());
+    assert!(
+        reader.backing.bytes().is_none(),
+        "a file-backed reader must not hold the whole archive in memory"
+    );
+    assert_eq!(reader.backing.len(), pak.len() as u64);
+    // The file is read lazily, so it must still be usable after `open`.
     assert_eq!(reader.read_asset_data(id).unwrap().unwrap(), data);
+    reader.verify_integrity().expect("integrity");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_file_backed_reader_cannot_hand_out_slices() {
+    let id = sample_asset_id(9);
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, b"payload".to_vec(), &[]);
+    let pak = builder.build().unwrap();
+
+    let path = temp_pak_path();
+    std::fs::write(&path, &pak).unwrap();
+    let reader = PackageReader::open(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let record = reader.find_record(id).unwrap();
+    assert!(matches!(
+        reader.asset_record_raw_slice(record),
+        Err(PackageError::NotInMemory)
+    ));
+    assert_eq!(reader.asset_record_raw_bytes(record).unwrap(), b"payload");
+}
+
+#[test]
+fn a_file_backed_reader_rejects_a_corrupt_payload() {
+    let id = sample_asset_id(11);
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, vec![7u8; 512], &[]);
+    let mut pak = builder.build().unwrap();
+    // Flip a byte inside the data chunk (last byte of the file).
+    let last = pak.len() - 1;
+    pak[last] ^= 0xFF;
+
+    let path = temp_pak_path();
+    std::fs::write(&path, &pak).unwrap();
+    let result = PackageReader::open(&path);
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        matches!(result, Err(PackageError::ChecksumMismatch { .. })),
+        "a tampered data chunk must fail the streamed checksum"
+    );
+}
+
+#[test]
+fn a_file_backed_reader_rejects_a_truncated_file() {
+    let id = sample_asset_id(12);
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, vec![1u8; 256], &[]);
+    let pak = builder.build().unwrap();
+
+    let path = temp_pak_path();
+    std::fs::write(&path, &pak[..pak.len() - 32]).unwrap();
+    let result = PackageReader::open(&path);
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        matches!(result, Err(PackageError::ChecksumMismatch { .. })),
+        "a short file must not pass the checksum"
+    );
 }
 
 #[test]
@@ -301,12 +368,14 @@ fn from_owned_bytes_moves_the_buffer() {
 
     let reader = PackageReader::from_owned_bytes(pak).unwrap();
 
+    // The in-memory backing is the buffer we handed over, not a copy of it.
+    let bytes = reader.backing.bytes().expect("in-memory backing");
     assert_eq!(
-        reader.data.as_ptr(),
+        bytes.as_ptr(),
         ptr,
         "reader must take ownership of the buffer instead of copying it"
     );
-    assert_eq!(reader.data.len(), len);
+    assert_eq!(bytes.len(), len);
 }
 
 #[test]

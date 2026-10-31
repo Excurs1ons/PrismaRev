@@ -379,6 +379,45 @@ fn streaming_zero_chunk_size_terminates() {
 }
 
 #[test]
+fn a_file_backed_pak_keeps_serving_when_it_is_replaced() {
+    // #509: the reader holds the `.pak` open instead of slurping it. Replacing
+    // the file (what `build-scenes` and the hot-reload poller do) must not
+    // disturb the live reader; the next `on_pak_changed` then sees the new one.
+    let id = AssetId::from_raw((9u64 << 32) | 1);
+    let old_data = b"first generation".to_vec();
+    let new_data = b"second generation, longer".to_vec();
+
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, old_data.clone(), &[]);
+    let first = builder.build().unwrap();
+
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, new_data.clone(), &[]);
+    let second = builder.build().unwrap();
+
+    let path = write_pak(&first, "test_file_backed_replaced.pak");
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    assert_eq!(rm.load_with_deps_raw(id).unwrap(), old_data);
+
+    // Simulate a rebuild: `pack_directory` writes a temp file and renames it over
+    // the old one, so the live reader keeps the generation it opened.
+    let staged = path.with_file_name("test_file_backed_replaced.pak.new");
+    std::fs::write(&staged, &second).unwrap();
+    std::fs::rename(&staged, &path).unwrap();
+    let _ = rm.unload_id(id);
+    assert_eq!(
+        rm.load_with_deps_raw(id).unwrap(),
+        old_data,
+        "the live reader must keep the generation it opened"
+    );
+
+    rm.on_pak_changed(&path).unwrap();
+    assert_eq!(rm.load_with_deps_raw(id).unwrap(), new_data);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn streaming_compressed_and_streamed_assets() {
     let id_comp = AssetId::from_raw((3u64 << 32) | 1);
     let id_stream = AssetId::from_raw((3u64 << 32) | 2);
