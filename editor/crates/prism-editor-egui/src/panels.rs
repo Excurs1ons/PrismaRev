@@ -1066,6 +1066,11 @@ enum TransformEdit {
         axis: usize,
         value: f32,
     },
+    /// 整个向量（拖 `Position` / `Scale` 行标签时三个轴一起动）。
+    Vector {
+        field: &'static str,
+        values: [f32; 3],
+    },
     /// 整个旋转（检查器按 XYZ 欧拉角编辑，换回四元数再写）。
     Rotation([f32; 4]),
 }
@@ -1085,17 +1090,36 @@ fn transform_rows(
                 .on_hover_text("Selected entities have different values here");
         }
     };
+    // 分量名前缀单独画成可拖动的标签（Unity 的 `DragZoneRect`）：拖 X/Y/Z 调一个轴，
+    // 拖 `Position` / `Rotation` / `Scale` 三个轴一起动（#479）。
+    let axis_labels = ["X", "Y", "Z"];
 
     let mut position = transform.position;
+    let mut position_row: Option<[f32; 3]> = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Position").size(11.0));
+        let mut row_delta = 0.0f32;
+        if widgets::scrubbable_label(ui, "Position", &mut row_delta, 0.01) {
+            for axis in 0..3 {
+                position[axis] += row_delta;
+            }
+            position_row = Some(position);
+        }
         for axis in 0..3 {
+            if widgets::scrubbable_label(ui, axis_labels[axis], &mut position[axis], 0.01) {
+                write(TransformEdit::Axis {
+                    field: "position",
+                    axis,
+                    value: position[axis],
+                });
+            }
             if ui
                 .add(
                     egui::DragValue::new(&mut position[axis])
                         .speed(0.01)
-                        .max_decimals(3),
+                        .max_decimals(3)
+                        .custom_parser(widgets::number_parser),
                 )
+                .on_hover_text("Type an expression: 90/2, 2*(3+4)")
                 .changed()
             {
                 write(TransformEdit::Axis {
@@ -1107,22 +1131,41 @@ fn transform_rows(
             marker(ui, axis, 0);
         }
     });
+    if let Some(values) = position_row {
+        write(TransformEdit::Vector {
+            field: "position",
+            values,
+        });
+    }
 
     // Rotation：三个角度框（`R = Rz Ry Rx`），不再摊成 x/y/z/w 四个裸分量。
     let mut euler = prism_editor_core::viewport_math::quat_to_euler_degrees(transform.rotation);
+    let mut rotation_row = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Rotation").size(11.0));
+        let mut row_delta = 0.0f32;
+        if widgets::scrubbable_label(ui, "Rotation", &mut row_delta, 0.5) {
+            for value in euler.iter_mut() {
+                *value += row_delta;
+            }
+            rotation_row = true;
+        }
         for axis in 0..3 {
+            let mut changed =
+                widgets::scrubbable_label(ui, axis_labels[axis], &mut euler[axis], 0.5);
             if ui
                 .add(
                     egui::DragValue::new(&mut euler[axis])
                         .speed(0.5)
                         .max_decimals(2)
                         .suffix("°")
-                        .prefix(["X ", "Y ", "Z "][axis]),
+                        .custom_parser(widgets::number_parser),
                 )
+                .on_hover_text("Type an expression: 90/2, 45+15")
                 .changed()
             {
+                changed = true;
+            }
+            if changed {
                 write(TransformEdit::Rotation(
                     prism_editor_core::viewport_math::euler_degrees_to_quat(euler),
                 ));
@@ -1131,18 +1174,39 @@ fn transform_rows(
             marker(ui, axis, 1);
         }
     });
+    if rotation_row {
+        write(TransformEdit::Rotation(
+            prism_editor_core::viewport_math::euler_degrees_to_quat(euler),
+        ));
+    }
 
     // Scale 单独一行，保持 Position / Rotation / Scale 的固定顺序。
     let mut scale = transform.scale;
+    let mut scale_row: Option<[f32; 3]> = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Scale").size(11.0));
+        let mut row_delta = 0.0f32;
+        if widgets::scrubbable_label(ui, "Scale", &mut row_delta, 0.01) {
+            for axis in 0..3 {
+                scale[axis] += row_delta;
+            }
+            scale_row = Some(scale);
+        }
         for axis in 0..3 {
+            if widgets::scrubbable_label(ui, axis_labels[axis], &mut scale[axis], 0.01) {
+                write(TransformEdit::Axis {
+                    field: "scale",
+                    axis,
+                    value: scale[axis],
+                });
+            }
             if ui
                 .add(
                     egui::DragValue::new(&mut scale[axis])
                         .speed(0.01)
-                        .max_decimals(3),
+                        .max_decimals(3)
+                        .custom_parser(widgets::number_parser),
                 )
+                .on_hover_text("Type an expression: 90/2, 2*(3+4)")
                 .changed()
             {
                 write(TransformEdit::Axis {
@@ -1154,6 +1218,12 @@ fn transform_rows(
             marker(ui, axis, 2);
         }
     });
+    if let Some(values) = scale_row {
+        write(TransformEdit::Vector {
+            field: "scale",
+            values,
+        });
+    }
     let _ = state;
 }
 
@@ -1328,6 +1398,9 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
     transform_rows(ui, state, &transform, None, |edit| match edit {
         TransformEdit::Axis { field, axis, value } => {
             workspace.set_transform_axis(entity_id, field, axis, value);
+        }
+        TransformEdit::Vector { field, values } => {
+            workspace.set_transform_vector(entity_id, field, values);
         }
         TransformEdit::Rotation(rotation) => {
             workspace.set_transform_rotation(entity_id, rotation);
@@ -1678,6 +1751,9 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
     transform_rows(ui, state, &transform, Some(&mixed), |edit| match edit {
         TransformEdit::Axis { field, axis, value } => {
             workspace.set_transform_axis_many(&ids, field, axis, value);
+        }
+        TransformEdit::Vector { field, values } => {
+            workspace.set_transform_vector_many(&ids, field, values);
         }
         TransformEdit::Rotation(rotation) => {
             workspace.set_transform_rotation_many(&ids, rotation);

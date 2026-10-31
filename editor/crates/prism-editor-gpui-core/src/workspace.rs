@@ -2772,6 +2772,76 @@ impl Workspace {
         document.dirty = true;
     }
 
+    /// 整体写一个向量分量（`position` / `scale`）。
+    ///
+    /// 拖动检查器里的 `Position` / `Scale` 行标签时三个轴一起动；逐轴调
+    /// [`Self::set_transform_axis`] 的合并键里带 axis，会被拆成三个撤销步（#479）。
+    pub fn set_transform_vector(&mut self, entity_id: u32, field: &str, values: [f32; 3]) {
+        let Some(index) = self.document().doc.index_of_id(entity_id) else {
+            return;
+        };
+        let before = self.document().doc.entities[index].transform;
+        let mut after = before;
+        match field {
+            "position" => after.position = values,
+            "scale" => after.scale = values,
+            _ => return,
+        }
+        if before == after {
+            return;
+        }
+        let now_ms = now_ms();
+        let document = self.document_mut();
+        document
+            .undo
+            .push_transform(&mut document.doc, entity_id, before, after, now_ms);
+        document.dirty = true;
+    }
+
+    /// 多选：整体写向量分量，整次拖动一个撤销步。
+    pub fn set_transform_vector_many(&mut self, entity_ids: &[u32], field: &str, values: [f32; 3]) {
+        if !matches!(field, "position" | "scale") {
+            return;
+        }
+        let mut ids: Vec<u32> = entity_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let doc = &self.document().doc;
+        let mut changes = Vec::new();
+        for entity_id in &ids {
+            let Some(index) = doc.index_of_id(*entity_id) else {
+                continue;
+            };
+            let before = doc.entities[index].transform;
+            let mut after = before;
+            if field == "position" {
+                after.position = values;
+            } else {
+                after.scale = values;
+            }
+            if before != after {
+                changes.push((*entity_id, before, after));
+            }
+        }
+        if changes.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        let document = self.document_mut();
+        if changes.len() == 1 {
+            let (entity_id, before, after) = changes[0];
+            document
+                .undo
+                .push_transform(&mut document.doc, entity_id, before, after, now);
+        } else {
+            let key = format!("transform-vector/{field}/{ids:?}");
+            document
+                .undo
+                .push_transform_batch(&mut document.doc, changes, key, now);
+        }
+        document.dirty = true;
+    }
+
     /// 多选 Transform 字段：把同一个分量值写到所有选中实体（整次拖动一个撤销步）。
     pub fn set_transform_axis_many(
         &mut self,
@@ -6773,6 +6843,26 @@ mod tests {
             ..SnapSettings::default()
         };
         assert_eq!(coarse.snapped_scale(0.2), 0.01, "吸附到 0 时夹到 0.01");
+    }
+
+    #[test]
+    fn scrubbing_a_whole_vector_is_one_undo_step() {
+        let mut workspace = Workspace::sample();
+        let entity = workspace.document().doc.id_of_index(1).unwrap();
+        workspace.set_transform_vector(entity, "position", [1.0, 2.0, 3.0]);
+        let transform = workspace.document().doc.entities[1].transform;
+        assert_eq!(transform.position, [1.0, 2.0, 3.0]);
+        workspace.undo();
+        assert_ne!(
+            workspace.document().doc.entities[1].transform.position,
+            [1.0, 2.0, 3.0],
+            "一次撤销就要回到拖动前"
+        );
+        assert!(
+            !workspace.can_undo(),
+            "整行拖动只能留一个撤销步，实际 {:?}",
+            workspace.undo_history()
+        );
     }
 
     #[test]
